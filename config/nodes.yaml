@@ -1,4 +1,4 @@
-# Confirmed Phase 1 inventory.
+# Confirmed physical node registry. API credentials are loaded only from .env.
 pc:
   hostname: "DESKTOP-SRLLCKC"
   os: "windows"

@@ -1,6 +1,6 @@
 # DFL-SLM Digital Twin Network Project
 
-This repository contains Phase 0 hardware discovery and the Phase 1 authenticated Jetson status service. The DTN, SLM orchestration, and worker training application layers have not yet been built.
+This repository contains Phase 0 hardware discovery, the Phase 1 authenticated Jetson status service, and the Phase 2 DTN coordinator with live device monitoring. SLM orchestration and worker training application layers have not yet been built.
 
 ## Phase 0 status
 
@@ -17,6 +17,15 @@ This repository contains Phase 0 hardware discovery and the Phase 1 authenticate
 See [docs/hardware-discovery.md](./docs/hardware-discovery.md) for the hardware findings and recommendations, and [docs/hardware-probe-results/](./docs/hardware-probe-results/) for the raw output from each Jetson.
 
 Phase 1 deployment, API details, live readings, authentication checks, and TCP connectivity results are recorded in [docs/phase1-network-device.md](./docs/phase1-network-device.md).
+
+## Phase 2 status
+
+- FastAPI coordinator on the PC at `0.0.0.0:8000`, using bearer-token authentication, SQLite/Alembic, authenticated device/history endpoints, and a WebSocket event stream.
+- Background polling records live authenticated status from all four Jetsons; timeouts mark nodes offline.
+- React/TypeScript/Vite dashboard on port `5173` shows the real device metrics and master/worker topology. The browser calls only the PC backend.
+- Backend pytest, frontend Vitest, production build, live PC/device/peer TCP connectivity, and worker offline/restore checks passed.
+
+See [docs/phase2-coordinator.md](./docs/phase2-coordinator.md) for setup, API usage, verification output, network results, and the security limitation that this phase uses trusted-LAN HTTP without TLS.
 
 ## Project layout
 

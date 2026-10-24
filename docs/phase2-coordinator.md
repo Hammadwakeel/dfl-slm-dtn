@@ -6,7 +6,7 @@ The Windows PC hosts the coordinator API at `0.0.0.0:8000` and the Vite developm
 
 The FastAPI app factory loads settings from the root `.env` and the physical node registry in `config/nodes.yaml`. `DTN_API_TOKEN` protects the REST API with bearer authentication. The API exposes device list/detail and bounded status-history endpoints, an authenticated WebSocket status stream, `/healthz`, and OpenAPI/Swagger documentation at `/docs`. Alembic applies the SQLite schema from `dtn/backend/migrations`; local readings are stored in the ignored `dtn/backend/data/dtn.sqlite3` database. The poller samples every three seconds by default, records real CPU, GPU, memory, and temperature data, and marks failed devices offline after a request timeout.
 
-The React/TypeScript dashboard includes live device cards, cluster counts, a coordinator/worker topology view, and planned-workspace pages for Experiments, Model Studio, Architecture Search, and SLM Assistant. The coordinator token is entered by the operator and kept in browser `sessionStorage` for that tab session. REST requests use the bearer header; the WebSocket receives the token in its first JSON auth frame rather than the URL.
+The React/TypeScript dashboard includes live device cards, cluster counts, a coordinator/worker topology view, planned-workspace pages for Experiments, Model Studio, and Architecture Search, and the Phase 3 SLM Assistant. The coordinator token is entered by the operator and kept in browser `sessionStorage` for that tab session. REST requests use the bearer header; the WebSocket receives the token in its first JSON auth frame rather than the URL.
 
 ## Configuration and startup
 
@@ -41,7 +41,7 @@ Open `http://192.168.11.12:5173`, enter the configured coordinator API token, an
 
 - `GET /api/auth/check`, `GET /api/devices`, `GET /api/devices/{node_id}`, and `GET /api/devices/{node_id}/history` require `Authorization: Bearer <DTN_API_TOKEN>`.
 - `GET /ws/devices` is authenticated with a first-frame JSON message `{"type":"auth","token":"..."}`. The server sends a `device_snapshot` after authentication and `device_status` events as real node readings arrive or a device transitions offline/online.
-- `/docs` and `/openapi.json` document the REST API. Do not put tokens in URLs or logs.
+- `/docs` and `/openapi.json` document the REST API. `POST /api/slm/chat`, `POST /api/slm/command`, `GET /api/slm/status`, and `GET /api/slm/logs` forward authenticated requests to the SLM master using the separate `MASTER_SLM_API_TOKEN`. Do not put tokens in URLs or logs.
 
 This implementation uses HTTP on the trusted lab LAN, not TLS. Keep the PC and Jetsons on the protected network; bearer tokens and status readings are not encrypted in transit. Add TLS before extending access beyond the LAN.
 

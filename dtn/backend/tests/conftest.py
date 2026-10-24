@@ -53,6 +53,9 @@ def settings() -> Settings:
         poll_interval_seconds=3,
         request_timeout_seconds=1,
         history_retention_count=100,
+        master_slm_url="http://127.0.0.1:5003",
+        master_slm_token="test-master-slm-token-that-is-long-and-random",
+        slm_timeout_seconds=1,
     )
 
 

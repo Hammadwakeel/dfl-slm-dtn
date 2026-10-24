@@ -16,6 +16,7 @@ from app.core.config import Settings
 from app.core.security import require_api_token
 from app.db.session import create_db_engine, create_session_factory
 from app.routers.devices import router as devices_router
+from app.routers.slm import router as slm_router
 from app.routers.ws import router as websocket_router
 from app.services.events import EventManager
 from app.services.poller import DevicePoller
@@ -76,6 +77,7 @@ def create_app(
         allow_headers=["Authorization", "Content-Type"],
     )
     app.include_router(devices_router)
+    app.include_router(slm_router)
     app.include_router(websocket_router)
 
     @app.get("/healthz", tags=["health"])

@@ -38,6 +38,9 @@ class Settings:
     poll_interval_seconds: float
     request_timeout_seconds: float
     history_retention_count: int
+    master_slm_url: str = "http://192.168.11.15:5003"
+    master_slm_token: str = ""
+    slm_timeout_seconds: float = 150.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,6 +48,11 @@ class Settings:
         api_token = os.environ.get("DTN_API_TOKEN", "")
         if len(api_token) < 32 or api_token.startswith("replace-"):
             raise ValueError("DTN_API_TOKEN must be a random secret with at least 32 characters")
+        master_slm_token = os.environ.get("MASTER_SLM_API_TOKEN", "")
+        if len(master_slm_token) < 32 or master_slm_token.startswith("replace-"):
+            raise ValueError(
+                "MASTER_SLM_API_TOKEN must be a random secret with at least 32 characters"
+            )
 
         origins = tuple(
             origin.strip()
@@ -78,6 +86,13 @@ class Settings:
         if not isinstance(registry, dict):
             raise ValueError(f"Device registry must be a YAML mapping: {registry_path}")
         nodes = _load_devices(registry)
+        master = registry["master"]
+        master_slm_port = int(master.get("slm_port", 0))
+        if not 1 <= master_slm_port <= 65535:
+            raise ValueError("Master registry entry must define a valid slm_port")
+        slm_timeout = float(os.environ.get("DTN_SLM_TIMEOUT_SECONDS", "150"))
+        if slm_timeout <= 0:
+            raise ValueError("DTN_SLM_TIMEOUT_SECONDS must be positive")
         return cls(
             app_name="DFL-SLM Digital Twin Network",
             host=os.environ.get("DTN_HOST", "0.0.0.0"),
@@ -89,6 +104,12 @@ class Settings:
             poll_interval_seconds=raw_poll_interval,
             request_timeout_seconds=raw_timeout,
             history_retention_count=retention_count,
+            master_slm_url=os.environ.get(
+                "MASTER_SLM_URL",
+                f"http://{master['ip']}:{master_slm_port}",
+            ).rstrip("/"),
+            master_slm_token=master_slm_token,
+            slm_timeout_seconds=slm_timeout,
         )
 
 

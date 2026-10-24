@@ -1,6 +1,6 @@
 # DFL-SLM Digital Twin Network Project
 
-This repository contains Phase 0 hardware discovery, the Phase 1 authenticated Jetson status service, and the Phase 2 DTN coordinator with live device monitoring. SLM orchestration and worker training application layers have not yet been built.
+This repository contains Phase 0 hardware discovery, the Phase 1 authenticated Jetson status service, the Phase 2 DTN coordinator, and the Phase 3 SLM assistant service on the master. Distributed training, dataset, and model orchestration remain unavailable until those worker services are implemented.
 
 ## Phase 0 status
 
@@ -26,6 +26,14 @@ Phase 1 deployment, API details, live readings, authentication checks, and TCP c
 - Backend pytest, frontend Vitest, production build, live PC/device/peer TCP connectivity, and worker offline/restore checks passed.
 
 See [docs/phase2-coordinator.md](./docs/phase2-coordinator.md) for setup, API usage, verification output, network results, and the security limitation that this phase uses trusted-LAN HTTP without TLS.
+
+## Phase 3 status
+
+- SLM master service on `dfl-master:5003`; the existing authenticated device-status agent remains on `dfl-master:5002`.
+- Flask API uses a distinct `MASTER_SLM_API_TOKEN`. Ollama `llama3.2:1b` is constrained to the shared JSON action schema; only real status and SLM-service log actions are available. Dataset and training actions explicitly report unavailable.
+- The SLM Assistant page forwards chat through the FastAPI coordinator and displays the model reply, validated action, action result, latency, and measured system RAM change.
+
+See [docs/phase3-slm-master.md](./docs/phase3-slm-master.md) for deployment, endpoints, action validation, real prompt results, tests, and memory/latency measurements.
 
 ## Project layout
 

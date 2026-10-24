@@ -4,6 +4,7 @@ import { checkToken, getDevices, openDeviceEvents } from "./api/client";
 import type { DeviceEvent } from "./api/client";
 import type { Device } from "./types";
 import DeviceCard from "./components/DeviceCard";
+import AssistantPage from "./pages/AssistantPage";
 
 const navigation = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
@@ -146,8 +147,9 @@ export default function App() {
           <Dashboard devices={devices} error={error} connected={connected} onRetry={() => void refresh(token)} />
         )}
         {page === "topology" && <Topology devices={devices} />}
+        {page === "assistant" && <AssistantPage token={token} />}
         {page !== "dashboard" && page !== "topology" && (
-          <Placeholder page={page} />
+          page !== "assistant" && <Placeholder page={page} />
         )}
       </main>
     </div>

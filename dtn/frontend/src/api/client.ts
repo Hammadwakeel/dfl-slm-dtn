@@ -4,6 +4,29 @@ export type DeviceEvent =
   | { type: "device_snapshot"; devices: Device[] }
   | { type: "device_status"; device: Device };
 
+export interface SlmChatResponse {
+  reply: string;
+  model_reply: string;
+  action: {
+    action: string;
+    parameters: Record<string, unknown>;
+  };
+  result: {
+    available: boolean;
+    message?: string;
+    data?: unknown;
+  };
+  metrics: {
+    latency_ms: number;
+    model_latency_ms: number;
+    system_ram_total_mb: number;
+    system_ram_used_before_mb: number;
+    system_ram_used_after_mb: number;
+    system_ram_used_delta_mb: number;
+    system_ram_available_after_mb: number;
+  };
+}
+
 const apiBase =
   import.meta.env.VITE_API_BASE_URL ??
   `${window.location.protocol}//${window.location.hostname}:8000`;
@@ -23,6 +46,25 @@ export async function getDevices(token: string): Promise<Device[]> {
   });
   if (!response.ok) throw new Error(`Could not load devices (HTTP ${response.status}).`);
   return response.json() as Promise<Device[]>;
+}
+
+export async function sendSlmMessage(
+  token: string,
+  message: string,
+): Promise<SlmChatResponse> {
+  const response = await fetch(`${apiBase}/api/slm/chat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { detail?: string; error?: string };
+    throw new Error(body.detail ?? body.error ?? `SLM request failed (HTTP ${response.status}).`);
+  }
+  return response.json() as Promise<SlmChatResponse>;
 }
 
 export function openDeviceEvents(

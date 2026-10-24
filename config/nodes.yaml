@@ -10,6 +10,7 @@ master:
   ip: "192.168.11.15"
   user: "hammad"
   port: 5002
+  slm_port: 5003
   ollama_model: "llama3.2:1b"
 
 workers:

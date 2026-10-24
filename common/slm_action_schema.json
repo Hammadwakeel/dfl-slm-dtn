@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "empty": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "datasetName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "runIds": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "upload_dataset"},
+            "parameters": {
+              "type": "object",
+              "properties": {"dataset_name": {"$ref": "#/$defs/datasetName"}},
+              "required": ["dataset_name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "preprocess_dataset"},
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "dataset_name": {"$ref": "#/$defs/datasetName"},
+                "normalization": {"enum": ["standard", "minmax", "none"]}
+              },
+              "required": ["dataset_name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "create_initial_model"},
+            "parameters": {
+              "type": "object",
+              "properties": {"model_name": {"$ref": "#/$defs/datasetName"}},
+              "required": ["model_name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "start_training"},
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "rounds": {"type": "integer", "minimum": 1, "maximum": 100},
+                "epochs": {"type": "integer", "minimum": 1, "maximum": 50},
+                "dataset_name": {"$ref": "#/$defs/datasetName"}
+              },
+              "required": ["rounds", "epochs"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "stop_training"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "set_topology"},
+            "parameters": {
+              "type": "object",
+              "properties": {"topology": {"enum": ["ring", "star", "mesh"]}},
+              "required": ["topology"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "set_rounds"},
+            "parameters": {
+              "type": "object",
+              "properties": {"rounds": {"type": "integer", "minimum": 1, "maximum": 100}},
+              "required": ["rounds"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "set_epochs"},
+            "parameters": {
+              "type": "object",
+              "properties": {"epochs": {"type": "integer", "minimum": 1, "maximum": 50}},
+              "required": ["epochs"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "enable_nas"},
+            "parameters": {
+              "type": "object",
+              "properties": {"enabled": {"type": "boolean"}},
+              "required": ["enabled"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "get_status"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "get_logs"},
+            "parameters": {
+              "type": "object",
+              "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "get_results"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "compare_runs"},
+            "parameters": {
+              "type": "object",
+              "properties": {"run_ids": {"$ref": "#/$defs/runIds"}},
+              "required": ["run_ids"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "suggest_next_action"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "chatResponse": {
+      "type": "object",
+      "properties": {
+        "reply": {"type": "string", "minLength": 1, "maxLength": 600},
+        "action": {"$ref": "#/$defs/action"}
+      },
+      "required": ["reply", "action"],
+      "additionalProperties": false
+    }
+  }
+}

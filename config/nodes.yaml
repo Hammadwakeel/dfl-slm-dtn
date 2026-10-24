@@ -1,4 +1,4 @@
-# Observed Phase 0 inventory. Jetson hostnames are duplicated and must be changed before deployment.
+# Confirmed Phase 1 inventory.
 pc:
   hostname: "DESKTOP-SRLLCKC"
   os: "windows"
@@ -6,7 +6,7 @@ pc:
   user: "hammad"
 
 master:
-  hostname: "hammad-desktop"
+  hostname: "dfl-master"
   ip: "192.168.11.15"
   user: "hammad"
   port: 5002
@@ -14,17 +14,17 @@ master:
 
 workers:
   - id: worker1
-    hostname: "hammad-desktop"
+    hostname: "dfl-worker1"
     ip: "192.168.11.123"
     user: "hammad"
     service_port: 5001
   - id: worker2
-    hostname: "hammad-desktop"
+    hostname: "dfl-worker2"
     ip: "192.168.11.14"
     user: "hammad"
     service_port: 5001
   - id: worker3
-    hostname: "hammad-desktop"
+    hostname: "dfl-worker3"
     ip: "192.168.11.13"
     user: "hammad"
     service_port: 5001

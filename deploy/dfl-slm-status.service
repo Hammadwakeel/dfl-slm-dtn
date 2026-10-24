@@ -1,0 +1,27 @@
+[Unit]
+Description=DFL-SLM authenticated Jetson status API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hammad
+Group=hammad
+WorkingDirectory=/opt/dfl-slm-dtn
+EnvironmentFile=/etc/dfl-slm-node.env
+ExecStart=/usr/bin/python3 -m common.status_agent
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

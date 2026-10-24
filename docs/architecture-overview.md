@@ -22,4 +22,4 @@ This repository currently contains the project skeleton and completed Phase 0 ha
 
 ## Phase 0 findings
 
-SSH access and the hardware probes are complete. The four boards have distinct device-tree serials, but the Jetsons share a cloned hostname and machine ID. Before Phase 1, assign unique hostnames and regenerate each machine ID, then test service-port reachability and run a real TensorFlow training smoke test. See [hardware-discovery.md](./hardware-discovery.md) for details.
+SSH access and hardware probes are complete. The four boards have distinct device-tree serials, unique hostnames and machine IDs, and authenticated live status agents. TCP reachability passed for PC-to-device, device-to-PC, and worker-to-worker paths. A real TensorFlow training smoke test remains before claiming training compatibility. See [hardware-discovery.md](./hardware-discovery.md) and [phase1-network-device.md](./phase1-network-device.md) for details.

@@ -1,6 +1,6 @@
 # DFL-SLM Digital Twin Network Project
 
-This repository is the initial scaffold for the DFL-SLM Digital Twin Network project. Phase 0 hardware discovery is complete. No application code or device configuration has been deployed.
+This repository contains Phase 0 hardware discovery and the Phase 1 authenticated Jetson status service. The DTN, SLM orchestration, and worker training application layers have not yet been built.
 
 ## Phase 0 status
 
@@ -10,10 +10,13 @@ This repository is the initial scaffold for the DFL-SLM Digital Twin Network pro
 - SSH key-based batch access works to all four Jetsons.
 - All four report Jetson Orin Nano Engineering Reference Developer Kit Super, Ubuntu 22.04.4, L4T R36.3, Python 3.10.12, CUDA 12.2, TensorFlow 2.15.0, and GPU enumeration through TensorFlow.
 - The master has active Ollama 0.34.0 and `llama3.2:1b` (Q8_0, 1.3 GB).
-- All four Jetsons have distinct device-tree hardware serials, but the same hostname and `/etc/machine-id`; correct these before Phase 1 deployment.
+- Jetsons use the distinct hostnames `dfl-master`, `dfl-worker1`, `dfl-worker2`, and `dfl-worker3`; each has a unique `/etc/machine-id`.
+- Python 3.10 is retained on the PC and Jetsons as requested.
 - The indoor CO2 dataset has not been provided.
 
 See [docs/hardware-discovery.md](./docs/hardware-discovery.md) for the hardware findings and recommendations, and [docs/hardware-probe-results/](./docs/hardware-probe-results/) for the raw output from each Jetson.
+
+Phase 1 deployment, API details, live readings, authentication checks, and TCP connectivity results are recorded in [docs/phase1-network-device.md](./docs/phase1-network-device.md).
 
 ## Project layout
 
@@ -50,11 +53,19 @@ if ($LASTEXITCODE -ne 0) { throw "Probe failed with exit code $LASTEXITCODE" }
 
 Repeat with each worker IP to collect another hardware report.
 
-## Before Phase 1
+## Phase 1 operations
 
-1. Assign each Jetson a unique hostname and regenerate its cloned `/etc/machine-id`.
-2. Verify TCP connectivity for the intended service ports from the PC and between workers; ICMP from the Jetsons to the PC failed during discovery.
-3. Run a small, real TensorFlow training smoke test.
-4. Supply the indoor CO2 dataset before beginning the federated-training phase.
+Deploy or refresh the authenticated status service from PowerShell:
+
+```powershell
+.\deploy\deploy_jetsons.ps1
+```
+
+Run unit tests and check that authenticated status requests succeed and unauthenticated requests receive HTTP 401:
+
+```powershell
+python -m unittest discover -v
+python -m scripts.check_phase1
+```
 
 Hardware and runtime version decisions are recorded in [docs/setup-notes.md](./docs/setup-notes.md). Model fine-tuning has not been tested; see the memory limitations in the hardware discovery report.

@@ -13,24 +13,24 @@ All four Jetsons accepted batch-mode SSH and completed `scripts/probe_device.sh`
 
 All report Ubuntu 22.04.4 LTS, arm64, CUDA 12.2, cuDNN 8.9.4.25, TensorRT 8.6.2.3, 7.4 GiB total RAM, and 3.7 GiB swap.
 
-The devices have distinct hardware serials and distinct active Wi-Fi MAC addresses, which supports that they are separate physical boards. Their hostnames and `/etc/machine-id` values are identical (`hammad-desktop` and `5dbfb12414a3456d9014d88183e338b1` respectively), indicating cloned OS identity. Assign unique hostnames and regenerate the machine IDs before deploying services.
+At Phase 0, the devices had distinct hardware serials and distinct active Wi-Fi MAC addresses, supporting that they are separate physical boards, but shared the hostname `hammad-desktop` and `/etc/machine-id` `5dbfb12414a3456d9014d88183e338b1`. Before Phase 1, the hostnames and machine IDs were changed to unique values; see [phase1-network-device.md](./phase1-network-device.md).
 
 ## Software inventory and recommendations
 
 - **Workers:** Keep Python 3.10.12 and TensorFlow 2.15.0, which are already installed and expose a TensorFlow GPU device on this L4T R36.3 image. Do not upgrade before a real training smoke test.
 - **Master:** Keep the installed Ollama 0.34.0. It is active and has `llama3.2:1b` locally, with 1.2B parameters, 1.3 GB model size, and Q8_0 quantization. Use the existing Q8_0 model for initial integration and cap context at 4,096 tokens while measuring memory.
-- **PC:** The observed PC is Windows 10 Pro with Python 3.10.11, 31.7 GiB RAM, and 215.9 GiB free on D:. The proposed stack specifies Python 3.12 for the DTN backend; that version is not yet verified as installed.
+- **PC:** The observed PC is Windows 10 Pro with Python 3.10.11, 31.7 GiB RAM, and 215.9 GiB free on D:. Keep Python 3.10 for the DTN backend, as requested.
 - **Fine-tuning:** The master has 7.4 GiB total shared memory, with about 5.3 GiB available while idle. This is not sufficient evidence to claim LoRA/QLoRA feasibility. Measure peak memory with the exact training configuration in Phase 7 before attempting it.
 
 TensorFlow startup emitted duplicate cuDNN/cuFFT/cuBLAS registration errors and NUMA notices. Despite these messages, import completed and TensorFlow enumerated a GPU on each Jetson; no model-training workload was run during Phase 0.
 
 ## Network observations
 
-Each Jetson could ping all three other Jetson IPs. All Jetsons reported `PING_FAIL` for the PC IP `192.168.11.12`; the PC's prior TCP/22 reachability checks to the Jetsons succeeded. ICMP failure does not prove application ports are blocked; verify HTTP connectivity explicitly during Phase 1.
+Each Jetson could ping all three other Jetson IPs. All Jetsons reported `PING_FAIL` for the PC IP `192.168.11.12`; the PC's prior TCP/22 reachability checks to the Jetsons succeeded. ICMP failure did not imply application TCP was blocked: Phase 1 tests confirmed TCP reachability in both directions and across all worker pairs.
 
 ## Recommended next phase
 
-Phase 0 discovery is complete. Before Phase 1 deployment, correct the cloned machine IDs, set unique hostnames, validate TCP application-port reachability in both directions, and run a small TensorFlow training smoke test. The indoor CO2 dataset is not yet available.
+Phase 0 discovery is complete. Phase 1 device status APIs are deployed and their authentication and network paths were tested. A real TensorFlow training smoke test remains before any claim of model-training compatibility. The indoor CO2 dataset is not yet available.
 
 ## Prior work reference
 

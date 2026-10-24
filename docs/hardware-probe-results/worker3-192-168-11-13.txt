@@ -1,0 +1,148 @@
+== host ==
+ Static hostname: hammad-desktop
+       Icon name: computer
+      Machine ID: 5dbfb12414a3456d9014d88183e338b1
+         Boot ID: cba01969bb5a41d88881285259349d8b
+Operating System: Ubuntu 22.04.4 LTS
+          Kernel: Linux 5.15.136-tegra
+    Architecture: arm64
+ Hardware Vendor: NVIDIA
+  Hardware Model: NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super
+
+== operating system and JetPack/L4T ==
+PRETTY_NAME="Ubuntu 22.04.4 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.4 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+# R36 (release), REVISION: 3.0, GCID: 36106755, BOARD: generic, EABI: aarch64, DATE: Thu Apr 25 03:14:05 UTC 2024
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+Machine ID: 5dbfb12414a3456d9014d88183e338b1
+Boot ID: cba01969-bb5a-41d8-8881-285259349d8b
+Hardware serial: 1424225027827
+
+== Python and toolchain ==
+Python 3.10.12
+2026-10-24 18:20:22.264686: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9373] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-10-24 18:20:22.264800: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-10-24 18:20:22.266705: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1534] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-10-24 18:20:25.328847: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:887] could not open file to read NUMA node: /sys/bus/pci/devices/0000:00:00.0/numa_node
+Your kernel may have been built without NUMA support.
+2026-10-24 18:20:25.338086: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:887] could not open file to read NUMA node: /sys/bus/pci/devices/0000:00:00.0/numa_node
+Your kernel may have been built without NUMA support.
+2026-10-24 18:20:25.338270: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:887] could not open file to read NUMA node: /sys/bus/pci/devices/0000:00:00.0/numa_node
+Your kernel may have been built without NUMA support.
+TensorFlow: 2.15.0
+TensorFlow GPUs: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+pip 26.2.1 from /home/hammad/.local/lib/python3.10/site-packages/pip (python 3.10)
+gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+
+== Ollama ==
+Ollama not installed
+
+== memory and disk ==
+               total        used        free      shared  buff/cache   available
+Mem:           7.4Gi       2.2Gi       1.5Gi        31Mi       3.7Gi       5.0Gi
+Swap:          3.7Gi          0B       3.7Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p1  234G   86G  139G  39% /
+
+== CUDA and TensorRT ==
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2023 NVIDIA Corporation
+Built on Tue_Aug_15_22:08:11_PDT_2023
+Cuda compilation tools, release 12.2, V12.2.140
+Build cuda_12.2.r12.2/compiler.33191640_0
+Sat Oct 24 18:20:26 2026       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 540.3.0                Driver Version: N/A          CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  Orin (nvgpu)                  N/A  | N/A              N/A |                  N/A |
+| N/A   N/A  N/A               N/A /  N/A | Not Supported        |     N/A          N/A |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+cuda-toolkit-12 12.2.12-1 arm64
+cuda-toolkit-12-2 12.2.12-1 arm64
+cuda-toolkit-12-2-config-common 12.2.140-1 all
+cuda-toolkit-12-config-common 12.2.140-1 all
+cuda-toolkit-config-common 12.2.140-1 all
+libcudnn8 8.9.4.25-1+cuda12.2 arm64
+libcudnn8-dev 8.9.4.25-1+cuda12.2 arm64
+libcudnn8-samples 8.9.4.25-1+cuda12.2 arm64
+libnvinfer-bin 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-dev-cross-aarch64  
+libnvinfer-dispatch-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-dispatch-dev-cross-aarch64  
+libnvinfer-dispatch8 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-doc  
+libnvinfer-headers-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-headers-plugin-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-lean-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-lean-dev-cross-aarch64  
+libnvinfer-lean8 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-plugin-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-plugin-dev-cross-aarch64  
+libnvinfer-plugin8 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-samples 8.6.2.3-1+cuda12.2 all
+libnvinfer-vc-plugin-dev 8.6.2.3-1+cuda12.2 arm64
+libnvinfer-vc-plugin-dev-cross-aarch64  
+libnvinfer-vc-plugin8 8.6.2.3-1+cuda12.2 arm64
+libnvinfer8 8.6.2.3-1+cuda12.2 arm64
+
+== Jetson utilities and live readings ==
+jtop not installed
+10-24-2026 18:20:27 RAM 2413/7620MB (lfb 7x4MB) SWAP 0/3810MB (cached 0MB) CPU [0%@729,1%@729,0%@729,0%@729,0%@729,0%@729] GR3D_FREQ 0% cpu@46.593C soc2@45C soc0@45.843C gpu@45.781C tj@46.593C soc1@44.562C VDD_IN 3220mW/3220mW VDD_CPU_GPU_CV 563mW/563mW VDD_SOC 1086mW/1086mW
+10-24-2026 18:20:28 RAM 2413/7620MB (lfb 7x4MB) SWAP 0/3810MB (cached 0MB) CPU [1%@729,0%@729,0%@729,1%@729,0%@729,0%@729] GR3D_FREQ 0% cpu@46.093C soc2@44.937C soc0@45.875C gpu@45.656C tj@46.093C soc1@44.593C VDD_IN 3104mW/3162mW VDD_CPU_GPU_CV 483mW/523mW VDD_SOC 1046mW/1066mW
+
+== network interfaces and reachability ==
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+can0             DOWN           
+wlan0            UP             192.168.11.13/24 fe80::87d4:2d30:388f:6e69/64 
+l4tbr0           DOWN           
+usb0             DOWN           
+usb1             DOWN           
+eth0             DOWN           
+docker0          DOWN           172.17.0.1/16 
+lo               UNKNOWN        00:00:00:00:00:00 <LOOPBACK,UP,LOWER_UP> 
+can0             DOWN           <NOARP,ECHO> 
+wlan0            UP             50:2e:91:71:42:f1 <BROADCAST,MULTICAST,UP,LOWER_UP> 
+l4tbr0           DOWN           3e:c7:e7:79:f3:87 <BROADCAST,MULTICAST> 
+usb0             DOWN           2a:33:67:98:e6:85 <NO-CARRIER,BROADCAST,MULTICAST,UP> 
+usb1             DOWN           2a:33:67:98:e6:87 <NO-CARRIER,BROADCAST,MULTICAST,UP> 
+eth0             DOWN           3c:6d:66:be:be:52 <NO-CARRIER,BROADCAST,MULTICAST,UP> 
+docker0          DOWN           02:42:0b:bd:09:fa <NO-CARRIER,BROADCAST,MULTICAST,UP> 
+PING_FAIL 192.168.11.12
+PING_OK 192.168.11.15
+PING_OK 192.168.11.123
+PING_OK 192.168.11.14
+PING_OK 192.168.11.13
+
+== SSH directory ==
+total 12
+drwx------  2 hammad hammad 4096 10월 24 18:16 .
+drwxr-x--- 19 hammad hammad 4096 10월 24 18:16 ..
+-rw-------  1 hammad hammad   94 10월 24 18:16 authorized_keys
+
+== done ==

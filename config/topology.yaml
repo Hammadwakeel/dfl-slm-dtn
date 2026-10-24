@@ -1,0 +1,23 @@
+topology:
+  default: ring
+  options:
+    - ring
+    - mesh
+    - reward_optimized
+
+ring:
+  peers:
+    - worker1
+    - worker2
+    - worker3
+
+mesh:
+  peers:
+    - worker1
+    - worker2
+    - worker3
+
+reward_optimized:
+  strategy: gnn_reward
+  mutation_limit: 10
+  convergence_threshold: 0.01

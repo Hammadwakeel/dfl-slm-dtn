@@ -1,0 +1,18 @@
+training:
+  rounds: 10
+  local_epochs: 5
+  batch_size: 32
+  learning_rate: 0.001
+  validation_split: 0.2
+  seed: 42
+  enable_nas: false
+  topology: ring
+
+metrics:
+  required:
+    - mse
+    - mae
+    - rmse
+    - r2
+    - runtime_sec
+    - memory_mb

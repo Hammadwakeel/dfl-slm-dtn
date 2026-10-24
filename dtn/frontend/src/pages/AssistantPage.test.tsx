@@ -54,18 +54,18 @@ describe("SLM Assistant", () => {
     );
   });
 
-  it("clearly marks unimplemented operations rather than implying execution", async () => {
+  it("clearly marks unimplemented dataset operations rather than implying execution", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          reply: "Training is not available yet.",
-          model_reply: "Start training.",
-          action: { action: "start_training", parameters: { rounds: 2, epochs: 1 } },
+          reply: "Dataset upload is not available yet.",
+          model_reply: "Upload the dataset.",
+          action: { action: "upload_dataset", parameters: {} },
           result: {
             available: false,
-            message: "start_training is not available yet.",
+            message: "upload_dataset is not available yet.",
           },
           metrics: {
             latency_ms: 300,
@@ -80,8 +80,11 @@ describe("SLM Assistant", () => {
       }),
     );
     render(<AssistantPage token="dtn-token" />);
-    fireEvent.click(screen.getByRole("button", { name: /set training rounds/i }));
+    fireEvent.change(screen.getByLabelText("Message the SLM assistant"), {
+      target: { value: "Upload the dataset" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(await screen.findByText("Not available yet")).toBeInTheDocument();
-    expect(screen.getByText(/start_training is not available yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/upload_dataset is not available yet/i)).toBeInTheDocument();
   });
 });

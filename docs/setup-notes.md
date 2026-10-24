@@ -17,7 +17,7 @@ The hardware probe ran successfully on all four devices. Each is reported by the
 
 The devices have distinct device-tree hardware serials and Wi-Fi MAC addresses. At Phase 0 discovery they had identical `/etc/machine-id` and hostname values, consistent with cloned OS images. Before Phase 1 deployment, unique hostnames and machine IDs were configured. The final values and TCP checks are in [phase1-network-device.md](./phase1-network-device.md).
 
-Each device has 7.4 GiB total RAM, with approximately 5.0–5.3 GiB available at Phase 0 probe time and 3.7 GiB swap. Root storage is approximately 234 GiB, with 130–139 GiB available. TensorFlow 2.15.0 imports on all devices and exposes a GPU device. This verifies the installed runtime and GPU enumeration, not a complete training run.
+Each device has 7.4 GiB total RAM, with approximately 5.0–5.3 GiB available at Phase 0 probe time and 3.7 GiB swap. Root storage is approximately 234 GiB, with 130–139 GiB available. TensorFlow 2.15.0 imports on all devices and exposes a GPU device. A two-epoch GPU training smoke test subsequently passed on all three workers; full CIFAR-10 DFL timings and peak RSS are recorded in [phase4-worker-training.md](./phase4-worker-training.md).
 
 Raw outputs are in [`hardware-probe-results/`](./hardware-probe-results/).
 
@@ -26,8 +26,8 @@ Raw outputs are in [`hardware-probe-results/`](./hardware-probe-results/).
 | Device(s) | Observed | Recommendation |
 |---|---|---|
 | PC | Windows 10 Pro, Python 3.10.11 | Keep Python 3.10 for the PC DTN backend. |
-| Master Jetson | Python 3.10.12; TensorFlow 2.15.0; Ollama 0.34.0 active; local `llama3.2:1b`, Q8_0, 1.3 GB | Keep Ollama and the existing Q8_0 model for initial testing; cap context at 4,096 tokens while measuring unified-memory use. |
-| Workers 1–3 | Python 3.10.12; TensorFlow 2.15.0; GPU device exposed by TensorFlow | Keep Python 3.10.12 and TensorFlow 2.15.0; do not upgrade before a real training smoke test. |
+| Master Jetson | Python 3.10.12; TensorFlow 2.15.0; Ollama 0.34.0 active; local `llama3.2:1b`, Q8_0, 1.3 GB | Keep Ollama and the existing Q8_0 model; the SLM uses a 4,096-token context. |
+| Workers 1–3 | Python 3.10.12; TensorFlow 2.15.0; GPU device exposed by TensorFlow | Keep Python 3.10.12 and TensorFlow 2.15.0; real CIFAR-10 Ring/Mesh training is complete and documented in Phase 4. |
 
 TensorFlow startup emitted duplicate cuDNN/cuFFT/cuBLAS registration errors and NUMA notices, but imported successfully and enumerated a GPU on each device. Run a real training smoke test before relying on it.
 
@@ -36,7 +36,7 @@ TensorFlow startup emitted duplicate cuDNN/cuFFT/cuBLAS registration errors and 
 - The master has 7.4 GiB of shared system memory. The existing 1.3 GB Q8_0 weights are modest, but long context/KV cache and concurrent services consume the same memory. A 4,096-token context is a conservative initial setting, not a benchmark result.
 - On-device SLM fine-tuning is not proven feasible. Measure peak memory with the intended adapter method, sequence length, and batch size before attempting it.
 - `jtop` is absent; `tegrastats` is available and provided real RAM, CPU, GPU frequency, temperature, and power readings.
-- The indoor CO2 dataset is not yet available.
+- The originally requested indoor CO2 CSV path was not supplied. CIFAR-10 was used for Phase 4; no CO2 results are claimed.
 - The provided work report describes earlier preliminary results but explicitly says aggregation was emulated and RAM/GPU/energy data were not collected. Those results are background only and do not replace real-hardware acceptance evidence.
 
 ## Phase 1 update

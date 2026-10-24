@@ -285,3 +285,113 @@ def test_get_logs_returns_real_service_events(tmp_path: Path) -> None:
     )
     assert logs.status_code == 200
     assert any(row["event"] == "command_completed" for row in logs.get_json()["logs"])
+
+
+def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Path) -> None:
+    class FakeCoordinator:
+        def __init__(self):
+            self.configuration = {"rounds": 10, "epochs": 5, "topology": "ring"}
+
+        def configure(self, **values):
+            self.configuration.update(values)
+            return dict(self.configuration)
+
+        def start_training(self, *, rounds, epochs):
+            return {"accepted": True, "rounds": rounds, "epochs": epochs}
+
+        def stop_training(self):
+            return {"accepted": True}
+
+        def results(self):
+            return {"groups": [{"status": "completed"}]}
+
+    app = create_app(
+        config(tmp_path),
+        memory_reader=memory,
+        training_coordinator=FakeCoordinator(),
+    )
+    client = app.test_client()
+    headers = {"Authorization": "Bearer slm-test-token-that-is-at-least-32-characters"}
+    requests = (
+        ({"action": "set_rounds", "parameters": {"rounds": 4}}, {"rounds": 4}),
+        ({"action": "set_epochs", "parameters": {"epochs": 2}}, {"epochs": 2}),
+        ({"action": "set_topology", "parameters": {"topology": "mesh"}}, {"topology": "mesh"}),
+    )
+    for payload, expected in requests:
+        response = client.post("/command", json=payload, headers=headers)
+        assert response.status_code == 200
+        assert response.get_json()["result"]["data"] | expected == response.get_json()["result"]["data"]
+
+    started = client.post(
+        "/command",
+        json={
+            "action": "start_training",
+            "parameters": {"rounds": 3, "epochs": 2},
+        },
+        headers=headers,
+    )
+    assert started.status_code == 200
+    assert started.get_json()["result"]["data"] == {
+        "accepted": True,
+        "rounds": 3,
+        "epochs": 2,
+    }
+    stopped = client.post(
+        "/command",
+        json={"action": "stop_training", "parameters": {}},
+        headers=headers,
+    )
+    assert stopped.status_code == 200
+    results = client.post(
+        "/command",
+        json={"action": "get_results", "parameters": {}},
+        headers=headers,
+    )
+    assert results.status_code == 200
+    assert results.get_json()["result"]["data"]["groups"][0]["status"] == "completed"
+    assert client.get("/results", headers=headers).status_code == 200
+
+
+def test_star_topology_is_not_reported_as_available(tmp_path: Path) -> None:
+    class FakeCoordinator:
+        def configure(self, **values):
+            raise ValueError("topology must be ring or mesh")
+
+    app = create_app(
+        config(tmp_path),
+        memory_reader=memory,
+        training_coordinator=FakeCoordinator(),
+    )
+    response = app.test_client().post(
+        "/command",
+        json={"action": "set_topology", "parameters": {"topology": "star"}},
+        headers={"Authorization": "Bearer slm-test-token-that-is-at-least-32-characters"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["result"]["available"] is False
+    assert "ring or mesh" in response.get_json()["result"]["message"]
+
+
+def test_create_app_initializes_coordinator_from_base64_worker_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import base64
+    import json
+
+    from master import training
+
+    coordinator = object()
+    monkeypatch.delenv("DFL_WORKERS_JSON", raising=False)
+    workers = [
+        {"node_id": f"worker{index}", "base_url": f"http://127.0.0.1:{5003 + index}", "token": "x" * 32}
+        for index in range(1, 4)
+    ]
+    worker_json = json.dumps(workers).encode("utf-8")
+    monkeypatch.setenv("DFL_WORKERS_JSON_B64", base64.b64encode(worker_json).decode("ascii"))
+    monkeypatch.setattr(training, "TrainingCoordinator", lambda config: coordinator)
+
+    app = create_app(config(tmp_path), memory_reader=memory)
+
+    assert app.config["TRAINING_COORDINATOR"] is coordinator

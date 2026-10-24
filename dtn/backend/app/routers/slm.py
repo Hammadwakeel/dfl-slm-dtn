@@ -21,6 +21,11 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class BaselineRequest(BaseModel):
+    rounds: int | None = Field(default=None, ge=1, le=100)
+    epochs: int | None = Field(default=None, ge=1, le=50)
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
@@ -93,3 +98,16 @@ def logs(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     return _forward(settings, "/logs", query=f"?limit={limit}")
+
+
+@router.get("/results")
+def results(settings: Settings = Depends(get_settings)) -> dict[str, object]:
+    return _forward(settings, "/results")
+
+
+@router.post("/baseline")
+def baseline(
+    body: BaselineRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    return _forward(settings, "/baseline", payload=body.model_dump(exclude_none=True))

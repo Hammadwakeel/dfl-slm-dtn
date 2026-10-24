@@ -19,13 +19,16 @@ workers:
     ip: "192.168.11.123"
     user: "hammad"
     service_port: 5001
+    training_port: 5004
   - id: worker2
     hostname: "dfl-worker2"
     ip: "192.168.11.14"
     user: "hammad"
     service_port: 5001
+    training_port: 5004
   - id: worker3
     hostname: "dfl-worker3"
     ip: "192.168.11.13"
     user: "hammad"
     service_port: 5001
+    training_port: 5004

@@ -1,0 +1,29 @@
+[Unit]
+Description=DFL-SLM authenticated worker training API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hammad
+Group=hammad
+WorkingDirectory=/opt/dfl-slm-dtn
+EnvironmentFile=/etc/dfl-slm-worker-training.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m worker.training_service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+ReadWritePaths=/var/log/dfl-slm-worker-training
+
+[Install]
+WantedBy=multi-user.target

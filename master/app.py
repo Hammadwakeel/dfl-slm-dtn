@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 from flask import Flask, jsonify, request
 from jsonschema import Draft202012Validator, ValidationError
 
+from master.training import TrainingError
+
 ACTION_NAMES = (
     "upload_dataset",
     "preprocess_dataset",
@@ -274,6 +276,7 @@ def _execute_action(
     action: dict[str, Any],
     config: ServiceConfig,
     status_reader: Callable[[], dict[str, Any]] | None = None,
+    training_coordinator: Any | None = None,
 ) -> dict[str, Any]:
     name = action["action"]
     parameters = action["parameters"]
@@ -285,9 +288,38 @@ def _execute_action(
             "available": True,
             "data": _read_logs(config.log_path, parameters.get("limit", 20)),
         }
+    if training_coordinator is not None:
+        if name == "start_training":
+            return {
+                "available": True,
+                "data": training_coordinator.start_training(
+                    rounds=parameters["rounds"],
+                    epochs=parameters["epochs"],
+                ),
+            }
+        if name == "stop_training":
+            return {"available": True, "data": training_coordinator.stop_training()}
+        if name == "set_rounds":
+            return {
+                "available": True,
+                "data": training_coordinator.configure(rounds=parameters["rounds"]),
+            }
+        if name == "set_epochs":
+            return {
+                "available": True,
+                "data": training_coordinator.configure(epochs=parameters["epochs"]),
+            }
+        if name == "set_topology":
+            try:
+                result = training_coordinator.configure(topology=parameters["topology"])
+            except ValueError as error:
+                return {"available": False, "message": str(error)}
+            return {"available": True, "data": result}
+        if name == "get_results":
+            return {"available": True, "data": training_coordinator.results()}
     return {
         "available": False,
-        "message": f"{name} is not available yet; the training and dataset services are not implemented.",
+        "message": f"{name} is not available yet; this action has no Phase 4 implementation.",
     }
 
 
@@ -310,6 +342,7 @@ def create_app(
     generate: Callable[[str, bool], tuple[str, float]] | None = None,
     status_reader: Callable[[], dict[str, Any]] | None = None,
     memory_reader: Callable[[], dict[str, int]] | None = None,
+    training_coordinator: Any | None = None,
 ) -> Flask:
     settings = config or ServiceConfig.from_env()
     _configure_file_logging(settings.log_path)
@@ -318,9 +351,16 @@ def create_app(
     )
     read_status = status_reader or (lambda: _call_status_agent(settings))
     read_memory = memory_reader or _memory_snapshot
+    if training_coordinator is None and (
+        os.environ.get("DFL_WORKERS_JSON_B64") or os.environ.get("DFL_WORKERS_JSON")
+    ):
+        from master.training import TrainingConfig, TrainingCoordinator
+
+        training_coordinator = TrainingCoordinator(TrainingConfig.from_env())
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 16_384
     app.config["SLM_CONFIG"] = settings
+    app.config["TRAINING_COORDINATOR"] = training_coordinator
 
     @app.before_request
     def authenticate() -> tuple[Any, int] | None:
@@ -341,6 +381,10 @@ def create_app(
     @app.errorhandler(ServiceError)
     def service_error(error: ServiceError) -> tuple[Any, int]:
         return jsonify({"error": str(error)}), error.http_status
+
+    @app.errorhandler(TrainingError)
+    def training_error(error: TrainingError) -> tuple[Any, int]:
+        return jsonify({"error": str(error)}), 409
 
     @app.get("/status")
     def get_status() -> tuple[Any, int] | Any:
@@ -391,7 +435,7 @@ def create_app(
             ACTION_VALIDATOR.validate(payload)
         except ValidationError:
             return jsonify({"error": "Action does not match the allowed action schema"}), 422
-        result = _execute_action(payload, settings, read_status)
+        result = _execute_action(payload, settings, read_status, training_coordinator)
         _log_event("command_completed", action=payload["action"], available=result["available"])
         return jsonify({"action": payload, "result": result})
 
@@ -427,7 +471,7 @@ def create_app(
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         after = read_memory()
         action = validated["action"]
-        result = _execute_action(action, settings, read_status)
+        result = _execute_action(action, settings, read_status, training_coordinator)
         reply = validated["reply"].strip()
         if not result["available"]:
             reply = (
@@ -459,6 +503,27 @@ def create_app(
                 "metrics": metrics,
             }
         )
+
+    @app.get("/results")
+    def get_results() -> tuple[Any, int] | Any:
+        if training_coordinator is None:
+            return jsonify({"error": "Worker training is not configured"}), 503
+        return jsonify(training_coordinator.results())
+
+    @app.post("/baseline")
+    def start_baseline() -> tuple[Any, int] | Any:
+        if training_coordinator is None:
+            return jsonify({"error": "Worker training is not configured"}), 503
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "A JSON object is required"}), 400
+        try:
+            rounds = payload.get("rounds")
+            epochs = payload.get("epochs")
+            result = training_coordinator.start_baseline(rounds=rounds, epochs=epochs)
+        except (TypeError, ValueError, RuntimeError) as error:
+            return jsonify({"error": str(error)}), 409
+        return jsonify(result), 202
 
     return app
 

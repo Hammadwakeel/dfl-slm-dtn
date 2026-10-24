@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { checkToken, getDevices, openDeviceEvents } from "./api/client";
-import type { DeviceEvent } from "./api/client";
+import { checkToken, getDevices, getExperimentResults, openDeviceEvents } from "./api/client";
+import type { DeviceEvent, ExperimentGroup, ExperimentResults } from "./api/client";
 import type { Device } from "./types";
 import DeviceCard from "./components/DeviceCard";
 import AssistantPage from "./pages/AssistantPage";
+import ExperimentsPage from "./pages/ExperimentsPage";
 
 const navigation = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
@@ -19,6 +20,8 @@ export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem("dtn-api-token") ?? "");
   const [page, setPage] = useState("dashboard");
   const [devices, setDevices] = useState<Device[]>([]);
+  const [experimentResults, setExperimentResults] = useState<ExperimentResults | null>(null);
+  const [experimentError, setExperimentError] = useState("");
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
 
@@ -28,6 +31,15 @@ export default function App() {
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load device status.");
+    }
+  }, []);
+
+  const refreshExperiments = useCallback(async (activeToken: string) => {
+    try {
+      setExperimentResults(await getExperimentResults(activeToken));
+      setExperimentError("");
+    } catch (cause) {
+      setExperimentError(cause instanceof Error ? cause.message : "Could not load experiment results.");
     }
   }, []);
 
@@ -72,6 +84,13 @@ export default function App() {
     };
   }, [token, refresh]);
 
+  useEffect(() => {
+    if (!token) return;
+    void refreshExperiments(token);
+    const timer = window.setInterval(() => void refreshExperiments(token), 3000);
+    return () => window.clearInterval(timer);
+  }, [token, refreshExperiments]);
+
   async function submitToken(value: string) {
     setError("");
     try {
@@ -87,6 +106,8 @@ export default function App() {
     sessionStorage.removeItem("dtn-api-token");
     setToken("");
     setDevices([]);
+    setExperimentResults(null);
+    setExperimentError("");
     setConnected(false);
   }
 
@@ -144,12 +165,26 @@ export default function App() {
         </header>
 
         {page === "dashboard" && (
-          <Dashboard devices={devices} error={error} connected={connected} onRetry={() => void refresh(token)} />
+          <Dashboard
+            devices={devices}
+            error={error}
+            connected={connected}
+            experiments={experimentResults}
+            onRetry={() => void refresh(token)}
+          />
         )}
-        {page === "topology" && <Topology devices={devices} />}
+        {page === "topology" && <Topology devices={devices} experiments={experimentResults} />}
+        {page === "experiments" && (
+          <ExperimentsPage
+            token={token}
+            results={experimentResults}
+            error={experimentError}
+            onRefresh={() => void refreshExperiments(token)}
+          />
+        )}
         {page === "assistant" && <AssistantPage token={token} />}
         {page !== "dashboard" && page !== "topology" && (
-          page !== "assistant" && <Placeholder page={page} />
+          page !== "assistant" && page !== "experiments" && <Placeholder page={page} />
         )}
       </main>
     </div>
@@ -192,14 +227,17 @@ function Dashboard({
   devices,
   error,
   connected,
+  experiments,
   onRetry,
 }: {
   devices: Device[];
   error: string;
   connected: boolean;
+  experiments: ExperimentResults | null;
   onRetry: () => void;
 }) {
   const online = devices.filter((device) => device.online).length;
+  const latest = latestExperiment(experiments?.groups ?? []);
   return (
     <section className="content">
       <div className="page-heading">
@@ -218,6 +256,25 @@ function Dashboard({
         <Summary label="Online nodes" value={`${online}/${devices.length || 4}`} detail="Reporting status" mark="↗" />
         <Summary label="Network" value={connected ? "Connected" : "Waiting"} detail="Live status stream" mark="⌁" />
       </div>
+
+      {latest && (
+        <section className="latest-experiment panel-card">
+          <div>
+            <span className="eyebrow">LATEST TRAINING ROUND · {latest.group.topology.toUpperCase()}</span>
+            <h2>{latest.group.group_id}</h2>
+            <p>Seed {latest.run.seed} · Round {latest.round.round} · {latest.group.status}</p>
+          </div>
+          <div className="latest-experiment__metrics">
+            {Object.entries(latest.round.workers).map(([node, metrics]) => (
+              <div key={node}>
+                <span>{node}</span>
+                <strong>{(metrics.accuracy * 100).toFixed(2)}%</strong>
+                <small>test accuracy · {metrics.peak_process_rss_mb.toFixed(0)} MB peak RAM</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="section-heading">
         <div>
@@ -257,7 +314,7 @@ function Summary({ label, value, detail, mark }: { label: string; value: string 
   );
 }
 
-function Topology({ devices }: { devices: Device[] }) {
+function Topology({ devices, experiments }: { devices: Device[]; experiments: ExperimentResults | null }) {
   const master = devices.find((device) => device.role === "master");
   const workers = devices.filter((device) => device.role === "worker");
   return (
@@ -296,8 +353,42 @@ function Topology({ devices }: { devices: Device[] }) {
           </div>
         </div>
       </div>
+      <TrainingTopologyPanel experiments={experiments} />
     </section>
   );
+}
+
+function TrainingTopologyPanel({ experiments }: { experiments: ExperimentResults | null }) {
+  const latestGroup = [...(experiments?.groups ?? [])].reverse().find((group) => group.kind === "decentralized");
+  const topology = latestGroup?.topology ?? experiments?.configuration.topology ?? "ring";
+  const links = topology === "ring"
+    ? ["dfl-worker1 → dfl-worker2", "dfl-worker2 → dfl-worker3", "dfl-worker3 → dfl-worker1"]
+    : ["dfl-worker1 ↔ dfl-worker2", "dfl-worker1 ↔ dfl-worker3", "dfl-worker2 ↔ dfl-worker3"];
+  return (
+    <section className="training-map panel-card">
+      <div className="section-heading">
+        <div>
+          <h2>Training peer topology</h2>
+          <p>Workers exchange model weights directly; the PC coordinates but is not in the data path.</p>
+        </div>
+        <span className="run-status completed">{topology}</span>
+      </div>
+      <div className="training-map__nodes">
+        {["dfl-worker1", "dfl-worker2", "dfl-worker3"].map((worker) => <span key={worker}>{worker}</span>)}
+      </div>
+      <div className="training-map__links">{links.map((link) => <span key={link}>{link}</span>)}</div>
+    </section>
+  );
+}
+
+function latestExperiment(groups: ExperimentGroup[]) {
+  const candidates = groups
+    .filter((group) => group.kind === "decentralized" || group.kind === "centralized_baseline")
+    .flatMap((group) => group.runs.flatMap((run) => {
+      const round = run.rounds[run.rounds.length - 1];
+      return round ? [{ group, run, round }] : [];
+    }));
+  return candidates[candidates.length - 1];
 }
 
 function TopologyNode({ device, fallback, role }: { device?: Device; fallback: string; role: "master" | "worker" }) {

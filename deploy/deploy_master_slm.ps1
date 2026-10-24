@@ -9,6 +9,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $repoRoot '.env'
 $masterIp = '192.168.11.15'
 $servicePort = 5003
+$workers = @(
+    @{ Id = 'worker1'; Ip = '192.168.11.123'; TokenName = 'WORKER1_API_TOKEN' },
+    @{ Id = 'worker2'; Ip = '192.168.11.14'; TokenName = 'WORKER2_API_TOKEN' },
+    @{ Id = 'worker3'; Ip = '192.168.11.13'; TokenName = 'WORKER3_API_TOKEN' }
+)
 $values = @{}
 $lines = [System.Collections.Generic.List[string]]::new()
 if (Test-Path -LiteralPath $envPath) {
@@ -57,6 +62,11 @@ if (-not $values.ContainsKey('MASTER_SLM_API_TOKEN') -or
 if (-not $values.ContainsKey('MASTER_OLLAMA_MODEL') -or -not $values['MASTER_OLLAMA_MODEL']) {
     Set-EnvValue 'MASTER_OLLAMA_MODEL' 'llama3.2:1b'
 }
+foreach ($worker in $workers) {
+    if (-not $values.ContainsKey($worker.TokenName) -or $values[$worker.TokenName].Length -lt 32) {
+        throw "$($worker.TokenName) must be set in the ignored .env file."
+    }
+}
 Set-EnvValue 'MASTER_SLM_PORT' "$servicePort"
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -81,8 +91,20 @@ $remote = "hammad@$masterIp"
 $tempFiles = [System.Collections.Generic.List[string]]::new()
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'master') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'common') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stageRoot 'data') -Force | Out-Null
 $tempFiles.Add($stageRoot)
 
+$workerEntries = @(
+    foreach ($worker in $workers) {
+        [pscustomobject]@{
+            node_id = $worker.Id
+            base_url = "http://$($worker.Ip):5004"
+            token = $values[$worker.TokenName]
+        }
+    }
+)
+$workersJson = ConvertTo-Json -InputObject $workerEntries -Compress
+$workersJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workersJson))
 $nodeEnv = @(
     "DFL_API_TOKEN=$($values['MASTER_SLM_API_TOKEN'])",
     "DFL_STATUS_API_TOKEN=$($values['MASTER_API_TOKEN'])",
@@ -93,6 +115,17 @@ $nodeEnv = @(
     'DFL_STATUS_URL=http://127.0.0.1:5002',
     'DFL_LOG_FILE=/var/log/dfl-slm-master/events.jsonl',
     'DFL_OLLAMA_TIMEOUT_SECONDS=120',
+    "DFL_WORKERS_JSON_B64=$workersJsonBase64",
+    'DFL_TRAINING_ROUNDS=10',
+    'DFL_LOCAL_EPOCHS=5',
+    'DFL_TOPOLOGY=ring',
+    'DFL_TRAINING_PEER_TIMEOUT_SECONDS=60',
+    'DFL_EVALUATOR_PYTHON=/usr/bin/python3',
+    'DFL_EVALUATOR_SCRIPT=/opt/dfl-slm-dtn/master/cifar_evaluator.py',
+    'DFL_TEST_DATA_PATH=/opt/dfl-slm-dtn/data/cifar10_test.npz',
+    'DFL_BASELINE_TRAIN_DATA_PATH=/opt/dfl-slm-dtn/data/cifar10_train.npz',
+    'DFL_EVALUATOR_LOG_PATH=/var/log/dfl-slm-master/cifar-evaluator.log',
+    'DFL_TRAINING_RESULTS_PATH=/var/lib/dfl-slm-master/experiments.json',
     'PYTHONDONTWRITEBYTECODE=1'
 )
 [System.IO.File]::WriteAllText($localEnv, [string]::Join("`n", $nodeEnv) + "`n", $utf8NoBom)
@@ -100,7 +133,16 @@ $tempFiles.Add($localEnv)
 [System.IO.File]::WriteAllText($sshConfigPath, [string]::Join("`n", $headers), $utf8NoBom)
 
 try {
-    & ssh -F $sshConfigPath $remote "mkdir -p '$stageName/master/tests' '$stageName/common' && chmod 700 '$stageName' '$stageName/master' '$stageName/master/tests' '$stageName/common'"
+    $requiredData = @(
+        (Join-Path $repoRoot 'data\raw\cifar10_test.npz'),
+        (Join-Path $repoRoot 'data\raw\cifar10_train.npz')
+    )
+    foreach ($path in $requiredData) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "CIFAR-10 evaluation/baseline data is missing: $path"
+        }
+    }
+    & ssh -F $sshConfigPath $remote "mkdir -p '$stageName/master/tests' '$stageName/common' '$stageName/data' && chmod 700 '$stageName' '$stageName/master' '$stageName/master/tests' '$stageName/common' '$stageName/data'"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not create protected SLM staging directories on the master'
     }
@@ -109,7 +151,9 @@ try {
         (Join-Path $repoRoot 'master\app.py'),
         (Join-Path $repoRoot 'master\__init__.py'),
         (Join-Path $repoRoot 'master\requirements.txt'),
-        (Join-Path $repoRoot 'master\wsgi.py')
+        (Join-Path $repoRoot 'master\wsgi.py'),
+        (Join-Path $repoRoot 'master\training.py'),
+        (Join-Path $repoRoot 'master\cifar_evaluator.py')
     )
     & scp -F $sshConfigPath @sources "${remote}:$stageName/master/"
     if ($LASTEXITCODE -ne 0) {
@@ -126,6 +170,17 @@ try {
         throw 'Could not stage the action schema on the master'
     }
     & scp -F $sshConfigPath `
+        (Join-Path $repoRoot 'common\__init__.py') `
+        (Join-Path $repoRoot 'common\cifar_model.py') `
+        "${remote}:$stageName/common/"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not stage the shared CIFAR-10 model on the master'
+    }
+    & scp -F $sshConfigPath @requiredData "${remote}:$stageName/data/"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not stage the held-out and centralized-baseline data on the master'
+    }
+    & scp -F $sshConfigPath `
         (Join-Path $PSScriptRoot 'install_master_slm.sh') `
         (Join-Path $PSScriptRoot 'dfl-slm-master.service') `
         "${remote}:$stageName/"
@@ -137,7 +192,7 @@ try {
         throw 'Could not stage protected SLM environment values on the master'
     }
 
-    & ssh -F $sshConfigPath $remote "sudo -n bash '$stageName/install_master_slm.sh'"
+    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' && sudo -n bash '$stageName/install_master_slm.sh'"
     if ($LASTEXITCODE -ne 0) {
         throw "Master SLM install failed; protected staging files remain at ~/$stageName for diagnosis"
     }

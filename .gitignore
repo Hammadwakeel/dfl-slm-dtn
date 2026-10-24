@@ -29,6 +29,7 @@ Thumbs.db
 .idea/
 
 # Local data
+data/
 *.sqlite3
 *.db
 logs/

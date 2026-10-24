@@ -17,13 +17,13 @@ TimeoutStopSec=15
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
-ReadWritePaths=/var/log/dfl-slm-master
+ReadWritePaths=/var/log/dfl-slm-master /var/lib/dfl-slm-master
 
 [Install]
 WantedBy=multi-user.target

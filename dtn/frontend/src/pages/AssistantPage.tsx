@@ -70,8 +70,9 @@ export default function AssistantPage({ token }: { token: string }) {
       <div className="assistant-panel">
         <div className="assistant-disclaimer">
           <span>i</span>
-          The assistant can read live master status and its own service logs. Training and dataset
-          actions are not available yet. It cannot execute shell commands or free-form code.
+          The assistant can read live master status and service logs, and can control the supported
+          Ring/Mesh CIFAR-10 experiments. Dataset upload and preprocessing are not available yet.
+          It cannot execute shell commands or free-form code.
         </div>
         <div className="conversation" aria-live="polite">
           {messages.length === 0 && (

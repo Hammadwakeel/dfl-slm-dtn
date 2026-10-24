@@ -30,7 +30,7 @@ Each Jetson could ping all three other Jetson IPs. All Jetsons reported `PING_FA
 
 ## Recommended next phase
 
-Phase 0 discovery is complete. Phase 1 device status APIs are deployed and their authentication and network paths were tested. A real TensorFlow training smoke test remains before any claim of model-training compatibility. The indoor CO2 dataset is not yet available.
+Phase 0 discovery and Phase 1 device status deployment are complete. Before Phase 4, a real two-epoch TensorFlow 2.15 GPU training smoke test passed on each worker. The originally requested CO2 CSV path was not supplied; Phase 4 uses the verified CIFAR-10 archive and reports its split and measured training results in [phase4-worker-training.md](./phase4-worker-training.md).
 
 ## Prior work reference
 

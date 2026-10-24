@@ -49,6 +49,8 @@ Every SLM endpoint requires `Authorization: Bearer <MASTER_SLM_API_TOKEN>`. The 
 
 Unavailable actions return `available: false` and an explicit explanation. There is no worker training API in Phase 3, and configuration-shaped actions do not mutate a training system. User text, model output, and action parameters are never passed to a shell or evaluated as code. The service logs action names, outcomes, timing, and RAM metrics, not full user prompts or API tokens.
 
+This table records the Phase 3 acceptance state. Phase 4 subsequently implemented worker-backed `start_training`, `stop_training`, `set_topology` (Ring/Mesh), `set_rounds`, `set_epochs`, and `get_results`; dataset upload/preprocessing, model creation, and NAS remain unavailable. See [phase4-worker-training.md](./phase4-worker-training.md) for the deployed services and real experiment output.
+
 ## Tests
 
 Run the backend suite (includes authenticated SLM proxy coverage):

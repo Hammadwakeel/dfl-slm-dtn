@@ -1,16 +1,11 @@
 # Architecture overview
 
-This repository currently contains the project skeleton and completed Phase 0 hardware discovery. The application will be built in the following phases:
+Phases 0–4 are implemented on the four Jetsons and the PC. The remaining planned phases are:
 
-1. Discovery and setup
-2. Network and device layer
-3. DTN coordinator
-4. SLM master
-5. Worker training and DFL
-6. Topology optimization
-7. NAS / model selection
-8. Synthetic data and fine-tuning
-9. Hardening and documentation
+5. Topology optimization
+6. NAS / model selection
+7. Synthetic data and fine-tuning
+8. Hardening and documentation
 
 ## Target architecture
 
@@ -22,4 +17,4 @@ This repository currently contains the project skeleton and completed Phase 0 ha
 
 ## Phase 0 findings
 
-SSH access and hardware probes are complete. The four boards have distinct device-tree serials, unique hostnames and machine IDs, and authenticated live status agents. TCP reachability passed for PC-to-device, device-to-PC, and worker-to-worker paths. A real TensorFlow training smoke test remains before claiming training compatibility. See [hardware-discovery.md](./hardware-discovery.md) and [phase1-network-device.md](./phase1-network-device.md) for details.
+SSH access and hardware probes are complete. The four boards have distinct device-tree serials, unique hostnames and machine IDs, and authenticated live status agents. TCP reachability passed for PC-to-device, device-to-PC, and worker-to-worker paths. TensorFlow 2.15 GPU training was verified on each Jetson. Phase 4 adds authenticated worker training on port 5004, direct Ring/Mesh weight exchange, and a real CIFAR-10 dashboard; its dataset inventory and experimental results are in [phase4-worker-training.md](./phase4-worker-training.md). See [hardware-discovery.md](./hardware-discovery.md) and [phase1-network-device.md](./phase1-network-device.md) for the earlier hardware and network evidence.

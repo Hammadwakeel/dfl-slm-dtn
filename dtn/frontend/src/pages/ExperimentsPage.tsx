@@ -5,6 +5,7 @@ import {
   startCentralizedBaseline,
 } from "../api/client";
 import type { ExperimentGroup, ExperimentResults, WorkerRoundMetrics } from "../api/client";
+import type { TrainingTopology } from "../api/client";
 
 interface Props {
   token: string;
@@ -32,17 +33,21 @@ function runtime(metrics: WorkerRoundMetrics): number | undefined {
   return metrics.round_seconds ?? metrics.runtime_seconds ?? metrics.training_seconds;
 }
 
-function TrainingTopology({ topology }: { topology: "ring" | "mesh" | "centralized" }) {
-  const links =
-    topology === "ring"
-      ? ["worker1 → worker2", "worker2 → worker3", "worker3 → worker1"]
-      : topology === "mesh"
-        ? [
-            "worker1 ↔ worker2",
-            "worker1 ↔ worker3",
-            "worker2 ↔ worker3",
-          ]
-        : ["dfl-master · centralized"];
+function TrainingTopology({ topology }: { topology: TrainingTopology | "centralized" }) {
+  let links: string[];
+  if (topology === "centralized") {
+    links = ["dfl-master · centralized"];
+  } else if (topology === "chain") {
+    links = ["worker1 ↔ worker2", "worker2 ↔ worker3"];
+  } else if (topology === "star") {
+    links = ["worker1 ↔ worker2", "worker1 ↔ worker3"];
+  } else if (topology === "mesh") {
+    links = ["worker1 ↔ worker2", "worker1 ↔ worker3", "worker2 ↔ worker3"];
+  } else if (topology === "bidirectional_ring") {
+    links = ["worker1 ↔ worker2", "worker2 ↔ worker3", "worker3 ↔ worker1"];
+  } else {
+    links = ["worker1 → worker2", "worker2 → worker3", "worker3 → worker1"];
+  }
   return (
     <div className="training-topology" aria-label={`${topology} training topology`}>
       <strong>{topology} topology</strong>
@@ -52,9 +57,10 @@ function TrainingTopology({ topology }: { topology: "ring" | "mesh" | "centraliz
 }
 
 export default function ExperimentsPage({ token, results, error, onRefresh }: Props) {
-  const [topology, setTopology] = useState<"ring" | "mesh">(
-    results?.configuration.topology ?? "ring",
+  const [topology, setTopology] = useState<TrainingTopology>(
+    results?.configuration.topology ?? "directed_ring",
   );
+  const [datasetSplit, setDatasetSplit] = useState("dirichlet_a03");
   const [rounds, setRounds] = useState(10);
   const [epochs, setEpochs] = useState(5);
   const [busy, setBusy] = useState(false);
@@ -82,8 +88,8 @@ export default function ExperimentsPage({ token, results, error, onRefresh }: Pr
       await command("set_topology", { topology });
       await command("set_rounds", { rounds });
       await command("set_epochs", { epochs });
-      const response = await command("start_training", { rounds, epochs });
-      setMessage(`Distributed ${topology} run accepted. It will execute three seeds.`);
+      const response = await command("start_training", { rounds, epochs, dataset_split: datasetSplit });
+      setMessage(`Distributed ${topology} run accepted. It will execute three seeds on ${datasetSplit}.`);
       if (response.result.data?.group_id) setMessage(`Run group ${String(response.result.data.group_id)} accepted.`);
       onRefresh();
     } catch (cause) {
@@ -141,9 +147,20 @@ export default function ExperimentsPage({ token, results, error, onRefresh }: Pr
         <form onSubmit={(event) => void startDistributed(event)}>
           <label>
             Topology
-            <select value={topology} onChange={(event) => setTopology(event.target.value as "ring" | "mesh")}>
-              <option value="ring">Ring</option>
+            <select value={topology} onChange={(event) => setTopology(event.target.value as TrainingTopology)}>
+              <option value="directed_ring">Directed ring</option>
+              <option value="bidirectional_ring">Bidirectional ring</option>
               <option value="mesh">Mesh</option>
+              <option value="chain">Line / chain</option>
+              <option value="star">Star (worker1 hub)</option>
+            </select>
+          </label>
+          <label>
+            Training split
+            <select value={datasetSplit} onChange={(event) => setDatasetSplit(event.target.value)}>
+              <option value="dirichlet_a03">Dirichlet α=0.3</option>
+              <option value="dirichlet_a05">Dirichlet α=0.5</option>
+              <option value="stratified">Stratified IID</option>
             </select>
           </label>
           <label>
@@ -202,7 +219,7 @@ export default function ExperimentsPage({ token, results, error, onRefresh }: Pr
               </div>
               <span className={`run-status ${group.status}`}>{group.status}</span>
             </header>
-            <TrainingTopology topology={group.topology} />
+            <TrainingTopology topology={group.topology === "candidate_sweep" ? group.selected_configuration?.topology ?? "directed_ring" : group.topology} />
             {group.error && <div className="alert inline-alert" role="alert">{group.error}</div>}
             {group.runs.map((run) => (
               <section className="experiment-run" key={run.run_id}>

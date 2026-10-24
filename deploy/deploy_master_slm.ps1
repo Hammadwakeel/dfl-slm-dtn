@@ -92,6 +92,7 @@ $tempFiles = [System.Collections.Generic.List[string]]::new()
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'master') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'common') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'data') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stageRoot 'topology_opt') -Force | Out-Null
 $tempFiles.Add($stageRoot)
 
 $workerEntries = @(
@@ -118,7 +119,7 @@ $nodeEnv = @(
     "DFL_WORKERS_JSON_B64=$workersJsonBase64",
     'DFL_TRAINING_ROUNDS=10',
     'DFL_LOCAL_EPOCHS=5',
-    'DFL_TOPOLOGY=ring',
+    'DFL_TOPOLOGY=directed_ring',
     'DFL_TRAINING_PEER_TIMEOUT_SECONDS=60',
     'DFL_EVALUATOR_PYTHON=/usr/bin/python3',
     'DFL_EVALUATOR_SCRIPT=/opt/dfl-slm-dtn/master/cifar_evaluator.py',
@@ -126,6 +127,7 @@ $nodeEnv = @(
     'DFL_BASELINE_TRAIN_DATA_PATH=/opt/dfl-slm-dtn/data/cifar10_train.npz',
     'DFL_EVALUATOR_LOG_PATH=/var/log/dfl-slm-master/cifar-evaluator.log',
     'DFL_TRAINING_RESULTS_PATH=/var/lib/dfl-slm-master/experiments.json',
+    'DFL_TOPOLOGY_REWARD_CONFIG=/opt/dfl-slm-dtn/topology_opt/reward_config.json',
     'PYTHONDONTWRITEBYTECODE=1'
 )
 [System.IO.File]::WriteAllText($localEnv, [string]::Join("`n", $nodeEnv) + "`n", $utf8NoBom)
@@ -142,7 +144,7 @@ try {
             throw "CIFAR-10 evaluation/baseline data is missing: $path"
         }
     }
-    & ssh -F $sshConfigPath $remote "mkdir -p '$stageName/master/tests' '$stageName/common' '$stageName/data' && chmod 700 '$stageName' '$stageName/master' '$stageName/master/tests' '$stageName/common' '$stageName/data'"
+    & ssh -F $sshConfigPath $remote "mkdir -p '$stageName/master/tests' '$stageName/common' '$stageName/data' '$stageName/topology_opt' && chmod 700 '$stageName' '$stageName/master' '$stageName/master/tests' '$stageName/common' '$stageName/data' '$stageName/topology_opt'"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not create protected SLM staging directories on the master'
     }
@@ -175,6 +177,15 @@ try {
         "${remote}:$stageName/common/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the shared CIFAR-10 model on the master'
+    }
+    & scp -F $sshConfigPath `
+        (Join-Path $repoRoot 'topology_opt\__init__.py') `
+        (Join-Path $repoRoot 'topology_opt\reward.py') `
+        (Join-Path $repoRoot 'topology_opt\selector.py') `
+        (Join-Path $repoRoot 'topology_opt\reward_config.json') `
+        "${remote}:$stageName/topology_opt/"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not stage the topology optimizer on the master'
     }
     & scp -F $sshConfigPath @requiredData "${remote}:$stageName/data/"
     if ($LASTEXITCODE -ne 0) {

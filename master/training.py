@@ -19,7 +19,21 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from topology_opt.reward import RewardConfig, calculate_run_reward
+from topology_opt.selector import select_candidate
+
 LOGGER = logging.getLogger("dfl_slm.training")
+TOPOLOGIES = (
+    "directed_ring",
+    "bidirectional_ring",
+    "mesh",
+    "chain",
+    "star",
+)
+DATASET_SPLITS = {
+    0.3: "dirichlet_a03",
+    0.5: "dirichlet_a05",
+}
 
 
 class TrainingError(RuntimeError):
@@ -48,7 +62,7 @@ class TrainingConfig:
     results_path: str
     rounds: int = 10
     epochs: int = 5
-    topology: str = "ring"
+    topology: str = "directed_ring"
     peer_timeout_seconds: float = 60.0
 
     @classmethod
@@ -77,11 +91,11 @@ class TrainingConfig:
             raise ValueError("Worker training URLs and tokens must be configured")
         rounds = int(os.environ.get("DFL_TRAINING_ROUNDS", "10"))
         epochs = int(os.environ.get("DFL_LOCAL_EPOCHS", "5"))
-        topology = os.environ.get("DFL_TOPOLOGY", "ring")
+        topology = os.environ.get("DFL_TOPOLOGY", "directed_ring")
         peer_timeout = float(os.environ.get("DFL_TRAINING_PEER_TIMEOUT_SECONDS", "60"))
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Training rounds or epochs are out of range")
-        if topology not in {"ring", "mesh"} or peer_timeout <= 0:
+        if topology not in {"ring", *TOPOLOGIES} or peer_timeout <= 0:
             raise ValueError("Training topology or peer timeout is invalid")
         return cls(
             workers=workers,
@@ -214,6 +228,12 @@ class TrainingCoordinator:
     ) -> None:
         self.config = config
         self.evaluator = evaluator or EvaluatorClient(config)
+        self.reward_config = RewardConfig.load(
+            os.environ.get(
+                "DFL_TOPOLOGY_REWARD_CONFIG",
+                str(Path(__file__).resolve().parents[1] / "topology_opt" / "reward_config.json"),
+            )
+        )
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -222,6 +242,7 @@ class TrainingCoordinator:
             "rounds": config.rounds,
             "epochs": config.epochs,
             "topology": config.topology,
+            "dataset_split": "stratified",
         }
         self._groups: list[dict[str, Any]] = self._load_groups()
 
@@ -231,6 +252,7 @@ class TrainingCoordinator:
         rounds: int | None = None,
         epochs: int | None = None,
         topology: str | None = None,
+        dataset_split: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if self._active_group_id is not None:
@@ -245,9 +267,15 @@ class TrainingCoordinator:
                     raise ValueError("epochs must be between 1 and 50")
                 updated["epochs"] = epochs
             if topology is not None:
-                if topology not in {"ring", "mesh"}:
-                    raise ValueError("topology must be ring or mesh")
+                if topology == "ring":
+                    topology = "directed_ring"
+                if topology not in TOPOLOGIES:
+                    raise ValueError(f"topology must be one of {', '.join(TOPOLOGIES)}")
                 updated["topology"] = topology
+            if dataset_split is not None:
+                if dataset_split not in {"stratified", *DATASET_SPLITS.values()}:
+                    raise ValueError("Unsupported CIFAR-10 training split")
+                updated["dataset_split"] = dataset_split
             self._settings = updated
         return dict(updated)
 
@@ -257,13 +285,18 @@ class TrainingCoordinator:
         rounds: int | None = None,
         epochs: int | None = None,
         seeds: tuple[int, ...] = (17, 42, 2026),
+        dataset_split: str | None = None,
     ) -> dict[str, Any]:
         if len(seeds) != 3 or any(seed < 0 for seed in seeds):
             raise ValueError("Exactly three non-negative training seeds are required")
         with self._lock:
             if self._active_group_id is not None:
                 raise TrainingError(f"Training group {self._active_group_id} is already active")
-            settings = self.configure(rounds=rounds, epochs=epochs)
+            settings = self.configure(
+                rounds=rounds,
+                epochs=epochs,
+                dataset_split=dataset_split,
+            )
             group_id = f"{settings['topology']}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
             group = {
                 "group_id": group_id,
@@ -271,6 +304,7 @@ class TrainingCoordinator:
                 "topology": settings["topology"],
                 "rounds": settings["rounds"],
                 "epochs": settings["epochs"],
+                "dataset_split": settings["dataset_split"],
                 "seeds": list(seeds),
                 "status": "running",
                 "started_at": time.time(),
@@ -290,6 +324,66 @@ class TrainingCoordinator:
             self._thread.start()
             self._persist_locked()
         return {"accepted": True, "group_id": group_id, **settings, "seeds": list(seeds)}
+
+    def start_optimization(
+        self,
+        *,
+        rounds: int = 10,
+        epochs: int = 5,
+        seeds: tuple[int, ...] = (17, 42, 2026),
+        alphas: tuple[float, ...] = (0.3, 0.5),
+    ) -> dict[str, Any]:
+        if not 1 <= len(seeds) <= 3 or any(seed < 0 for seed in seeds):
+            raise ValueError("Provide between one and three non-negative seeds")
+        if not alphas or any(alpha not in DATASET_SPLITS for alpha in alphas):
+            raise ValueError("Dirichlet alphas must be selected from 0.3 and 0.5")
+        if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
+            raise ValueError("rounds must be 1-100 and epochs must be 1-50")
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError(f"Training group {self._active_group_id} is already active")
+            group_id = f"optimize-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+            group = {
+                "group_id": group_id,
+                "kind": "topology_optimization",
+                "topology": "candidate_sweep",
+                "rounds": rounds,
+                "epochs": epochs,
+                "seeds": list(seeds),
+                "alphas": list(alphas),
+                "candidates": [
+                    {"topology": topology, "alpha": alpha}
+                    for alpha in alphas
+                    for topology in TOPOLOGIES
+                ],
+                "reward_config": self.reward_config.as_dict(),
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+                "runs": [],
+            }
+            self._groups.append(group)
+            self._active_group_id = group_id
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run_optimization_group,
+                args=(group_id,),
+                name=f"topology-optimization-{group_id}",
+                daemon=True,
+            )
+            self._thread.start()
+            self._persist_locked()
+        return {
+            "accepted": True,
+            "group_id": group_id,
+            "rounds": rounds,
+            "epochs": epochs,
+            "seeds": list(seeds),
+            "alphas": list(alphas),
+            "candidate_count": len(alphas) * len(TOPOLOGIES),
+            "reward_config": self.reward_config.as_dict(),
+        }
 
     def start_baseline(
         self,
@@ -351,11 +445,19 @@ class TrainingCoordinator:
                 "active_group_id": self._active_group_id,
                 "topologies": {
                     "ring": ["worker1", "worker2", "worker3", "worker1"],
+                    "directed_ring": ["worker1", "worker2", "worker3", "worker1"],
+                    "bidirectional_ring": [
+                        ["worker1", "worker2"],
+                        ["worker2", "worker3"],
+                        ["worker3", "worker1"],
+                    ],
                     "mesh": [
                         ["worker1", "worker2"],
                         ["worker1", "worker3"],
                         ["worker2", "worker3"],
                     ],
+                    "chain": [["worker1", "worker2"], ["worker2", "worker3"]],
+                    "star": [["worker1", "worker2"], ["worker1", "worker3"]],
                 },
                 "groups": json.loads(json.dumps(self._groups[-20:])),
             }
@@ -443,6 +545,7 @@ class TrainingCoordinator:
             "rounds": group["rounds"],
             "epochs": group["epochs"],
             "topology": group["topology"],
+            "dataset_split": group.get("dataset_split", "stratified"),
         }
         self._parallel_workers(
             lambda worker: self._post(worker, "/v1/config", configuration)
@@ -536,6 +639,122 @@ class TrainingCoordinator:
             f"Timed out waiting for all workers to complete round {round_index + 1} "
             f"for group {group_id}"
         )
+
+    def _run_optimization_group(self, group_id: str) -> None:
+        group = self._get_group(group_id)
+        try:
+            for candidate in group["candidates"]:
+                for seed in group["seeds"]:
+                    if self._stop.is_set():
+                        raise TrainingCancelled("Topology optimization was cancelled")
+                    alpha = candidate["alpha"]
+                    run_id = (
+                        f"{candidate['topology']}-a{str(alpha).replace('.', '')}-"
+                        f"seed-{seed}-{uuid.uuid4().hex[:8]}"
+                    )
+                    run = {
+                        "run_id": run_id,
+                        "seed": seed,
+                        "topology": candidate["topology"],
+                        "dataset_split": DATASET_SPLITS[alpha],
+                        "alpha": alpha,
+                        "status": "running",
+                        "rounds": [],
+                    }
+                    with self._lock:
+                        self._get_group(group_id)["runs"].append(run)
+                        self._persist_locked()
+                    candidate_group = {
+                        **group,
+                        "topology": candidate["topology"],
+                        "dataset_split": DATASET_SPLITS[alpha],
+                    }
+                    self._run_distributed_seed(group_id, candidate_group, run)
+                    run["status"] = "completed"
+                    with self._lock:
+                        self._persist_locked()
+
+            candidates = []
+            for candidate in group["candidates"]:
+                matching_runs = [
+                    run
+                    for run in group["runs"]
+                    if run["topology"] == candidate["topology"]
+                    and run["alpha"] == candidate["alpha"]
+                    and run["status"] == "completed"
+                ]
+                per_run = [
+                    calculate_run_reward(run["rounds"], self.reward_config)
+                    for run in matching_runs
+                ]
+                if not per_run:
+                    continue
+                candidates.append(
+                    {
+                        "topology": candidate["topology"],
+                        "alpha": candidate["alpha"],
+                        "completed_runs": len(per_run),
+                        "mean_reward": round(
+                            sum(value["reward"] for value in per_run) / len(per_run),
+                            6,
+                        ),
+                        "mean_final_accuracy": round(
+                            sum(value["metrics"]["final_accuracy"] for value in per_run)
+                            / len(per_run),
+                            6,
+                        ),
+                        "mean_components": {
+                            name: round(
+                                sum(value["components"][name] for value in per_run)
+                                / len(per_run),
+                                6,
+                            )
+                            for name in self.reward_config.weights
+                        },
+                        "per_run_rewards": per_run,
+                    }
+                )
+            if not candidates:
+                raise TrainingError("No topology candidates completed successfully")
+            selection = select_candidate(candidates)
+            chosen = selection["selected_candidate"]
+            with self._lock:
+                self._settings["topology"] = chosen["topology"]
+                self._settings["dataset_split"] = DATASET_SPLITS[chosen["alpha"]]
+            self._update_group(
+                group_id,
+                candidates=candidates,
+                selection=selection,
+                selected_configuration={
+                    "topology": chosen["topology"],
+                    "alpha": chosen["alpha"],
+                    "dataset_split": DATASET_SPLITS[chosen["alpha"]],
+                },
+                status="completed",
+                completed_at=time.time(),
+            )
+        except TrainingCancelled as error:
+            self._cancel_workers()
+            self._update_group(
+                group_id,
+                status="stopped",
+                completed_at=time.time(),
+                error=str(error),
+            )
+        except Exception as error:
+            self._cancel_workers()
+            LOGGER.exception("Topology optimization group %s failed", group_id)
+            self._update_group(
+                group_id,
+                status="failed",
+                completed_at=time.time(),
+                error=f"{type(error).__name__}: {error}",
+            )
+        finally:
+            with self._lock:
+                if self._active_group_id == group_id:
+                    self._active_group_id = None
+                self._persist_locked()
 
     def _run_baseline_group(self, group_id: str) -> None:
         group = self._get_group(group_id)

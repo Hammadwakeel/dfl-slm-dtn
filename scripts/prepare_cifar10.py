@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+import re
 import tarfile
 from collections import Counter
 from pathlib import Path
@@ -116,6 +117,7 @@ def prepare(
     seed: int,
     split_mode: str = "stratified",
     dirichlet_alpha: float = 0.5,
+    shard_tag: str | None = None,
 ) -> dict[str, Any]:
     train_images, train_labels, test_images, test_labels = load_cifar10(archive_path)
     index_groups = (
@@ -124,6 +126,10 @@ def prepare(
         else _dirichlet_indices(train_labels, seed, dirichlet_alpha)
     )
     shard_root = data_root / "worker_shards"
+    if shard_tag:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", shard_tag):
+            raise ValueError("Shard tag must contain only letters, numbers, underscores, and hyphens")
+        shard_root = shard_root / shard_tag
     shard_root.mkdir(parents=True, exist_ok=True)
     raw_root = data_root / "raw"
     raw_root.mkdir(parents=True, exist_ok=True)
@@ -175,7 +181,11 @@ def prepare(
         "test_file": str(test_path.relative_to(REPO_ROOT)),
         "sample_grid": str((docs_root / "cifar10_sample_grid.png").relative_to(REPO_ROOT)),
     }
-    metadata_path = data_root / "cifar10_metadata.json"
+    metadata_path = (
+        shard_root / "cifar10_metadata.json"
+        if shard_tag
+        else data_root / "cifar10_metadata.json"
+    )
     metadata_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
 
@@ -190,6 +200,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--split", choices=("stratified", "dirichlet"), default="stratified")
     parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--shard-tag", help="Write worker shards to a distinct subdirectory")
     args = parser.parse_args()
     summary = prepare(
         args.archive,
@@ -198,6 +209,7 @@ def main() -> None:
         args.seed,
         args.split,
         args.alpha,
+        args.shard_tag,
     )
     print(json.dumps(summary, indent=2))
 

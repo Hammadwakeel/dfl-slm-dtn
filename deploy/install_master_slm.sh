@@ -22,6 +22,10 @@ for required in \
   "$stage_dir/common/slm_action_schema.json" \
   "$stage_dir/data/cifar10_test.npz" \
   "$stage_dir/data/cifar10_train.npz" \
+  "$stage_dir/topology_opt/__init__.py" \
+  "$stage_dir/topology_opt/reward.py" \
+  "$stage_dir/topology_opt/selector.py" \
+  "$stage_dir/topology_opt/reward_config.json" \
   "$stage_dir/master.env" \
   "$stage_dir/$service_name"; do
   if [[ ! -f "$required" ]]; then
@@ -64,6 +68,7 @@ runuser -u hammad -- /usr/bin/python3 -c 'import tensorflow as tf; assert tf.__v
 
 install -d -o root -g root -m 0755 "$app_root/master"
 install -d -o root -g root -m 0755 "$app_root/common" "$app_root/data"
+install -d -o root -g root -m 0755 "$app_root/topology_opt"
 install -o root -g root -m 0644 "$stage_dir/master/app.py" "$app_root/master/app.py"
 install -o root -g root -m 0644 "$stage_dir/master/__init__.py" "$app_root/master/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/master/wsgi.py" "$app_root/master/wsgi.py"
@@ -73,6 +78,10 @@ install -o root -g root -m 0644 "$stage_dir/master/cifar_evaluator.py" "$app_roo
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/cifar_model.py" "$app_root/common/cifar_model.py"
 install -o root -g root -m 0644 "$stage_dir/common/slm_action_schema.json" "$app_root/common/slm_action_schema.json"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/__init__.py" "$app_root/topology_opt/__init__.py"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/reward.py" "$app_root/topology_opt/reward.py"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/selector.py" "$app_root/topology_opt/selector.py"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/reward_config.json" "$app_root/topology_opt/reward_config.json"
 install -o hammad -g hammad -m 0600 "$stage_dir/data/cifar10_test.npz" "$app_root/data/cifar10_test.npz"
 install -o hammad -g hammad -m 0600 "$stage_dir/data/cifar10_train.npz" "$app_root/data/cifar10_train.npz"
 install -d -o root -g root -m 0755 "$app_root/master/tests"

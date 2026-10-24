@@ -43,7 +43,7 @@ def test_schema_allows_exactly_the_declared_actions() -> None:
         for branch in ACTION_SCHEMA["oneOf"]
     }
     assert names == set(ACTION_NAMES)
-    assert len(names) == 14
+    assert len(names) == 15
 
 
 def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -> None:
@@ -65,6 +65,10 @@ def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -
             "shell": "touch /tmp/pwned",
         },
         {"action": "set_topology", "parameters": {"topology": "execute"}},
+        {
+            "action": "optimize_topology",
+            "parameters": {"rounds": 0, "epochs": 5},
+        },
     ):
         try:
             validator.validate(invalid)
@@ -296,8 +300,16 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
             self.configuration.update(values)
             return dict(self.configuration)
 
-        def start_training(self, *, rounds, epochs):
-            return {"accepted": True, "rounds": rounds, "epochs": epochs}
+        def start_training(self, *, rounds, epochs, dataset_split=None):
+            return {
+                "accepted": True,
+                "rounds": rounds,
+                "epochs": epochs,
+                "dataset_split": dataset_split,
+            }
+
+        def start_optimization(self, **values):
+            return {"accepted": True, **values}
 
         def stop_training(self):
             return {"accepted": True}
@@ -335,6 +347,7 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
         "accepted": True,
         "rounds": 3,
         "epochs": 2,
+        "dataset_split": None,
     }
     stopped = client.post(
         "/command",
@@ -352,10 +365,37 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
     assert client.get("/results", headers=headers).status_code == 200
 
 
-def test_star_topology_is_not_reported_as_available(tmp_path: Path) -> None:
+def test_optimizer_action_passes_fixed_range_parameters_to_real_coordinator(tmp_path: Path) -> None:
+    class FakeCoordinator:
+        def start_optimization(self, **values):
+            return {"accepted": True, **values}
+
+    app = create_app(
+        config(tmp_path),
+        memory_reader=memory,
+        training_coordinator=FakeCoordinator(),
+    )
+    response = app.test_client().post(
+        "/command",
+        json={
+            "action": "optimize_topology",
+            "parameters": {"rounds": 1, "epochs": 1, "seeds": [17], "alphas": [0.3]},
+        },
+        headers={"Authorization": f"Bearer {config(tmp_path).api_token}"},
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]["data"]
+    assert result["rounds"] == 1
+    assert result["epochs"] == 1
+    assert result["seeds"] == [17]
+    assert result["alphas"] == [0.3]
+
+
+def test_supported_topology_is_reported_as_available(tmp_path: Path) -> None:
     class FakeCoordinator:
         def configure(self, **values):
-            raise ValueError("topology must be ring or mesh")
+            return values
 
     app = create_app(
         config(tmp_path),
@@ -369,8 +409,8 @@ def test_star_topology_is_not_reported_as_available(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 200
-    assert response.get_json()["result"]["available"] is False
-    assert "ring or mesh" in response.get_json()["result"]["message"]
+    assert response.get_json()["result"]["available"] is True
+    assert response.get_json()["result"]["data"] == {"topology": "star"}
 
 
 def test_create_app_initializes_coordinator_from_base64_worker_config(

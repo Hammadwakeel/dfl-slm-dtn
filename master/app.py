@@ -27,6 +27,7 @@ ACTION_NAMES = (
     "start_training",
     "stop_training",
     "set_topology",
+    "optimize_topology",
     "set_rounds",
     "set_epochs",
     "enable_nas",
@@ -295,6 +296,7 @@ def _execute_action(
                 "data": training_coordinator.start_training(
                     rounds=parameters["rounds"],
                     epochs=parameters["epochs"],
+                    dataset_split=parameters.get("dataset_split"),
                 ),
             }
         if name == "stop_training":
@@ -315,6 +317,16 @@ def _execute_action(
             except ValueError as error:
                 return {"available": False, "message": str(error)}
             return {"available": True, "data": result}
+        if name == "optimize_topology":
+            return {
+                "available": True,
+                "data": training_coordinator.start_optimization(
+                    rounds=parameters.get("rounds", 10),
+                    epochs=parameters.get("epochs", 5),
+                    seeds=tuple(parameters.get("seeds", (17, 42, 2026))),
+                    alphas=tuple(parameters.get("alphas", (0.3, 0.5))),
+                ),
+            }
         if name == "get_results":
             return {"available": True, "data": training_coordinator.results()}
     return {

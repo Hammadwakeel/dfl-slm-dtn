@@ -12,7 +12,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +46,7 @@ class WorkerConfig:
     data_path: str
     peers: tuple[Peer, ...]
     log_path: str
+    shard_paths: dict[str, str] = field(default_factory=dict)
     bind_host: str = "0.0.0.0"
     peer_timeout_seconds: float = 60.0
 
@@ -55,6 +56,12 @@ class WorkerConfig:
         token = os.environ.get("DFL_API_TOKEN", "")
         peers_encoded = os.environ.get("DFL_PEERS_JSON_B64", "")
         peers_value = json.loads(base64.b64decode(peers_encoded, validate=True)) if peers_encoded else []
+        shards_encoded = os.environ.get("DFL_TRAINING_SHARDS_JSON_B64", "")
+        shard_paths = (
+            json.loads(base64.b64decode(shards_encoded, validate=True))
+            if shards_encoded
+            else {}
+        )
         if node_id not in {"worker1", "worker2", "worker3"}:
             raise ValueError("DFL_NODE_ID must identify worker1, worker2, or worker3")
         if len(token) < 32:
@@ -88,6 +95,7 @@ class WorkerConfig:
                 "DFL_TRAINING_LOG_PATH",
                 "/var/log/dfl-slm-worker-training/events.jsonl",
             ),
+            shard_paths={str(key): str(value) for key, value in shard_paths.items()},
             bind_host=os.environ.get("DFL_BIND_HOST", "0.0.0.0"),
             peer_timeout_seconds=timeout,
         )
@@ -104,6 +112,44 @@ def mesh_neighbours(node_id: str, worker_ids: tuple[str, ...]) -> tuple[str, ...
     if node_id not in worker_ids:
         raise ValueError("Mesh topology requires a configured worker")
     return tuple(peer for peer in worker_ids if peer != node_id)
+
+
+def topology_neighbours(
+    node_id: str,
+    worker_ids: tuple[str, ...],
+    topology: str,
+) -> tuple[str, ...]:
+    if node_id not in worker_ids or len(worker_ids) != 3:
+        raise ValueError("Supported topologies require exactly three configured workers")
+    ordered = tuple(sorted(worker_ids))
+    index = ordered.index(node_id)
+    if topology in {"ring", "directed_ring"}:
+        return (ordered[(index + 1) % len(ordered)],)
+    if topology == "bidirectional_ring":
+        return tuple(sorted({ordered[(index - 1) % 3], ordered[(index + 1) % 3]}))
+    if topology == "mesh":
+        return mesh_neighbours(node_id, ordered)
+    if topology == "chain":
+        return tuple(
+            ordered[peer_index]
+            for peer_index in (index - 1, index + 1)
+            if 0 <= peer_index < len(ordered)
+        )
+    if topology == "star":
+        hub = ordered[0]
+        return tuple(peer for peer in ordered if peer != node_id) if node_id == hub else (hub,)
+    raise ValueError(f"Unsupported topology: {topology}")
+
+
+def topology_senders(
+    node_id: str,
+    worker_ids: tuple[str, ...],
+    topology: str,
+) -> tuple[str, ...]:
+    if topology in {"ring", "directed_ring"}:
+        ordered = tuple(sorted(worker_ids))
+        return (ordered[(ordered.index(node_id) - 1) % len(ordered)],)
+    return topology_neighbours(node_id, worker_ids, topology)
 
 
 def weighted_average_weights(
@@ -191,15 +237,6 @@ def _log_event(event: str, **details: Any) -> None:
 class WorkerTrainer:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
-        with np.load(config.data_path, allow_pickle=False) as shard:
-            self.images = np.asarray(shard["images"], dtype=np.uint8)
-            self.labels = np.asarray(shard["labels"], dtype=np.int64).reshape(-1)
-        if self.images.ndim != 4 or self.images.shape[1:] != (32, 32, 3):
-            raise ValueError("Worker training shard must have shape (N, 32, 32, 3)")
-        if self.images.shape[0] != self.labels.size or self.labels.size == 0:
-            raise ValueError("Worker training shard has mismatched or empty image/label arrays")
-        if self.labels.min() < 0 or self.labels.max() > 9:
-            raise ValueError("Worker training shard contains labels outside CIFAR-10")
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._incoming: dict[tuple[str, int], dict[str, tuple[list[np.ndarray], int, int]]] = {}
@@ -214,6 +251,8 @@ class WorkerTrainer:
         self._run_thread: threading.Thread | None = None
         self._cancel = threading.Event()
         self._peer_map = {peer.node_id: peer for peer in config.peers}
+        self.dataset_split = "stratified"
+        self.images, self.labels = self._load_shard(config.data_path)
         self._rounds = 10
         self._epochs = 5
         self._topology = "ring"
@@ -223,6 +262,7 @@ class WorkerTrainer:
             return {
                 "node_id": self.config.node_id,
                 "sample_count": int(self.labels.size),
+                "dataset_split": self.dataset_split,
                 "active_run_id": self._active_run,
                 "scheduled_run_id": self._scheduled_run,
                 "active_round": self._active_round,
@@ -255,24 +295,76 @@ class WorkerTrainer:
             }
         return {"node_id": self.config.node_id, "runs": selected, "errors": errors}
 
-    def configure(self, rounds: int, epochs: int, topology: str) -> dict[str, Any]:
+    @staticmethod
+    def _load_shard(path: str) -> tuple[np.ndarray, np.ndarray]:
+        with np.load(path, allow_pickle=False) as shard:
+            images = np.asarray(shard["images"], dtype=np.uint8)
+            labels = np.asarray(shard["labels"], dtype=np.int64).reshape(-1)
+        if images.ndim != 4 or images.shape[1:] != (32, 32, 3):
+            raise ValueError("Worker training shard must have shape (N, 32, 32, 3)")
+        if images.shape[0] != labels.size or labels.size == 0:
+            raise ValueError("Worker training shard has mismatched or empty image/label arrays")
+        if labels.min() < 0 or labels.max() > 9:
+            raise ValueError("Worker training shard contains labels outside CIFAR-10")
+        return images, labels
+
+    def configure(
+        self,
+        rounds: int,
+        epochs: int,
+        topology: str,
+        dataset_split: str = "stratified",
+    ) -> dict[str, Any]:
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Rounds must be 1-100 and local epochs 1-50")
-        if topology not in {"ring", "mesh"}:
-            raise ValueError("Topology must be ring or mesh")
+        if topology not in {
+            "ring",
+            "directed_ring",
+            "bidirectional_ring",
+            "mesh",
+            "chain",
+            "star",
+        }:
+            raise ValueError("Unsupported training topology")
+        if dataset_split not in {"stratified", "dirichlet_a03", "dirichlet_a05"}:
+            raise ValueError("Unsupported CIFAR-10 dataset split")
+        shard_path = (
+            self.config.data_path
+            if dataset_split == "stratified"
+            else self.config.shard_paths.get(dataset_split)
+        )
+        if not shard_path:
+            raise ValueError(f"Worker shard for {dataset_split} is not installed")
+        images, labels = self._load_shard(shard_path)
         with self._lock:
             if self._scheduled_run is not None or self._active_run is not None:
                 raise RuntimeError("Cannot change worker configuration while training is active")
+            self.images = images
+            self.labels = labels
+            self.dataset_split = dataset_split
             self._rounds = rounds
             self._epochs = epochs
             self._topology = topology
-        return {"rounds": rounds, "epochs": epochs, "topology": topology}
+        return {
+            "rounds": rounds,
+            "epochs": epochs,
+            "topology": topology,
+            "dataset_split": dataset_split,
+            "sample_count": int(labels.size),
+        }
 
     def start_run(self, run_id: str, seed: int, topology: str) -> dict[str, Any]:
         if not RUN_ID_PATTERN.fullmatch(run_id) or not 0 <= seed <= 2**32 - 1:
             raise ValueError("run_id or seed is invalid")
-        if topology not in {"ring", "mesh"}:
-            raise ValueError("Topology must be ring or mesh")
+        if topology not in {
+            "ring",
+            "directed_ring",
+            "bidirectional_ring",
+            "mesh",
+            "chain",
+            "star",
+        }:
+            raise ValueError("Unsupported training topology")
         with self._lock:
             if self._scheduled_run is not None or self._active_run is not None:
                 raise RuntimeError(f"Training is already active for {self._scheduled_run}")
@@ -375,18 +467,8 @@ class WorkerTrainer:
         if not 0 <= round_index < 100 or not 1 <= epochs <= 50 or seed < 0:
             raise ValueError("Round, epoch, or seed value is out of range")
         worker_ids = tuple(sorted((self.config.node_id, *self._peer_map.keys())))
-        if topology not in {"ring", "mesh"}:
-            raise ValueError("Topology must be ring or mesh")
-        neighbors = (
-            ring_neighbours(self.config.node_id, worker_ids)
-            if topology == "ring"
-            else mesh_neighbours(self.config.node_id, worker_ids)
-        )
-        expected_senders = (
-            (worker_ids[(worker_ids.index(self.config.node_id) - 1) % len(worker_ids)],)
-            if topology == "ring"
-            else neighbors
-        )
+        neighbors = topology_neighbours(self.config.node_id, worker_ids, topology)
+        expected_senders = topology_senders(self.config.node_id, worker_ids, topology)
         with self._lock:
             if self._active_run is not None:
                 raise RuntimeError(f"Training is already active for {self._active_run}")
@@ -500,6 +582,7 @@ class WorkerTrainer:
                 "run_id": run_id,
                 "round": round_index + 1,
                 "topology": topology,
+                "dataset_split": self.dataset_split,
                 "local_epochs": epochs,
                 "sample_count": int(self.labels.size),
                 "training_loss": history_values.get("loss"),
@@ -610,6 +693,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     rounds=payload["rounds"],
                     epochs=payload["epochs"],
                     topology=payload["topology"],
+                    dataset_split=payload.get("dataset_split", "stratified"),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})

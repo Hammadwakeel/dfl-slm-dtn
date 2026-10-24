@@ -1,6 +1,6 @@
 # DFL-SLM Digital Twin Network Project
 
-This repository contains the completed Phase 0–4 DFL-SLM implementation: authenticated Jetson status services, the PC-hosted FastAPI/React coordinator, the master SLM, and real Ring/Mesh CIFAR-10 training across three Jetson workers.
+This repository contains the completed Phase 0–5 DFL-SLM implementation: authenticated Jetson status services, the PC-hosted FastAPI/React coordinator, the master SLM, real CIFAR-10 training across three Jetson workers, and measured topology optimization.
 
 ## Phase 0 status
 
@@ -44,6 +44,16 @@ See [docs/phase3-slm-master.md](./docs/phase3-slm-master.md) for deployment, end
 - A worker-stop failure injection was detected by the coordinator, and the stopped service was restored successfully.
 
 See [docs/phase4-worker-training.md](./docs/phase4-worker-training.md) for dataset inspection, measured smoke/full experiment results, direct peer-log evidence, deployment details, and tests.
+
+## Phase 5 status
+
+- The master and workers support directed Ring, bidirectional Ring, Mesh, chain, and star graphs. Ring remains available as an alias for directed Ring.
+- Deterministic Dirichlet CIFAR-10 shards (α=0.3 and 0.5, seed 2026) are stored separately per worker; only each worker's own shard is deployed.
+- The authenticated SLM `optimize_topology` action runs measured candidate sweeps. A configurable reward-based selector is compared with seeded-random and best-observed-accuracy baselines; no GNN or APG is claimed.
+- The Topology page shows the peer graph, active topology, candidate reward breakdown, and selector/baseline comparison. Direct worker-to-worker exchanges were verified in packet captures.
+- The full 30-run matrix (five topologies × two Dirichlet splits × three seeds; 10 rounds × 5 epochs) completed in about 58.6 minutes. The reward selector chose bidirectional Ring at α=0.5; the best mean held-out accuracy was 47.283%.
+
+See [docs/phase5-topology-optimization.md](./docs/phase5-topology-optimization.md) for packet counts, reward configuration, pilot timing, full-matrix metrics, and baseline comparison.
 
 ## Project layout
 

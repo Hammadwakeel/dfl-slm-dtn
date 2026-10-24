@@ -4,6 +4,14 @@ export type DeviceEvent =
   | { type: "device_snapshot"; devices: Device[] }
   | { type: "device_status"; device: Device };
 
+export type TrainingTopology =
+  | "ring"
+  | "directed_ring"
+  | "bidirectional_ring"
+  | "mesh"
+  | "chain"
+  | "star";
+
 export interface SlmChatResponse {
   reply: string;
   model_reply: string;
@@ -31,7 +39,8 @@ export interface WorkerRoundMetrics {
   node_id: string;
   run_id: string;
   round: number;
-  topology: "ring" | "mesh" | "centralized";
+  topology: TrainingTopology | "centralized";
+  dataset_split?: string;
   local_epochs?: number;
   sample_count?: number;
   training_loss?: number;
@@ -58,7 +67,7 @@ export interface WorkerRoundMetrics {
 
 export interface ExperimentRound {
   round: number;
-  topology: "ring" | "mesh" | "centralized";
+  topology: TrainingTopology | "centralized";
   completed_at?: number;
   workers: Record<string, WorkerRoundMetrics>;
 }
@@ -66,15 +75,27 @@ export interface ExperimentRound {
 export interface ExperimentRun {
   run_id: string;
   seed: number;
-  topology: "ring" | "mesh" | "centralized";
+  topology: TrainingTopology | "centralized";
+  dataset_split?: string;
+  alpha?: number;
   status: "running" | "completed" | "failed";
   rounds: ExperimentRound[];
 }
 
 export interface ExperimentGroup {
   group_id: string;
-  kind: "decentralized" | "centralized_baseline";
-  topology: "ring" | "mesh" | "centralized";
+  kind: "decentralized" | "centralized_baseline" | "topology_optimization";
+  topology: TrainingTopology | "centralized" | "candidate_sweep";
+  dataset_split?: string;
+  alphas?: number[];
+  candidates?: TopologyCandidate[];
+  selection?: {
+    method: string;
+    selected_candidate: { topology: TrainingTopology; alpha: number; mean_reward: number };
+    baselines: Record<string, { topology: TrainingTopology; alpha: number; mean_reward?: number; mean_final_accuracy?: number }>;
+    candidate_count: number;
+  };
+  selected_configuration?: { topology: TrainingTopology; alpha: number; dataset_split: string };
   rounds: number;
   epochs: number;
   seeds: number[];
@@ -85,13 +106,24 @@ export interface ExperimentGroup {
   runs: ExperimentRun[];
 }
 
+export interface TopologyCandidate {
+  topology: TrainingTopology;
+  alpha: number;
+  completed_runs: number;
+  mean_reward: number;
+  mean_final_accuracy: number;
+  mean_components: Record<string, number>;
+}
+
 export interface ExperimentResults {
-  configuration: { rounds: number; epochs: number; topology: "ring" | "mesh" };
-  active_group_id: string | null;
-  topologies: {
-    ring: string[];
-    mesh: string[][];
+  configuration: {
+    rounds: number;
+    epochs: number;
+    topology: TrainingTopology;
+    dataset_split: string;
   };
+  active_group_id: string | null;
+  topologies: Record<string, string[] | string[][]>;
   groups: ExperimentGroup[];
 }
 

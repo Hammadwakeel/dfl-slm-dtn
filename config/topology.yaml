@@ -1,23 +1,23 @@
 topology:
-  default: ring
+  default: directed_ring
   options:
-    - ring
+    - directed_ring
+    - bidirectional_ring
     - mesh
-    - reward_optimized
+    - chain
+    - star
 
-ring:
-  peers:
-    - worker1
-    - worker2
-    - worker3
+dataset_splits:
+  - name: dirichlet_a03
+    alpha: 0.3
+    seed: 2026
+  - name: dirichlet_a05
+    alpha: 0.5
+    seed: 2026
 
-mesh:
-  peers:
-    - worker1
-    - worker2
-    - worker3
-
-reward_optimized:
-  strategy: gnn_reward
-  mutation_limit: 10
-  convergence_threshold: 0.01
+optimizer:
+  strategy: weighted_measured_reward
+  reward_config: topology_opt/reward_config.json
+  baselines:
+    - random_seeded
+    - best_observed_accuracy

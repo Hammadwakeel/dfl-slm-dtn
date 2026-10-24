@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { checkToken, getDevices, getExperimentResults, openDeviceEvents } from "./api/client";
-import type { DeviceEvent, ExperimentGroup, ExperimentResults } from "./api/client";
+import { sendSlmCommand } from "./api/client";
+import type { DeviceEvent, ExperimentGroup, ExperimentResults, TrainingTopology } from "./api/client";
 import type { Device } from "./types";
 import DeviceCard from "./components/DeviceCard";
 import AssistantPage from "./pages/AssistantPage";
@@ -173,7 +174,7 @@ export default function App() {
             onRetry={() => void refresh(token)}
           />
         )}
-        {page === "topology" && <Topology devices={devices} experiments={experimentResults} />}
+        {page === "topology" && <Topology devices={devices} experiments={experimentResults} token={token} />}
         {page === "experiments" && (
           <ExperimentsPage
             token={token}
@@ -314,7 +315,15 @@ function Summary({ label, value, detail, mark }: { label: string; value: string 
   );
 }
 
-function Topology({ devices, experiments }: { devices: Device[]; experiments: ExperimentResults | null }) {
+function Topology({
+  devices,
+  experiments,
+  token,
+}: {
+  devices: Device[];
+  experiments: ExperimentResults | null;
+  token: string;
+}) {
   const master = devices.find((device) => device.role === "master");
   const workers = devices.filter((device) => device.role === "worker");
   return (
@@ -353,32 +362,162 @@ function Topology({ devices, experiments }: { devices: Device[]; experiments: Ex
           </div>
         </div>
       </div>
-      <TrainingTopologyPanel experiments={experiments} />
+      <TrainingTopologyPanel experiments={experiments} token={token} />
     </section>
   );
 }
 
-function TrainingTopologyPanel({ experiments }: { experiments: ExperimentResults | null }) {
-  const latestGroup = [...(experiments?.groups ?? [])].reverse().find((group) => group.kind === "decentralized");
-  const topology = latestGroup?.topology ?? experiments?.configuration.topology ?? "ring";
-  const links = topology === "ring"
-    ? ["dfl-worker1 → dfl-worker2", "dfl-worker2 → dfl-worker3", "dfl-worker3 → dfl-worker1"]
-    : ["dfl-worker1 ↔ dfl-worker2", "dfl-worker1 ↔ dfl-worker3", "dfl-worker2 ↔ dfl-worker3"];
+export function TrainingTopologyPanel({
+  experiments,
+  token,
+}: {
+  experiments: ExperimentResults | null;
+  token: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const topology = experiments?.configuration.topology ?? "directed_ring";
+  const latestGroup = [...(experiments?.groups ?? [])]
+    .reverse()
+    .find((group) => group.kind === "topology_optimization");
+  const links = topologyLinks(topology);
+
+  async function optimize() {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await sendSlmCommand(token, {
+        action: "optimize_topology",
+        parameters: { rounds: 10, epochs: 5, seeds: [17, 42, 2026], alphas: [0.3, 0.5] },
+      });
+      if (!response.result.available) throw new Error(response.result.message ?? "Optimizer unavailable.");
+      const groupId = response.result.data?.group_id;
+      setMessage(groupId ? `Real-device topology sweep ${String(groupId)} started.` : "Topology sweep started.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not start topology optimization.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="training-map panel-card">
       <div className="section-heading">
         <div>
-          <h2>Training peer topology</h2>
-          <p>Workers exchange model weights directly; the PC coordinates but is not in the data path.</p>
+          <h2>Training topology optimizer</h2>
+          <p>Candidate runs train on real workers using Dirichlet alpha 0.3/0.5 shards.</p>
         </div>
-        <span className="run-status completed">{topology}</span>
+        <div className="topology-actions">
+          <span className="run-status completed">Active: {topology}</span>
+          <button className="primary-button" disabled={busy || Boolean(experiments?.active_group_id)} onClick={() => void optimize()} type="button">
+            {busy ? "Starting…" : "Run 5-topology sweep"}
+          </button>
+        </div>
       </div>
+      <p className="active-topology-note">
+        Active configuration: <strong>{topology}</strong> · {experiments?.configuration.dataset_split ?? "stratified"}
+      </p>
       <div className="training-map__nodes">
         {["dfl-worker1", "dfl-worker2", "dfl-worker3"].map((worker) => <span key={worker}>{worker}</span>)}
       </div>
+      <svg
+        className="training-graph"
+        viewBox="0 0 600 210"
+        role="img"
+        aria-label={`${topology} worker communication graph`}
+      >
+        <defs>
+          <marker id="topology-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" />
+          </marker>
+        </defs>
+        {topologyEdges(topology).map(([from, to]) => {
+          const positions = [{ x: 300, y: 45 }, { x: 145, y: 155 }, { x: 455, y: 155 }];
+          const start = positions[from];
+          const end = positions[to];
+          return (
+            <line
+              key={`${from}-${to}`}
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              markerEnd={topology === "directed_ring" || topology === "ring" ? "url(#topology-arrow)" : undefined}
+            />
+          );
+        })}
+        {[{ x: 300, y: 45 }, { x: 145, y: 155 }, { x: 455, y: 155 }].map((point, index) => (
+          <g key={index}>
+            <circle cx={point.x} cy={point.y} r="23" />
+            <text x={point.x} y={point.y + 4}>{`W${index + 1}`}</text>
+          </g>
+        ))}
+      </svg>
       <div className="training-map__links">{links.map((link) => <span key={link}>{link}</span>)}</div>
+      {message && <div className="success-note" role="status">{message}</div>}
+      {error && <div className="alert inline-alert" role="alert">{error}</div>}
+      {latestGroup?.selection && (
+        <div className="optimizer-selection">
+          <strong>Measured selector: {latestGroup.selection.method}</strong>
+          <span>
+            Selected {latestGroup.selection.selected_candidate.topology} at alpha {latestGroup.selection.selected_candidate.alpha}
+            {" "}· reward {latestGroup.selection.selected_candidate.mean_reward.toFixed(4)}
+          </span>
+          <span>Random baseline: {latestGroup.selection.baselines.random_seeded.topology} · reward {latestGroup.selection.baselines.random_seeded.mean_reward?.toFixed(4) ?? "—"}</span>
+          <span>Best-observed baseline: {latestGroup.selection.baselines.best_observed.topology} · accuracy {formatAccuracy(latestGroup.selection.baselines.best_observed.mean_final_accuracy)}</span>
+        </div>
+      )}
+      {latestGroup?.candidates?.length ? (
+        <div className="table-scroll">
+          <table className="metrics-table topology-reward-table">
+            <thead>
+              <tr><th>Topology</th><th>Alpha</th><th>Runs</th><th>Reward</th><th>Final accuracy</th><th>Gain</th><th>Convergence</th><th>Communication</th><th>Runtime</th></tr>
+            </thead>
+            <tbody>
+              {latestGroup.candidates.map((candidate) => (
+                <tr key={`${candidate.topology}-${candidate.alpha}`}>
+                  <td>{candidate.topology}</td>
+                  <td>{candidate.alpha}</td>
+                  <td>{candidate.completed_runs}</td>
+                  <td>{candidate.mean_reward.toFixed(4)}</td>
+                  <td>{formatAccuracy(candidate.mean_final_accuracy)}</td>
+                  <td>{candidate.mean_components.accuracy_gain?.toFixed(3) ?? "—"}</td>
+                  <td>{candidate.mean_components.convergence_speed?.toFixed(3) ?? "—"}</td>
+                  <td>{candidate.mean_components.communication_efficiency?.toFixed(3) ?? "—"}</td>
+                  <td>{candidate.mean_components.runtime_efficiency?.toFixed(3) ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="active-topology-note">No measured topology-optimization results yet.</p>
+      )}
+      {latestGroup && <small className="active-topology-note">Latest sweep: {latestGroup.group_id} · {latestGroup.status} · {latestGroup.rounds} rounds × {latestGroup.epochs} epochs · seeds {latestGroup.seeds.join(", ")}</small>}
     </section>
   );
+}
+
+function topologyLinks(topology: TrainingTopology): string[] {
+  if (topology === "star") return ["dfl-worker1 ↔ dfl-worker2", "dfl-worker1 ↔ dfl-worker3"];
+  if (topology === "chain") return ["dfl-worker1 ↔ dfl-worker2", "dfl-worker2 ↔ dfl-worker3"];
+  if (topology === "directed_ring" || topology === "ring") {
+    return ["dfl-worker1 → dfl-worker2", "dfl-worker2 → dfl-worker3", "dfl-worker3 → dfl-worker1"];
+  }
+  return ["dfl-worker1 ↔ dfl-worker2", "dfl-worker2 ↔ dfl-worker3", "dfl-worker3 ↔ dfl-worker1"];
+}
+
+function topologyEdges(topology: TrainingTopology): Array<[number, number]> {
+  if (topology === "star") return [[0, 1], [0, 2]];
+  if (topology === "chain") return [[0, 1], [1, 2]];
+  if (topology === "directed_ring" || topology === "ring") return [[0, 1], [1, 2], [2, 0]];
+  return [[0, 1], [1, 2], [2, 0]];
+}
+
+function formatAccuracy(value?: number): string {
+  return value === undefined ? "—" : `${(value * 100).toFixed(2)}%`;
 }
 
 function latestExperiment(groups: ExperimentGroup[]) {

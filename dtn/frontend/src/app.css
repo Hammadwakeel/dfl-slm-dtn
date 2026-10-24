@@ -233,8 +233,21 @@ button { cursor: pointer; }
 .training-map .section-heading { margin-bottom: 15px; }
 .training-map__nodes, .training-map__links { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; }
 .training-map__nodes span { padding: 8px 11px; border: 1px solid #2d4d65; border-radius: 7px; color: #a6d2f4; background: #15283b; font-size: 10px; }
+.training-graph { display: block; width: min(100%, 580px); height: auto; margin: 4px auto 0; overflow: visible; }
+.training-graph line { stroke: #45d7aa; stroke-width: 3; }
+.training-graph marker path { fill: #45d7aa; }
+.training-graph circle { fill: #16283a; stroke: #59dbb0; stroke-width: 3; }
+.training-graph text { fill: #c2f5e2; font: 600 12px Consolas, monospace; text-anchor: middle; }
 .training-map__links { margin-top: 13px; }
 .training-map__links span { padding: 6px 8px; border-radius: 6px; color: #8be1ba; background: #153126; font: 10px Consolas, monospace; }
+.topology-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.topology-actions .primary-button { margin: 0; padding: 0 12px; min-height: 34px; }
+.topology-actions .primary-button:disabled { cursor: not-allowed; opacity: .5; }
+.active-topology-note { margin: 8px 0; color: #8999ae; font-size: 10px; }
+.active-topology-note strong { color: #a9d8bf; }
+.optimizer-selection { display: grid; gap: 7px; margin: 17px 0; padding: 12px; border: 1px solid #2d4a42; border-radius: 8px; background: #101f20; color: #94a8b0; font-size: 10px; }
+.optimizer-selection strong { color: #8ee3b9; font-size: 11px; }
+.topology-reward-table { min-width: 850px; }
 .experiments-page { display: grid; gap: 18px; }
 .experiments-page .page-heading { margin-bottom: 0; }
 .experiment-controls { display: grid; gap: 16px; padding: 18px; }

@@ -15,6 +15,8 @@ from worker.training_service import (
     mesh_neighbours,
     ring_neighbours,
     serialize_weights,
+    topology_neighbours,
+    topology_senders,
     weighted_average_weights,
 )
 
@@ -25,6 +27,21 @@ def test_ring_and_mesh_neighbour_sets_are_distinct():
     assert ring_neighbours("worker1", worker_ids) == ("worker2",)
     assert ring_neighbours("worker3", worker_ids) == ("worker1",)
     assert mesh_neighbours("worker1", worker_ids) == ("worker2", "worker3")
+
+
+def test_all_candidate_topologies_have_expected_directed_adjacency():
+    worker_ids = ("worker1", "worker2", "worker3")
+
+    assert topology_neighbours("worker1", worker_ids, "directed_ring") == ("worker2",)
+    assert topology_senders("worker2", worker_ids, "directed_ring") == ("worker1",)
+    assert topology_neighbours("worker1", worker_ids, "bidirectional_ring") == (
+        "worker2",
+        "worker3",
+    )
+    assert topology_neighbours("worker2", worker_ids, "mesh") == ("worker1", "worker3")
+    assert topology_neighbours("worker2", worker_ids, "chain") == ("worker1", "worker3")
+    assert topology_neighbours("worker1", worker_ids, "star") == ("worker2", "worker3")
+    assert topology_neighbours("worker3", worker_ids, "star") == ("worker1",)
 
 
 def test_weighted_average_uses_sample_counts():

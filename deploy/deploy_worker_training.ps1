@@ -48,8 +48,12 @@ $tempEnvs = [System.Collections.Generic.List[string]]::new()
 try {
     foreach ($node in $selected) {
         $shardPath = Join-Path $repoRoot "data\worker_shards\$($node.Id).npz"
-        if (-not (Test-Path -LiteralPath $shardPath -PathType Leaf)) {
-            throw "Training shard is missing: $shardPath"
+        $alpha03Path = Join-Path $repoRoot "data\worker_shards\dirichlet_a03\$($node.Id).npz"
+        $alpha05Path = Join-Path $repoRoot "data\worker_shards\dirichlet_a05\$($node.Id).npz"
+        foreach ($requiredShard in @($shardPath, $alpha03Path, $alpha05Path)) {
+            if (-not (Test-Path -LiteralPath $requiredShard -PathType Leaf)) {
+                throw "Training shard is missing: $requiredShard"
+            }
         }
         $peerEntries = @(
             foreach ($peer in $nodes) {
@@ -64,6 +68,13 @@ try {
         )
         $peerJson = ConvertTo-Json -InputObject $peerEntries -Compress
         $peerJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($peerJson))
+        $shardPaths = @{
+            dirichlet_a03 = '/opt/dfl-slm-dtn/worker/data/shards/dirichlet_a03.npz'
+            dirichlet_a05 = '/opt/dfl-slm-dtn/worker/data/shards/dirichlet_a05.npz'
+        }
+        $shardPathsBase64 = [Convert]::ToBase64String(
+            [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $shardPaths -Compress))
+        )
         $workerEnv = Join-Path $tempRoot "$($node.Id).env"
         $tempEnvs.Add($workerEnv)
         $lines = @(
@@ -72,6 +83,7 @@ try {
             'DFL_TRAINING_PORT=5004',
             'DFL_BIND_HOST=0.0.0.0',
             'DFL_TRAINING_DATA_PATH=/opt/dfl-slm-dtn/worker/data/train_shard.npz',
+            "DFL_TRAINING_SHARDS_JSON_B64=$shardPathsBase64",
             "DFL_TRAINING_LOG_PATH=/var/log/dfl-slm-worker-training/$($node.Id).jsonl",
             "DFL_PEERS_JSON_B64=$peerJsonBase64",
             'DFL_PEER_TIMEOUT_SECONDS=60'
@@ -81,7 +93,7 @@ try {
         $stageName = ".dfl-worker-training-stage-$($node.Id)"
         $remote = "hammad@$($node.Ip)"
         & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
-            "mkdir -p '$stageName/worker' '$stageName/common' && chmod 700 '$stageName' '$stageName/worker' '$stageName/common'"
+            "mkdir -p '$stageName/worker' '$stageName/common' '$stageName/shards' && chmod 700 '$stageName' '$stageName/worker' '$stageName/common' '$stageName/shards'"
         if ($LASTEXITCODE -ne 0) {
             throw "Could not create protected staging directory on $($node.Ip)."
         }
@@ -114,6 +126,16 @@ try {
             "$($remote):$stageName/train_shard.npz"
         if ($LASTEXITCODE -ne 0) {
             throw "Could not copy the $($node.Id) training shard."
+        }
+        & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $alpha03Path `
+            "$($remote):$stageName/shards/dirichlet_a03.npz"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not copy the alpha 0.3 shard for $($node.Id)."
+        }
+        & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $alpha05Path `
+            "$($remote):$stageName/shards/dirichlet_a05.npz"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not copy the alpha 0.5 shard for $($node.Id)."
         }
         & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $workerEnv `
             "$($remote):$stageName/worker-training.env"

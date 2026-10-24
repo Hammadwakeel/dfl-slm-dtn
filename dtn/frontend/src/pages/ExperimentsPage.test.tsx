@@ -15,7 +15,7 @@ vi.mock("../api/client", () => ({
 }));
 
 const results: ExperimentResults = {
-  configuration: { rounds: 10, epochs: 5, topology: "ring" },
+  configuration: { rounds: 10, epochs: 5, topology: "ring", dataset_split: "stratified" },
   active_group_id: null,
   topologies: {
     ring: ["worker1", "worker2", "worker3"],
@@ -91,7 +91,7 @@ describe("Experiments page", () => {
     });
     expect(sendSlmCommand).toHaveBeenNthCalledWith(4, "test-token", {
       action: "start_training",
-      parameters: { rounds: 10, epochs: 5 },
+      parameters: { rounds: 10, epochs: 5, dataset_split: "dirichlet_a03" },
     });
     expect(startCentralizedBaseline).not.toHaveBeenCalled();
   });

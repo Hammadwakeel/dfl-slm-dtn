@@ -1,0 +1,68 @@
+from topology_opt.reward import RewardConfig, calculate_run_reward
+from topology_opt.selector import select_candidate
+
+
+def test_reward_combines_accuracy_convergence_communication_and_runtime():
+    config = RewardConfig(
+        weights={
+            "accuracy_gain": 0.5,
+            "convergence_speed": 0.2,
+            "communication_efficiency": 0.15,
+            "runtime_efficiency": 0.15,
+        },
+        target_accuracy=0.5,
+        accuracy_gain_scale=0.25,
+        max_bytes_per_worker_round=1000,
+        max_exchange_seconds_per_worker_round=1,
+        max_runtime_seconds_per_round=10,
+    )
+    rounds = [
+        {
+            "workers": {
+                f"worker{worker}": {
+                    "accuracy": accuracy,
+                    "bytes_sent": 100,
+                    "exchange_seconds": 0.1,
+                    "round_seconds": 2,
+                }
+                for worker in range(1, 4)
+            }
+        }
+        for accuracy in (0.3, 0.5, 0.7)
+    ]
+
+    result = calculate_run_reward(rounds, config)
+
+    assert result["components"]["accuracy_gain"] == 1
+    assert result["components"]["convergence_speed"] == round(2 / 3, 6)
+    assert result["metrics"]["convergence_round"] == 2
+    assert result["metrics"]["bytes_sent"] == 900
+    assert result["metrics"]["runtime_seconds"] == 6
+    assert 0 <= result["reward"] <= 1
+
+
+def test_selector_reports_reward_choice_and_seeded_baselines():
+    candidates = [
+        {
+            "topology": "chain",
+            "alpha": 0.3,
+            "completed_runs": 3,
+            "mean_reward": 0.8,
+            "mean_final_accuracy": 0.7,
+        },
+        {
+            "topology": "star",
+            "alpha": 0.5,
+            "completed_runs": 3,
+            "mean_reward": 0.7,
+            "mean_final_accuracy": 0.8,
+        },
+    ]
+
+    selection = select_candidate(candidates, seed=7)
+
+    assert selection["selected_candidate"]["topology"] == "chain"
+    assert selection["baselines"]["best_observed"]["topology"] == "star"
+    assert selection["baselines"]["random_seeded"] == select_candidate(candidates, seed=7)[
+        "baselines"
+    ]["random_seeded"]

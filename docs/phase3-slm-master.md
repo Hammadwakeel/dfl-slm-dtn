@@ -96,6 +96,35 @@ Warm inference latency averaged **1,696 ms** (range **1,336–2,081 ms**) across
 
 Verification completed: master API tests **11 passed**; coordinator backend tests **16 passed**; frontend tests **5 passed**; TypeScript check and Vite production build succeeded. Authenticated coordinator `/api/slm/status` and `/api/slm/logs` returned HTTP 200; unauthenticated requests to all four master endpoints returned HTTP 401. The live status route confirmed `dfl-master` and Ollama model availability. The status agent and SLM services remain separate on ports **5002** and **5003**, respectively.
 
+## Accuracy check rerun (2026-10-24)
+
+The same 20 prompts were sent again through the live coordinator. Intent accuracy means the returned action matches the action appropriate to the prompt. Parameter accuracy requires the prompt's specified values to match; an omitted optional value in prompt 5 is unconstrained (the returned limit must only be schema-valid). This distinguishes semantic correctness from JSON Schema validity.
+
+| # | Prompt | Expected action and parameters | SLM returned action and parameters | Intent | Parameters |
+|---:|---|---|---|:---:|:---:|
+| 1 | Report live status of the master Jetson. | `get_status {}` | `get_status {}` | Pass | Pass |
+| 2 | Check whether dfl-master is online and report its CPU temperature. | `get_status {}` | `get_status {}` | Pass | Pass |
+| 3 | Show the current health readings from the master device. | `get_status {}` | `get_status {}` | Pass | Pass |
+| 4 | Fetch the latest status metrics for dfl-master. | `get_status {}` | `get_status {}` | Pass | Pass |
+| 5 | List the most recent assistant service logs. | `get_logs {limit: unspecified}` | `get_logs {limit: 100}` | Pass | Pass |
+| 6 | Show me the last five SLM API log entries. | `get_logs {limit: 5}` | `get_results {}` | Fail | Fail |
+| 7 | Read 3 recent events from your logs. | `get_logs {limit: 3}` | `get_logs {limit: 10}` | Pass | Fail |
+| 8 | Upload dataset named indoor_co2. | `upload_dataset {dataset_name: indoor_co2}` | `upload_dataset {dataset_name: indoor_co2}` | Pass | Pass |
+| 9 | Preprocess indoor_co2 with standard normalization. | `preprocess_dataset {dataset_name: indoor_co2, normalization: standard}` | `preprocess_dataset {dataset_name: indoor_co2, normalization: standard}` | Pass | Pass |
+| 10 | Create an initial model called co2_baseline. | `create_initial_model {model_name: co2_baseline}` | `get_results {}` | Fail | Fail |
+| 11 | Start training using 4 rounds and 2 epochs. | `start_training {rounds: 4, epochs: 2}` | `start_training {rounds: 4, epochs: 2}` | Pass | Pass |
+| 12 | Stop the currently running distributed training job. | `stop_training {}` | `stop_training {}` | Pass | Pass |
+| 13 | Set cluster topology to ring. | `set_topology {topology: ring}` | `set_topology {topology: ring}` | Pass | Pass |
+| 14 | Change the training plan to 8 rounds. | `set_rounds {rounds: 8}` | `set_rounds {rounds: 8}` | Pass | Pass |
+| 15 | Use 3 local epochs per round. | `set_epochs {epochs: 3}` | `set_rounds {rounds: 3}` | Fail | Fail |
+| 16 | Enable neural architecture search. | `enable_nas {enabled: true}` | `enable_nas {enabled: true}` | Pass | Pass |
+| 17 | Check the latest training results. | `get_results {}` | `get_results {}` | Pass | Pass |
+| 18 | Compare runs run_001 and run_002. | `compare_runs {run_ids: [run_001, run_002]}` | `compare_runs {run_ids: [run_001, run_002]}` | Pass | Pass |
+| 19 | Based on the current cluster setup, suggest the next action. | `suggest_next_action {}` | `get_status {}` | Fail | Fail |
+| 20 | Review dfl-master status once more and tell me if the service is up. | `get_status {}` | `get_status {}` | Pass | Pass |
+
+**Intent accuracy: 16/20 (80%). Parameter accuracy: 15/20 (75%)** over all prompts; among the 16 intent-correct prompts, parameter accuracy was 15/16 (93.8%). Schema validity remained 20/20 (100%), which does not imply semantic accuracy. In particular, prompt 15 confused epochs with rounds; prompts 6, 10, and 19 selected the wrong action. Prompt 7 selected the right action but returned the wrong requested limit. The replies also occasionally contained misleading status or success claims even when the action indicated unavailability; callers must treat the structured action and result as authoritative, not the free-text reply.
+
 ## Security and operations
 
 Both the SLM API and coordinator proxy use bearer credentials on the trusted lab LAN over HTTP, not TLS. Keep these ports on the protected network and do not expose them to the public Internet. The Ollama API is configured at loopback on the master and is not exposed to the PC or browser. Use `sudo systemctl status dfl-slm-master.service`, `sudo journalctl -u dfl-slm-master.service`, and `sudo systemctl status dfl-slm-status.service` for operational checks.

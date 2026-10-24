@@ -174,6 +174,7 @@ try {
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'common\__init__.py') `
         (Join-Path $repoRoot 'common\cifar_model.py') `
+        (Join-Path $repoRoot 'common\nas.py') `
         "${remote}:$stageName/common/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the shared CIFAR-10 model on the master'

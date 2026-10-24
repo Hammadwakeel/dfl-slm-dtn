@@ -25,6 +25,8 @@ import numpy as np
 
 from common.auth import is_authorized
 from common.cifar_model import build_cifar10_model, compile_cifar10_model, model_size_bytes
+from common.nas import FIXED_ARCHITECTURE, architecture_spec
+from worker.nas_search import MAX_SEARCH_SECONDS, search_cifar10_architectures_isolated
 
 LOGGER = logging.getLogger("dfl_slm.worker_training")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -193,7 +195,7 @@ def deserialize_weights(payload: bytes) -> list[np.ndarray]:
         raise ValueError("Model weight payload has an invalid size")
     with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
         keys = sorted(archive.files, key=lambda key: int(key.removeprefix("weight_")))
-        if len(keys) != 4 or keys != [f"weight_{index}" for index in range(4)]:
+        if not keys or keys != [f"weight_{index}" for index in range(len(keys))]:
             raise ValueError("Model weight payload has an unexpected structure")
         weights = [np.asarray(archive[key]) for key in keys]
     if any(array.dtype.kind not in "fiu" or array.nbytes > 4 * 1024 * 1024 for array in weights):
@@ -256,6 +258,7 @@ class WorkerTrainer:
         self._rounds = 10
         self._epochs = 5
         self._topology = "ring"
+        self._architecture = architecture_spec(FIXED_ARCHITECTURE)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -270,6 +273,7 @@ class WorkerTrainer:
                     "rounds": self._rounds,
                     "epochs": self._epochs,
                     "topology": self._topology,
+                    "architecture": self._architecture,
                 },
                 "last_error": self._run_errors.get(self._scheduled_run or self._active_run or ""),
                 "runs": {
@@ -314,6 +318,7 @@ class WorkerTrainer:
         epochs: int,
         topology: str,
         dataset_split: str = "stratified",
+        architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
     ) -> dict[str, Any]:
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Rounds must be 1-100 and local epochs 1-50")
@@ -328,6 +333,7 @@ class WorkerTrainer:
             raise ValueError("Unsupported training topology")
         if dataset_split not in {"stratified", "dirichlet_a03", "dirichlet_a05"}:
             raise ValueError("Unsupported CIFAR-10 dataset split")
+        selected_architecture = architecture_spec(architecture)
         shard_path = (
             self.config.data_path
             if dataset_split == "stratified"
@@ -345,12 +351,14 @@ class WorkerTrainer:
             self._rounds = rounds
             self._epochs = epochs
             self._topology = topology
+            self._architecture = selected_architecture
         return {
             "rounds": rounds,
             "epochs": epochs,
             "topology": topology,
             "dataset_split": dataset_split,
             "sample_count": int(labels.size),
+            "architecture": selected_architecture,
         }
 
     def start_run(self, run_id: str, seed: int, topology: str) -> dict[str, Any]:
@@ -476,7 +484,7 @@ class WorkerTrainer:
             if round_index != current_round + 1:
                 raise ValueError(f"Expected round {current_round + 1}, received {round_index}")
             if run_id not in self._models:
-                model = build_cifar10_model(seed)
+                model = build_cifar10_model(seed, self._architecture)
                 compile_cifar10_model(model)
                 self._models[run_id] = model
                 self._results[run_id] = []
@@ -582,6 +590,7 @@ class WorkerTrainer:
                 "run_id": run_id,
                 "round": round_index + 1,
                 "topology": topology,
+                "architecture": self._architecture,
                 "dataset_split": self.dataset_split,
                 "local_epochs": epochs,
                 "sample_count": int(self.labels.size),
@@ -677,6 +686,8 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 return
             if parsed.path == "/v1/config":
                 self._configure()
+            elif parsed.path == "/v1/nas/search":
+                self._nas_search()
             elif parsed.path == "/v1/start":
                 self._start_run()
             elif parsed.path == "/v1/train-round":
@@ -694,10 +705,33 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     epochs=payload["epochs"],
                     topology=payload["topology"],
                     dataset_split=payload.get("dataset_split", "stratified"),
+                    architecture=payload.get("architecture", FIXED_ARCHITECTURE),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            else:
+                self._send_json(HTTPStatus.OK, result)
+
+        def _nas_search(self) -> None:
+            try:
+                payload = self._read_json()
+                if trainer.dataset_split != "stratified":
+                    raise ValueError("NAS search requires the stratified local worker shard")
+                with trainer._lock:
+                    if trainer._active_run is not None or trainer._scheduled_run is not None:
+                        raise RuntimeError("NAS search cannot run while worker training is active")
+                result = search_cifar10_architectures_isolated(
+                    trainer.config.data_path,
+                    seed=payload.get("seed", 2026),
+                    time_limit_seconds=payload.get("time_limit_seconds", MAX_SEARCH_SECONDS),
+                    node_id=config.node_id,
+                    logger=_log_event,
+                )
+            except RuntimeError as error:
+                self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+            except (KeyError, TypeError, ValueError, TimeoutError, MemoryError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             else:
                 self._send_json(HTTPStatus.OK, result)

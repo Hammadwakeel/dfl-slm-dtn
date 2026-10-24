@@ -20,13 +20,14 @@ from common.cifar_model import (
     classification_metrics,
     compile_cifar10_model,
 )
+from common.nas import FIXED_ARCHITECTURE
 
 
 def _load_weights(value: str) -> list[np.ndarray]:
     payload = base64.b64decode(value, validate=True)
     with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
         keys = sorted(archive.files, key=lambda key: int(key.removeprefix("weight_")))
-        if keys != [f"weight_{index}" for index in range(4)]:
+        if not keys or keys != [f"weight_{index}" for index in range(len(keys))]:
             raise ValueError("Model weights have an unexpected structure")
         return [np.asarray(archive[key]) for key in keys]
 
@@ -42,13 +43,17 @@ def evaluate(test_path: Path, train_path: Path) -> None:
         train_labels = np.asarray(dataset["labels"], dtype=np.int64)
     if train_images.shape != (50_000, 32, 32, 3) or train_labels.shape != (50_000,):
         raise ValueError("Centralized baseline data must contain all 50,000 training images")
-    model = build_cifar10_model(seed=0)
+    model = build_cifar10_model(seed=0, architecture=FIXED_ARCHITECTURE)
     print(json.dumps({"ready": True, "test_samples": int(labels.size)}), flush=True)
     for line in sys.stdin:
         try:
             request = json.loads(line)
             if request.get("type") == "baseline":
-                baseline_model = build_cifar10_model(seed=request["seed"])
+                architecture = request.get("architecture", FIXED_ARCHITECTURE)
+                baseline_model = build_cifar10_model(
+                    seed=request["seed"],
+                    architecture=architecture,
+                )
                 compile_cifar10_model(baseline_model)
                 rows = []
                 for round_index in range(request["rounds"]):
@@ -83,6 +88,8 @@ def evaluate(test_path: Path, train_path: Path) -> None:
                 results: dict[str, Any] = {}
                 for node_id, encoded_weights in models.items():
                     started = time.perf_counter()
+                    architecture = request.get("architecture", FIXED_ARCHITECTURE)
+                    model = build_cifar10_model(seed=0, architecture=architecture)
                     model.set_weights(_load_weights(encoded_weights))
                     logits = model.predict(images, batch_size=256, verbose=0)
                     results[node_id] = {

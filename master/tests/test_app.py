@@ -391,6 +391,49 @@ def test_optimizer_action_passes_fixed_range_parameters_to_real_coordinator(tmp_
     assert result["seeds"] == [17]
     assert result["alphas"] == [0.3]
 
+def test_enable_nas_starts_real_coordinator_search_and_dfl(tmp_path: Path) -> None:
+    class FakeCoordinator:
+        def start_nas_experiment(self, **values):
+            return {"accepted": True, **values}
+
+    app = create_app(
+        config(tmp_path),
+        memory_reader=memory,
+        training_coordinator=FakeCoordinator(),
+    )
+    response = app.test_client().post(
+        "/command",
+        json={
+            "action": "enable_nas",
+            "parameters": {
+                "enabled": True,
+                "rounds": 1,
+                "epochs": 1,
+                "seeds": [17],
+                "search_time_limit_seconds": 30,
+            },
+        },
+        headers={"Authorization": f"Bearer {config(tmp_path).api_token}"},
+    )
+    assert response.status_code == 200
+    data = response.get_json()["result"]["data"]
+    assert data["rounds"] == 1
+    assert data["seeds"] == [17]
+    assert data["search_time_limit_seconds"] == 30
+
+
+def test_enable_nas_rejects_out_of_range_search_budget(tmp_path: Path) -> None:
+    app = create_app(config(tmp_path), memory_reader=memory)
+    response = app.test_client().post(
+        "/command",
+        json={
+            "action": "enable_nas",
+            "parameters": {"enabled": True, "search_time_limit_seconds": 301},
+        },
+        headers={"Authorization": f"Bearer {config(tmp_path).api_token}"},
+    )
+    assert response.status_code == 422
+
 
 def test_supported_topology_is_reported_as_available(tmp_path: Path) -> None:
     class FakeCoordinator:

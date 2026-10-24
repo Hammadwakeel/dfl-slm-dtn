@@ -21,6 +21,13 @@ from urllib.request import Request, urlopen
 
 from topology_opt.reward import RewardConfig, calculate_run_reward
 from topology_opt.selector import select_candidate
+from common.nas import (
+    ARCHITECTURE_SPACE,
+    FIXED_ARCHITECTURE,
+    architecture_parameters,
+    architecture_spec,
+    select_architecture,
+)
 
 LOGGER = logging.getLogger("dfl_slm.training")
 TOPOLOGIES = (
@@ -188,10 +195,15 @@ class EvaluatorClient:
                 raise TrainingError(f"CIFAR evaluator failed: {response['error']}")
             return response
 
-    def evaluate(self, models: dict[str, bytes]) -> dict[str, Any]:
+    def evaluate(
+        self,
+        models: dict[str, bytes],
+        architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
+    ) -> dict[str, Any]:
         return self._request(
             {
                 "type": "evaluate",
+                "architecture": architecture,
                 "models": {
                     node_id: base64.b64encode(weights).decode("ascii")
                     for node_id, weights in models.items()
@@ -199,9 +211,21 @@ class EvaluatorClient:
             }
         )["results"]
 
-    def train_baseline(self, seed: int, rounds: int, epochs: int) -> list[dict[str, Any]]:
+    def train_baseline(
+        self,
+        seed: int,
+        rounds: int,
+        epochs: int,
+        architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
+    ) -> list[dict[str, Any]]:
         return self._request(
-            {"type": "baseline", "seed": seed, "rounds": rounds, "epochs": epochs}
+            {
+                "type": "baseline",
+                "seed": seed,
+                "rounds": rounds,
+                "epochs": epochs,
+                "architecture": architecture,
+            }
         )["baseline_rounds"]
 
     def close(self) -> None:
@@ -243,6 +267,7 @@ class TrainingCoordinator:
             "epochs": config.epochs,
             "topology": config.topology,
             "dataset_split": "stratified",
+            "architecture": architecture_spec(FIXED_ARCHITECTURE),
         }
         self._groups: list[dict[str, Any]] = self._load_groups()
 
@@ -286,6 +311,7 @@ class TrainingCoordinator:
         epochs: int | None = None,
         seeds: tuple[int, ...] = (17, 42, 2026),
         dataset_split: str | None = None,
+        architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
     ) -> dict[str, Any]:
         if len(seeds) != 3 or any(seed < 0 for seed in seeds):
             raise ValueError("Exactly three non-negative training seeds are required")
@@ -297,6 +323,9 @@ class TrainingCoordinator:
                 epochs=epochs,
                 dataset_split=dataset_split,
             )
+            selected_architecture = architecture_spec(architecture)
+            self._settings["architecture"] = selected_architecture
+            settings["architecture"] = selected_architecture
             group_id = f"{settings['topology']}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
             group = {
                 "group_id": group_id,
@@ -305,6 +334,7 @@ class TrainingCoordinator:
                 "rounds": settings["rounds"],
                 "epochs": settings["epochs"],
                 "dataset_split": settings["dataset_split"],
+                "architecture": selected_architecture,
                 "seeds": list(seeds),
                 "status": "running",
                 "started_at": time.time(),
@@ -324,6 +354,70 @@ class TrainingCoordinator:
             self._thread.start()
             self._persist_locked()
         return {"accepted": True, "group_id": group_id, **settings, "seeds": list(seeds)}
+
+    def start_nas_experiment(
+        self,
+        *,
+        rounds: int = 10,
+        epochs: int = 5,
+        seeds: tuple[int, ...] = (17, 42, 2026),
+        search_time_limit_seconds: int = 300,
+    ) -> dict[str, Any]:
+        if (
+            not 1 <= len(seeds) <= 3
+            or len(set(seeds)) != len(seeds)
+            or any(seed < 0 for seed in seeds)
+        ):
+            raise ValueError("NAS requires one to three non-negative seeds")
+        if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
+            raise ValueError("NAS rounds must be 1-100 and epochs must be 1-50")
+        if not 30 <= search_time_limit_seconds <= 300:
+            raise ValueError("NAS search time limit must be between 30 and 300 seconds")
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError(f"Training group {self._active_group_id} is already active")
+            group_id = f"nas-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+            group = {
+                "group_id": group_id,
+                "kind": "neural_architecture_search",
+                "topology": self._settings["topology"],
+                "dataset_split": "stratified",
+                "rounds": rounds,
+                "epochs": epochs,
+                "seeds": list(seeds),
+                "search_time_limit_seconds": search_time_limit_seconds,
+                "architecture_space": list(ARCHITECTURE_SPACE),
+                "fixed_architecture": architecture_spec(FIXED_ARCHITECTURE),
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+                "runs": [],
+                "worker_search": [],
+            }
+            self._groups.append(group)
+            self._active_group_id = group_id
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run_nas_group,
+                args=(group_id,),
+                name=f"nas-group-{group_id}",
+                daemon=True,
+            )
+            self._thread.start()
+            self._persist_locked()
+        return {
+            "accepted": True,
+            "group_id": group_id,
+            "rounds": rounds,
+            "epochs": epochs,
+            "seeds": list(seeds),
+            "topology": group["topology"],
+            "dataset_split": "stratified",
+            "candidate_count": len(ARCHITECTURE_SPACE),
+            "search_time_limit_seconds": search_time_limit_seconds,
+            "max_candidate_parameters": 12_000,
+        }
 
     def start_optimization(
         self,
@@ -546,6 +640,7 @@ class TrainingCoordinator:
             "epochs": group["epochs"],
             "topology": group["topology"],
             "dataset_split": group.get("dataset_split", "stratified"),
+            "architecture": group.get("architecture", FIXED_ARCHITECTURE),
         }
         self._parallel_workers(
             lambda worker: self._post(worker, "/v1/config", configuration)
@@ -560,6 +655,7 @@ class TrainingCoordinator:
                         "run_id": run["run_id"],
                         "seed": run["seed"],
                         "topology": run["topology"],
+                        "architecture": group.get("architecture", FIXED_ARCHITECTURE),
                     },
                 )
 
@@ -595,7 +691,10 @@ class TrainingCoordinator:
                     ),
                 )
             )
-            scores = self.evaluator.evaluate(dict(binary_weights))
+            scores = self.evaluator.evaluate(
+                dict(binary_weights),
+                group.get("architecture", FIXED_ARCHITECTURE),
+            )
             row = {
                 "round": round_index + 1,
                 "topology": group["topology"],
@@ -756,6 +855,223 @@ class TrainingCoordinator:
                     self._active_group_id = None
                 self._persist_locked()
 
+    def _run_nas_group(self, group_id: str) -> None:
+        group = self._get_group(group_id)
+        try:
+            base_configuration = {
+                "rounds": group["rounds"],
+                "epochs": group["epochs"],
+                "topology": group["topology"],
+                "dataset_split": "stratified",
+                "architecture": FIXED_ARCHITECTURE,
+            }
+            self._parallel_workers(
+                lambda worker: self._post(worker, "/v1/config", base_configuration)
+            )
+            searches = self._parallel_workers(
+                lambda worker: self._post(
+                    worker,
+                    "/v1/nas/search",
+                    {
+                        "seed": 2026,
+                        "time_limit_seconds": group["search_time_limit_seconds"],
+                    },
+                    timeout=group["search_time_limit_seconds"] + 30,
+                )
+            )
+            searches = sorted(searches, key=lambda row: row["node_id"])
+            candidate_rows = [
+                result
+                for worker_result in searches
+                for result in worker_result["candidates"]
+            ]
+            selection = select_architecture(candidate_rows)
+            group["worker_search"] = searches
+            group["nas_candidates"] = selection["candidate_means"]
+            group["selected_architecture"] = selection["architecture"]
+            group["search_elapsed_seconds"] = max(
+                float(result["elapsed_seconds"]) for result in searches
+            )
+            group["search_peak_rss_mb"] = max(
+                float(result["peak_rss_mb"]) for result in searches
+            )
+            with self._lock:
+                self._persist_locked()
+
+            variants = (
+                ("fixed", architecture_spec(FIXED_ARCHITECTURE)),
+                ("nas", selection["architecture"]),
+            )
+            for variant, architecture in variants:
+                run_group = {
+                    **group,
+                    "architecture": architecture,
+                    "variant": variant,
+                }
+                for seed in group["seeds"]:
+                    if self._stop.is_set():
+                        raise TrainingCancelled("NAS experiment was cancelled")
+                    run = {
+                        "run_id": f"nas-{variant}-seed-{seed}-{uuid.uuid4().hex[:8]}",
+                        "seed": seed,
+                        "topology": group["topology"],
+                        "dataset_split": "stratified",
+                        "architecture": architecture,
+                        "variant": variant,
+                        "status": "running",
+                        "rounds": [],
+                    }
+                    with self._lock:
+                        self._get_group(group_id)["runs"].append(run)
+                        self._persist_locked()
+                    self._run_distributed_seed(group_id, run_group, run)
+                    run["status"] = "completed"
+                    with self._lock:
+                        self._persist_locked()
+
+            for seed in group["seeds"]:
+                if self._stop.is_set():
+                    raise TrainingCancelled("NAS experiment was cancelled")
+                run = {
+                    "run_id": f"nas-centralized-seed-{seed}-{uuid.uuid4().hex[:8]}",
+                    "seed": seed,
+                    "topology": "centralized",
+                    "dataset_split": "stratified",
+                    "architecture": architecture_spec(FIXED_ARCHITECTURE),
+                    "variant": "centralized_fixed",
+                    "status": "running",
+                    "rounds": [],
+                }
+                rows = self.evaluator.train_baseline(
+                    seed,
+                    group["rounds"],
+                    group["epochs"],
+                    architecture=FIXED_ARCHITECTURE,
+                )
+                run["rounds"] = [
+                    {
+                        **row,
+                        "topology": "centralized",
+                        "workers": {"dfl-master": row},
+                    }
+                    for row in rows
+                ]
+                run["status"] = "completed"
+                with self._lock:
+                    self._get_group(group_id)["runs"].append(run)
+                    self._persist_locked()
+
+            comparisons = {
+                variant: self._summarize_nas_runs(
+                    [
+                        run
+                        for run in group["runs"]
+                        if run["variant"] == variant and run["status"] == "completed"
+                    ],
+                    search_seconds=(
+                        group["search_elapsed_seconds"] if variant == "nas" else 0.0
+                    ),
+                    search_peak_rss_mb=(
+                        group["search_peak_rss_mb"] if variant == "nas" else 0.0
+                    ),
+                )
+                for variant in ("fixed", "nas", "centralized_fixed")
+            }
+            group["comparison"] = comparisons
+            group["nas_beats_fixed"] = (
+                comparisons["nas"]["mean_accuracy"]
+                > comparisons["fixed"]["mean_accuracy"]
+            )
+            self._update_group(
+                group_id,
+                status="completed",
+                completed_at=time.time(),
+            )
+        except TrainingCancelled as error:
+            self._cancel_workers()
+            self._update_group(
+                group_id,
+                status="stopped",
+                completed_at=time.time(),
+                error=str(error),
+            )
+        except Exception as error:
+            self._cancel_workers()
+            LOGGER.exception("NAS experiment group %s failed", group_id)
+            self._update_group(
+                group_id,
+                status="failed",
+                completed_at=time.time(),
+                error=f"{type(error).__name__}: {error}",
+            )
+        finally:
+            with self._lock:
+                if self._active_group_id == group_id:
+                    self._active_group_id = None
+                self._persist_locked()
+
+    @staticmethod
+    def _summarize_nas_runs(
+        runs: list[dict[str, Any]],
+        *,
+        search_seconds: float,
+        search_peak_rss_mb: float,
+    ) -> dict[str, Any]:
+        if not runs:
+            raise TrainingError("NAS comparison is missing completed experiment runs")
+        accuracies = []
+        macro_f1_values = []
+        runtime_values = []
+        peak_rss = []
+        bytes_sent = []
+        for run in runs:
+            final_workers = run["rounds"][-1]["workers"]
+            accuracies.append(
+                sum(float(row["accuracy"]) for row in final_workers.values())
+                / len(final_workers)
+            )
+            macro_f1_values.append(
+                sum(float(row["macro_f1"]) for row in final_workers.values())
+                / len(final_workers)
+            )
+            runtime_values.append(
+                sum(
+                    max(
+                        float(metrics.get("round_seconds", metrics.get("runtime_seconds", 0)))
+                        for metrics in row["workers"].values()
+                    )
+                    for row in run["rounds"]
+                )
+            )
+            peak_rss.append(
+                max(
+                    float(metrics.get("peak_process_rss_mb", 0))
+                    for row in run["rounds"]
+                    for metrics in row["workers"].values()
+                )
+            )
+            bytes_sent.append(
+                sum(
+                    int(metrics.get("bytes_sent", 0))
+                    for row in run["rounds"]
+                    for metrics in row["workers"].values()
+                )
+            )
+        mean_runtime = sum(runtime_values) / len(runtime_values)
+        return {
+            "completed_runs": len(runs),
+            "mean_accuracy": sum(accuracies) / len(accuracies),
+            "mean_macro_f1": sum(macro_f1_values) / len(macro_f1_values),
+            "mean_training_runtime_seconds": mean_runtime,
+            "mean_runtime_including_search_seconds": (
+                mean_runtime + search_seconds / len(runs)
+            ),
+            "total_runtime_including_search_seconds": sum(runtime_values) + search_seconds,
+            "search_seconds": search_seconds,
+            "peak_rss_mb": max(max(peak_rss), search_peak_rss_mb),
+            "mean_communication_bytes": sum(bytes_sent) / len(bytes_sent),
+        }
+
     def _run_baseline_group(self, group_id: str) -> None:
         group = self._get_group(group_id)
         try:
@@ -855,7 +1171,10 @@ class TrainingCoordinator:
             with urlopen(request, timeout=timeout) as response:
                 return response.read(), dict(response.headers.items())
         except HTTPError as error:
-            raise TrainingError(f"{worker.node_id} returned HTTP {error.code} for {path}") from error
+            detail = error.read().decode("utf-8", errors="replace").strip()[:500]
+            raise TrainingError(
+                f"{worker.node_id} returned HTTP {error.code} for {path}: {detail}"
+            ) from error
         except (URLError, TimeoutError, OSError) as error:
             raise TrainingError(f"Could not reach {worker.node_id} for {path}: {error}") from error
 
@@ -864,8 +1183,10 @@ class TrainingCoordinator:
         worker: TrainingWorker,
         path: str,
         payload: dict[str, Any],
+        *,
+        timeout: float = 30,
     ) -> dict[str, Any]:
-        body, _ = self._request(worker, path, payload=payload, timeout=30)
+        body, _ = self._request(worker, path, payload=payload, timeout=timeout)
         response = json.loads(body.decode("utf-8"))
         if not isinstance(response, dict):
             raise TrainingError(f"{worker.node_id} returned a non-object response")

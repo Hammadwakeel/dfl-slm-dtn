@@ -7,6 +7,7 @@ import type { Device } from "./types";
 import DeviceCard from "./components/DeviceCard";
 import AssistantPage from "./pages/AssistantPage";
 import ExperimentsPage from "./pages/ExperimentsPage";
+import NASPage from "./pages/NASPage";
 
 const navigation = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
@@ -183,9 +184,17 @@ export default function App() {
             onRefresh={() => void refreshExperiments(token)}
           />
         )}
+        {page === "search" && (
+          <NASPage
+            token={token}
+            results={experimentResults}
+            error={experimentError}
+            onRefresh={() => void refreshExperiments(token)}
+          />
+        )}
         {page === "assistant" && <AssistantPage token={token} />}
         {page !== "dashboard" && page !== "topology" && (
-          page !== "assistant" && page !== "experiments" && <Placeholder page={page} />
+          page !== "assistant" && page !== "experiments" && page !== "search" && <Placeholder page={page} />
         )}
       </main>
     </div>

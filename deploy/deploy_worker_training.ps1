@@ -111,12 +111,14 @@ try {
             (Join-Path $repoRoot 'common\__init__.py') `
             (Join-Path $repoRoot 'common\auth.py') `
             (Join-Path $repoRoot 'common\cifar_model.py') `
+            (Join-Path $repoRoot 'common\nas.py') `
             "$($remote):$stageName/common/"
         if ($LASTEXITCODE -ne 0) {
             throw "Could not stage shared training helpers on $($node.Ip)."
         }
         & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes `
             (Join-Path $repoRoot 'worker\training_service.py') `
+            (Join-Path $repoRoot 'worker\nas_search.py') `
             (Join-Path $repoRoot 'worker\__init__.py') `
             "$($remote):$stageName/worker/"
         if ($LASTEXITCODE -ne 0) {

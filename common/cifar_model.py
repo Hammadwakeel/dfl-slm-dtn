@@ -6,32 +6,41 @@ from typing import Any
 
 import numpy as np
 
+from common.nas import FIXED_ARCHITECTURE, MAX_PARAMETERS, architecture_spec
 
-def build_cifar10_model(seed: int = 0) -> Any:
+
+def build_cifar10_model(
+    seed: int = 0,
+    architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
+) -> Any:
     import tensorflow as tf
 
+    spec = architecture_spec(architecture)
     tf.keras.utils.set_random_seed(seed)
     for gpu in tf.config.list_physical_devices("GPU"):
         if not tf.config.experimental.get_memory_growth(gpu):
             tf.config.experimental.set_memory_growth(gpu, True)
-    return tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(32, 32, 3), dtype=tf.uint8),
-            tf.keras.layers.RandomFlip("horizontal", seed=seed),
-            tf.keras.layers.Rescaling(1.0 / 255.0),
+    layers = [
+        tf.keras.layers.Input(shape=(32, 32, 3), dtype=tf.uint8),
+        tf.keras.layers.RandomFlip("horizontal", seed=seed),
+        tf.keras.layers.Rescaling(1.0 / 255.0),
+    ]
+    for block in range(spec["blocks"]):
+        layers.append(
             tf.keras.layers.Conv2D(
-                8,
-                kernel_size=3,
-                strides=2,
+                spec["channels"],
+                kernel_size=spec["kernel_size"],
+                strides=2 if block == 0 else 1,
                 padding="same",
                 activation="relu",
-            ),
-            tf.keras.layers.MaxPooling2D(pool_size=2),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(10),
-        ],
-        name="cifar10_small_cnn",
-    )
+            )
+        )
+        layers.append(tf.keras.layers.MaxPooling2D(pool_size=2))
+    layers.extend([tf.keras.layers.Flatten(), tf.keras.layers.Dense(10)])
+    model = tf.keras.Sequential(layers, name=f"cifar10_{spec['id']}")
+    if model.count_params() > MAX_PARAMETERS:
+        raise ValueError("Architecture exceeds the CIFAR-10 parameter cap")
+    return model
 
 
 def compile_cifar10_model(model: Any) -> None:

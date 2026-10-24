@@ -9,10 +9,12 @@ training_port=5004
 
 for required in \
   "$stage_dir/worker/training_service.py" \
+  "$stage_dir/worker/nas_search.py" \
   "$stage_dir/worker/__init__.py" \
   "$stage_dir/common/__init__.py" \
   "$stage_dir/common/auth.py" \
   "$stage_dir/common/cifar_model.py" \
+  "$stage_dir/common/nas.py" \
   "$stage_dir/train_shard.npz" \
   "$stage_dir/shards/dirichlet_a03.npz" \
   "$stage_dir/shards/dirichlet_a05.npz" \
@@ -53,10 +55,12 @@ runuser -u hammad -- /usr/bin/python3 -c 'import numpy as np, tensorflow as tf; 
 
 install -d -o root -g root -m 0755 "$app_root/worker" "$app_root/worker/data" "$app_root/worker/data/shards" "$app_root/common"
 install -o root -g root -m 0644 "$stage_dir/worker/training_service.py" "$app_root/worker/training_service.py"
+install -o root -g root -m 0644 "$stage_dir/worker/nas_search.py" "$app_root/worker/nas_search.py"
 install -o root -g root -m 0644 "$stage_dir/worker/__init__.py" "$app_root/worker/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/auth.py" "$app_root/common/auth.py"
 install -o root -g root -m 0644 "$stage_dir/common/cifar_model.py" "$app_root/common/cifar_model.py"
+install -o root -g root -m 0644 "$stage_dir/common/nas.py" "$app_root/common/nas.py"
 install -o hammad -g hammad -m 0600 "$stage_dir/train_shard.npz" "$app_root/worker/data/train_shard.npz"
 install -o hammad -g hammad -m 0600 "$stage_dir/shards/dirichlet_a03.npz" "$app_root/worker/data/shards/dirichlet_a03.npz"
 install -o hammad -g hammad -m 0600 "$stage_dir/shards/dirichlet_a05.npz" "$app_root/worker/data/shards/dirichlet_a05.npz"

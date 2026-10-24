@@ -6,8 +6,11 @@ from master.training import TrainingConfig, TrainingCoordinator, TrainingWorker
 
 
 class FakeEvaluator:
-    def evaluate(self, models):
+    def evaluate(self, models, architecture=None):
         return {}
+
+    def train_baseline(self, seed, rounds, epochs, architecture=None):
+        return []
 
     def close(self):
         pass

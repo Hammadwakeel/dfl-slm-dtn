@@ -55,6 +55,15 @@ See [docs/phase4-worker-training.md](./docs/phase4-worker-training.md) for datas
 
 See [docs/phase5-topology-optimization.md](./docs/phase5-topology-optimization.md) for packet counts, reward configuration, pilot timing, full-matrix metrics, and baseline comparison.
 
+## Phase 6 status
+
+- The worker-local CIFAR-10 CNN search tests eight bounded architectures (maximum 11,466 parameters, below a 12,000 cap) on GPU using each worker's own stratified training shard and validation split. Search has a 300-second and 2,048 MiB RSS cap; the held-out test set is only used after architecture selection.
+- The master selects one common architecture by mean worker validation accuracy, then runs identical-architecture DFL with Phase 5's bidirectional Ring, alongside the fixed model and a centralized fixed-model reference.
+- A real eight-candidate GPU search and one-round pilot completed; `b1_c16_k5` was selected (11,466 parameters). The full 10-round, 5-epoch, three-seed comparison completed on all three Jetsons: NAS DFL reached 61.63% mean held-out accuracy and 0.6136 macro-F1, versus 55.07% and 0.5459 for fixed DFL. The centralized fixed reference reached 56.93% accuracy.
+- The complete nine-run comparison took 20 minutes 2 seconds. NAS runtime including amortized search averaged 97.91 seconds per run, peak process RSS was 2,508.9 MiB, and peer communication averaged 2,609,813 bytes per run (about 2.09× fixed DFL).
+
+See [docs/phase6-neural-architecture-search.md](./docs/phase6-neural-architecture-search.md) for the design, all full-search candidate measurements, per-seed results, and runtime/memory/communication comparisons.
+
 ## Project layout
 
 ```text

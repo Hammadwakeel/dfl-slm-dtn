@@ -127,6 +127,25 @@ The measured-reward selector chose **bidirectional Ring, α=0.5**, with mean rew
 
 The topologies differed only modestly in held-out accuracy: the best-to-worst spread was **0.428 percentage points** at α=0.3 and **0.980 percentage points** at α=0.5. Bidirectional Ring and Mesh were nearly identical as expected for their equivalent three-worker graph: their mean accuracies differed by 0.033 percentage points at α=0.3 and 0.017 at α=0.5. These three-seed results show observed differences, not evidence of statistical significance. The reward selector is a transparent measured-data baseline; no GNN or APG result is claimed.
 
+### Topology comparison within each data split
+
+This comparison holds the Dirichlet split fixed and ranks topologies using only runs at the matching alpha; it does not mix the alpha=0.3 and alpha=0.5 results. Accuracy differences are relative to the top accuracy within that alpha.
+
+| α | Topology | Mean held-out accuracy | Difference from best topology |
+|---:|---|---:|---:|
+| 0.3 | bidirectional_ring | 41.200% | 0.000 pp |
+| 0.3 | mesh | 41.167% | -0.033 pp |
+| 0.3 | star | 41.000% | -0.200 pp |
+| 0.3 | chain | 40.998% | -0.202 pp |
+| 0.3 | directed_ring | 40.772% | -0.428 pp |
+| 0.5 | bidirectional_ring | 47.283% | 0.000 pp |
+| 0.5 | mesh | 47.267% | -0.017 pp |
+| 0.5 | star | 46.801% | -0.482 pp |
+| 0.5 | chain | 46.410% | -0.873 pp |
+| 0.5 | directed_ring | 46.303% | -0.980 pp |
+
+These are descriptive means over three seeds, not statistical-significance claims. **No GNN was used**; the optimizer is the measured-reward selector described above.
+
 ## Validation
 
 - Python worker/master tests: **37 passed** using `python -m pytest --import-mode=importlib -q tests master\tests`.

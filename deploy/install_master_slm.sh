@@ -19,6 +19,7 @@ for required in \
   "$stage_dir/master/cifar_evaluator.py" \
   "$stage_dir/common/__init__.py" \
   "$stage_dir/common/cifar_model.py" \
+  "$stage_dir/common/nas.py" \
   "$stage_dir/common/slm_action_schema.json" \
   "$stage_dir/data/cifar10_test.npz" \
   "$stage_dir/data/cifar10_train.npz" \
@@ -77,6 +78,7 @@ install -o root -g root -m 0644 "$stage_dir/master/training.py" "$app_root/maste
 install -o root -g root -m 0644 "$stage_dir/master/cifar_evaluator.py" "$app_root/master/cifar_evaluator.py"
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/cifar_model.py" "$app_root/common/cifar_model.py"
+install -o root -g root -m 0644 "$stage_dir/common/nas.py" "$app_root/common/nas.py"
 install -o root -g root -m 0644 "$stage_dir/common/slm_action_schema.json" "$app_root/common/slm_action_schema.json"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/__init__.py" "$app_root/topology_opt/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/reward.py" "$app_root/topology_opt/reward.py"

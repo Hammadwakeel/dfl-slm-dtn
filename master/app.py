@@ -290,6 +290,24 @@ def _execute_action(
             "data": _read_logs(config.log_path, parameters.get("limit", 20)),
         }
     if training_coordinator is not None:
+        if name == "enable_nas":
+            if not parameters["enabled"]:
+                return {
+                    "available": True,
+                    "data": {"enabled": False, "message": "NAS experiment was not started."},
+                }
+            return {
+                "available": True,
+                "data": training_coordinator.start_nas_experiment(
+                    rounds=parameters.get("rounds", 10),
+                    epochs=parameters.get("epochs", 5),
+                    seeds=tuple(parameters.get("seeds", (17, 42, 2026))),
+                    search_time_limit_seconds=parameters.get(
+                        "search_time_limit_seconds",
+                        300,
+                    ),
+                ),
+            }
         if name == "start_training":
             return {
                 "available": True,

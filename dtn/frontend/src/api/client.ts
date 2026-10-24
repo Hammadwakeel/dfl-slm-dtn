@@ -12,6 +12,22 @@ export type TrainingTopology =
   | "chain"
   | "star";
 
+export interface NASArchitecture {
+  id: string;
+  blocks: number;
+  channels: number;
+  kernel_size: number;
+}
+
+export interface NASCandidate {
+  architecture: NASArchitecture;
+  parameter_count: number;
+  mean_validation_accuracy: number;
+  worker_accuracies: number[];
+  mean_elapsed_seconds: number;
+  max_peak_rss_mb: number;
+}
+
 export interface SlmChatResponse {
   reply: string;
   model_reply: string;
@@ -84,11 +100,36 @@ export interface ExperimentRun {
 
 export interface ExperimentGroup {
   group_id: string;
-  kind: "decentralized" | "centralized_baseline" | "topology_optimization";
+  kind:
+    | "decentralized"
+    | "centralized_baseline"
+    | "topology_optimization"
+    | "neural_architecture_search";
   topology: TrainingTopology | "centralized" | "candidate_sweep";
   dataset_split?: string;
   alphas?: number[];
   candidates?: TopologyCandidate[];
+  nas_candidates?: NASCandidate[];
+  architecture_space?: NASArchitecture[];
+  fixed_architecture?: NASArchitecture;
+  selected_architecture?: NASArchitecture;
+  nas_beats_fixed?: boolean;
+  search_elapsed_seconds?: number;
+  search_peak_rss_mb?: number;
+  comparison?: Record<
+    "fixed" | "nas" | "centralized_fixed",
+    {
+      completed_runs: number;
+      mean_accuracy: number;
+      mean_macro_f1: number;
+      mean_training_runtime_seconds: number;
+      mean_runtime_including_search_seconds: number;
+      total_runtime_including_search_seconds: number;
+      search_seconds: number;
+      peak_rss_mb: number;
+      mean_communication_bytes: number;
+    }
+  >;
   selection?: {
     method: string;
     selected_candidate: { topology: TrainingTopology; alpha: number; mean_reward: number };

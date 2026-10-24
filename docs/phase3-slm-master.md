@@ -32,19 +32,23 @@ Every SLM endpoint requires `Authorization: Bearer <MASTER_SLM_API_TOKEN>`. The 
 
 | Action | Parameters / validation | Phase 3 behavior |
 |---|---|---|
+| `clarify` | No parameters; asks for missing/ambiguous details or which safe step to perform first | Safe conversational outcome; no action dispatched |
+| `refuse` | No parameters; declines unsafe, out-of-scope, or out-of-range requests | Safe conversational outcome; no action dispatched |
+| `redirect` | No parameters; redirects unrelated chat to DFL operations | Safe conversational outcome; no action dispatched |
 | `upload_dataset` | Dataset name matching the safe identifier pattern | Not available yet |
 | `preprocess_dataset` | Dataset name; optional `standard`, `minmax`, or `none` normalization | Not available yet |
 | `create_initial_model` | Safe model name | Not available yet |
 | `start_training` | 1–100 rounds and 1–50 epochs | Not available yet |
 | `stop_training` | No parameters | Not available yet |
-| `set_topology` | `ring`, `star`, or `mesh` | Not available yet |
+| `set_topology` | `ring`, `directed_ring`, `bidirectional_ring`, `mesh`, `chain`, or `star` | Not available yet |
 | `set_rounds` | 1–100 | Not available yet |
 | `set_epochs` | 1–50 | Not available yet |
-| `enable_nas` | Boolean `enabled` | Not available yet |
+| `enable_nas` | Boolean `enabled`; optional rounds 1–100, epochs 1–50, 1–3 unique uint32 seeds, and search time 30–300 seconds | Not available yet |
+| `optimize_topology` | Optional rounds 1–100, epochs 1–50, 1–3 unique uint32 seeds, and 1–2 unique alpha values from 0.3/0.5 | Not available yet |
 | `get_status` | No parameters | Reads the real local authenticated status agent on port 5002 |
 | `get_logs` | Optional 1–100 log lines | Reads the SLM service's real rotated JSONL event log |
 | `get_results` | No parameters | Not available yet |
-| `compare_runs` | Exactly two unique safe run IDs | Not available yet |
+| `compare_runs` | Exactly two unique safe run IDs (1–64 characters each) | Not available yet |
 | `suggest_next_action` | No parameters | Not available yet |
 
 Unavailable actions return `available: false` and an explicit explanation. There is no worker training API in Phase 3, and configuration-shaped actions do not mutate a training system. User text, model output, and action parameters are never passed to a shell or evaluated as code. The service logs action names, outcomes, timing, and RAM metrics, not full user prompts or API tokens.

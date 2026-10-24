@@ -260,6 +260,33 @@
         {
           "type": "object",
           "properties": {
+            "action": {"const": "clarify"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "refuse"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "redirect"},
+            "parameters": {"$ref": "#/$defs/empty"}
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
             "action": {"const": "suggest_next_action"},
             "parameters": {"$ref": "#/$defs/empty"}
           },

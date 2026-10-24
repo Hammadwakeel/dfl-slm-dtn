@@ -43,7 +43,7 @@ def test_schema_allows_exactly_the_declared_actions() -> None:
         for branch in ACTION_SCHEMA["oneOf"]
     }
     assert names == set(ACTION_NAMES)
-    assert len(names) == 15
+    assert len(names) == 18
 
 
 def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -> None:
@@ -75,6 +75,24 @@ def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -
         except ValidationError:
             continue
         raise AssertionError(f"Invalid action was accepted: {invalid}")
+
+
+def test_conversational_outcomes_are_schema_valid_and_have_no_side_effects(
+    tmp_path: Path,
+) -> None:
+    app = create_app(config(tmp_path), memory_reader=memory)
+    client = app.test_client()
+    for outcome in ("clarify", "refuse", "redirect"):
+        response = client.post(
+            "/command",
+            json={"action": outcome, "parameters": {}},
+            headers={"Authorization": "Bearer slm-test-token-that-is-at-least-32-characters"},
+        )
+        assert response.status_code == 200
+        assert response.get_json()["result"] == {
+            "available": True,
+            "data": {"outcome": outcome, "action_required": False},
+        }
 
 
 def test_all_slm_endpoints_reject_missing_and_wrong_tokens(tmp_path: Path) -> None:

@@ -424,6 +424,38 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
               </p>
             )}
             {selectedGroup.error && <div className="alert inline-alert" role="alert">{selectedGroup.error}</div>}
+            {selectedGroup.kind === "hyperparameter_search" && selectedGroup.hpo_results && (
+              <section className="experiment-run" aria-label="Hyperparameter results">
+                <h3>
+                  Hyperparameter candidates (mean of every worker)
+                  {selectedGroup.selected_hyperparameters
+                    ? ` · selected lr ${selectedGroup.selected_hyperparameters.learning_rate}, batch ${selectedGroup.selected_hyperparameters.batch_size}`
+                    : ""}
+                </h3>
+                <div className="table-scroll">
+                  <table className="metrics-table">
+                    <thead>
+                      <tr><th>Candidate</th><th>Optimizer</th><th>Learning rate</th><th>Batch</th><th>Val. accuracy</th><th>Macro F1</th><th>Time</th></tr>
+                    </thead>
+                    <tbody>
+                      {[...selectedGroup.hpo_results]
+                        .sort((left, right) => right.validation_accuracy - left.validation_accuracy)
+                        .map((row) => (
+                          <tr key={row.architecture.id}>
+                            <td>{row.architecture.id}</td>
+                            <td>{row.architecture.training?.optimizer ?? "—"}</td>
+                            <td>{row.architecture.training?.learning_rate ?? "—"}</td>
+                            <td>{row.architecture.training?.batch_size ?? "—"}</td>
+                            <td>{formatPercent(row.validation_accuracy)}</td>
+                            <td>{formatPercent(row.validation_macro_f1)}</td>
+                            <td>{`${row.elapsed_seconds.toFixed(1)} s`}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
             {selectedGroup.runs.map((run) => (
               <section className="experiment-run" key={run.run_id}>
                 <h3>Seed {run.seed} · {run.run_id}</h3>

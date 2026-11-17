@@ -10,6 +10,7 @@ import {
   type SupervisorCluster,
   type SupervisorEvent,
   type SupervisorGoal,
+  type SupervisorPruning,
   type SupervisorRun,
 } from "../api/client";
 
@@ -32,7 +33,9 @@ const STEP_LABELS: Record<string, string> = {
   initial_model: "Initial model",
   baseline_training: "Baseline DFL",
   run_nas: "Architecture search",
+  run_hpo: "Hyperparameter tuning",
   optimize_topology: "Topology optimization",
+  prune_model: "Pruning + fine-tune",
   train_final: "Final DFL",
   finish_workflow: "Finish",
 };
@@ -403,10 +406,40 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
         </div>
       )}
 
+      {run.state.pruning && <PruningPanel pruning={run.state.pruning} />}
       <ExperimentTable run={run} />
       <AskBox token={token} runId={run.id} />
       <EventTimeline events={run.events ?? []} />
     </article>
+  );
+}
+
+function PruningPanel({ pruning }: { pruning: SupervisorPruning }) {
+  return (
+    <section className="agent-pruning" aria-label="Pruned model">
+      <h3>Pruned model</h3>
+      <div className="agent-summary-grid">
+        <div className="metric">
+          <span>Parameters</span>
+          <strong>{pruning.parameters_after.toLocaleString()}</strong>
+          <small>from {pruning.parameters_before.toLocaleString()} ({Math.round(pruning.ratio * 100)}% of units removed)</small>
+        </div>
+        <div className="metric">
+          <span>Compression</span>
+          <strong>{pruning.compression}×</strong>
+          <small>{pruning.architecture_id ?? ""}</small>
+        </div>
+        <div className="metric">
+          <span>Accuracy after fine-tune</span>
+          <strong>{pruning.validation_accuracy != null ? formatPercent(pruning.validation_accuracy) : "fine-tuning…"}</strong>
+          <small>
+            {pruning.source_validation_accuracy != null
+              ? `before pruning ${formatPercent(pruning.source_validation_accuracy)} on ${pruning.source_worker ?? "best worker"}`
+              : ""}
+          </small>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -434,9 +467,22 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
               <tr key={experiment.group_id ?? experiment.completed_at}>
                 <td>{STEP_LABELS[experiment.step] ?? experiment.step}</td>
                 <td title={experiment.error}>{experiment.status}</td>
-                <td>{formatPercent(experiment.validation_accuracy)}</td>
+                <td>
+                  {experiment.validation_accuracy != null
+                    ? formatPercent(experiment.validation_accuracy)
+                    : experiment.search_validation_accuracy != null
+                      ? `${formatPercent(experiment.search_validation_accuracy)} (search)`
+                      : "–"}
+                </td>
                 <td>{experiment.macro_f1 != null ? experiment.macro_f1.toFixed(4) : "–"}</td>
-                <td>{experiment.architecture ?? "–"}{experiment.parameter_count ? ` (${experiment.parameter_count.toLocaleString()} params)` : ""}</td>
+                <td>
+                  {experiment.architecture ?? "–"}
+                  {experiment.parameter_count ? ` (${experiment.parameter_count.toLocaleString()} params)` : ""}
+                  {experiment.hyperparameters
+                    ? ` · lr ${experiment.hyperparameters.learning_rate} · batch ${experiment.hyperparameters.batch_size}`
+                    : ""}
+                  {experiment.pruning ? ` · ${experiment.pruning.compression}× smaller` : ""}
+                </td>
                 <td>{experiment.selected_topology ?? experiment.topology ?? "–"}</td>
                 <td title={experiment.partial_rounds ? `${experiment.partial_rounds} round(s) aggregated without every peer` : undefined}>
                   {experiment.aggregation ?? "–"}

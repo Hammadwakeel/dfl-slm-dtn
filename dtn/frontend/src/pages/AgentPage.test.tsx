@@ -191,6 +191,47 @@ describe("Agent Supervisor page", () => {
     expect(await screen.findByText("NAS is running because the baseline was below target.")).toBeInTheDocument();
   });
 
+  it("shows tuned hyperparameters and the pruned model", async () => {
+    const base = runFixture();
+    const run = runFixture({
+      state: {
+        ...base.state,
+        experiments: [
+          ...base.state.experiments,
+          {
+            step: "run_hpo",
+            group_id: "hpo-1",
+            kind: "hyperparameter_search",
+            status: "completed",
+            architecture: "hpo-adam-lr3e-3-bs64",
+            search_validation_accuracy: 0.93,
+            hyperparameters: { optimizer: "adam", learning_rate: 0.003, batch_size: 64 },
+          },
+        ],
+        pruning: {
+          ratio: 0.5,
+          parameters_before: 24010,
+          parameters_after: 6402,
+          compression: 3.75,
+          architecture_id: "nas-cnn-pruned50",
+          source_worker: "worker3",
+          source_validation_accuracy: 0.96,
+          validation_accuracy: 0.955,
+        },
+      },
+    });
+    mockApi([run]);
+    render(<AgentPage token="dtn-token" active />);
+
+    expect(await screen.findByRole("region", { name: "Pruned model" })).toBeInTheDocument();
+    expect(screen.getByText("3.75×")).toBeInTheDocument();
+    expect(screen.getByText("6,402")).toBeInTheDocument();
+    expect(screen.getByText("95.50%")).toBeInTheDocument();
+    expect(screen.getByText("Hyperparameter tuning", { selector: "td" })).toBeInTheDocument();
+    expect(screen.getByText("93.00% (search)")).toBeInTheDocument();
+    expect(screen.getByText(/lr 0.003 · batch 64/)).toBeInTheDocument();
+  });
+
   it("does not poll while the page is hidden", () => {
     const fetchMock = mockApi([]);
     render(<AgentPage token="dtn-token" active={false} />);

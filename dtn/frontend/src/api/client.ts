@@ -244,7 +244,15 @@ export interface ExperimentGroup {
     | "centralized_baseline"
     | "topology_optimization"
     | "neural_architecture_search"
-    | "dataset_architecture_search";
+    | "dataset_architecture_search"
+    | "hyperparameter_search";
+  hpo_results?: Array<{
+    architecture: { id: string; training?: { optimizer: string; learning_rate: number; batch_size: number } };
+    validation_accuracy: number;
+    validation_macro_f1: number;
+    elapsed_seconds: number;
+  }>;
+  selected_hyperparameters?: { optimizer: string; learning_rate: number; batch_size: number };
   topology: TrainingTopology | "centralized" | "candidate_sweep";
   dataset_split?: string;
   aggregation?: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";
@@ -1003,8 +1011,23 @@ export interface SupervisorExperiment {
   aggregation?: string;
   sync_mode?: string;
   partial_rounds?: number;
+  hyperparameters?: { optimizer: string; learning_rate: number; batch_size: number };
+  search_validation_accuracy?: number;
+  pruning?: SupervisorPruning;
   error?: string;
   completed_at?: string;
+}
+
+export interface SupervisorPruning {
+  ratio: number;
+  parameters_before: number;
+  parameters_after: number;
+  compression: number;
+  architecture_id?: string;
+  source_worker?: string;
+  source_validation_accuracy?: number | null;
+  validation_accuracy?: number | null;
+  macro_f1?: number | null;
 }
 
 export interface SupervisorBest {
@@ -1030,6 +1053,7 @@ export interface SupervisorState {
   best: SupervisorBest | null;
   selected_topology: string | null;
   nas_architecture: Record<string, unknown> | null;
+  pruning?: SupervisorPruning | null;
   active: { step: string; group_id: string; started_at: string; progress?: number } | null;
   pending_step: { step: string; rationale?: string; source?: string } | null;
   counters: SupervisorCounters;

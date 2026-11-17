@@ -1,6 +1,6 @@
 param(
     [string]$SshKey = (Join-Path $env:USERPROFILE '.ssh\id_ed25519'),
-    [string[]]$WorkerIds = @('worker1', 'worker2', 'worker3', 'worker4', 'worker5')
+    [string[]]$WorkerIds = @('worker1', 'worker2', 'worker3', 'worker4', 'worker5', 'worker6', 'worker7', 'worker8')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +13,10 @@ $nodes = @(
     @{ Id = 'worker2'; Ip = '192.168.11.14'; User = 'hammad'; TokenName = 'WORKER2_API_TOKEN' },
     @{ Id = 'worker3'; Ip = '192.168.11.13'; User = 'hammad'; TokenName = 'WORKER3_API_TOKEN' },
     @{ Id = 'worker4'; Ip = '192.168.11.75'; User = 'jetson5'; TokenName = 'WORKER4_API_TOKEN' },
-    @{ Id = 'worker5'; Ip = '192.168.11.76'; User = 'hammad'; TokenName = 'WORKER5_API_TOKEN' }
+    @{ Id = 'worker5'; Ip = '192.168.11.76'; User = 'hammad'; TokenName = 'WORKER5_API_TOKEN' },
+    @{ Id = 'worker6'; Ip = '192.168.11.97'; User = 'hammad'; TokenName = 'WORKER6_API_TOKEN' },
+    @{ Id = 'worker7'; Ip = '192.168.11.100'; User = 'hammad'; TokenName = 'WORKER7_API_TOKEN' },
+    @{ Id = 'worker8'; Ip = '192.168.11.99'; User = 'hammad'; TokenName = 'WORKER8_API_TOKEN' }
 )
 
 if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
@@ -40,7 +43,7 @@ foreach ($node in $nodes) {
 }
 $selected = @($nodes | Where-Object { $WorkerIds -contains $_.Id })
 if ($selected.Count -ne $WorkerIds.Count) {
-    throw 'WorkerIds may contain only worker1, worker2, worker3, worker4, and worker5.'
+    throw 'WorkerIds may contain only worker1, worker2, worker3, worker4, worker5, worker6, worker7, and worker8.'
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -62,9 +65,9 @@ try {
     if ($null -eq $pythonPath) {
         $pythonPath = 'python'
     }
-    & $pythonPath (Join-Path $repoRoot 'scripts\reshard_cifar10.py') --output-root (Join-Path $tempRoot 'shards') --worker-count 5
+    & $pythonPath (Join-Path $repoRoot 'scripts\reshard_cifar10.py') --output-root (Join-Path $tempRoot 'shards') --worker-count $nodes.Count
     if ($LASTEXITCODE -ne 0) {
-        throw 'Could not produce disjoint CIFAR-10 shards for all five workers.'
+        throw 'Could not produce disjoint CIFAR-10 shards for every worker.'
     }
     foreach ($node in $selected) {
         $shardPath = Join-Path $tempRoot "shards\stratified\$($node.Id).npz"

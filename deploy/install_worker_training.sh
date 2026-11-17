@@ -125,6 +125,13 @@ install -d -o "$service_user" -g "$service_user" -m 0750 "$app_root/worker/venv"
 install -d -o root -g root -m 0755 "/etc/systemd/system/${service_name}.d"
 printf '[Service]\nUser=%s\nGroup=%s\n' "$service_user" "$service_user" \
   | install -o root -g root -m 0644 /dev/stdin "$service_dropin_dir/20-service-user.conf"
+if ! /usr/bin/python3 -c "import ensurepip" >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+fi
+if [[ -x "$app_root/worker/venv/bin/python" && ! -x "$app_root/worker/venv/bin/pip" ]]; then
+  rm -rf "$app_root/worker/venv"
+  install -d -o "$service_user" -g "$service_user" -m 0750 "$app_root/worker/venv"
+fi
 if [[ ! -x "$app_root/worker/venv/bin/python" ]]; then
   runuser -u "$service_user" -- /usr/bin/python3 -m venv \
     --system-site-packages \

@@ -14,7 +14,10 @@ $workers = @(
     @{ Id = 'worker2'; Ip = '192.168.11.14'; TokenName = 'WORKER2_API_TOKEN' },
     @{ Id = 'worker3'; Ip = '192.168.11.13'; TokenName = 'WORKER3_API_TOKEN' },
     @{ Id = 'worker4'; Ip = '192.168.11.75'; TokenName = 'WORKER4_API_TOKEN' },
-    @{ Id = 'worker5'; Ip = '192.168.11.76'; TokenName = 'WORKER5_API_TOKEN' }
+    @{ Id = 'worker5'; Ip = '192.168.11.76'; TokenName = 'WORKER5_API_TOKEN' },
+    @{ Id = 'worker6'; Ip = '192.168.11.97'; TokenName = 'WORKER6_API_TOKEN' },
+    @{ Id = 'worker7'; Ip = '192.168.11.100'; TokenName = 'WORKER7_API_TOKEN' },
+    @{ Id = 'worker8'; Ip = '192.168.11.99'; TokenName = 'WORKER8_API_TOKEN' }
 )
 $values = @{}
 $lines = [System.Collections.Generic.List[string]]::new()

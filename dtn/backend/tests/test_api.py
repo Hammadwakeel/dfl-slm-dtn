@@ -18,12 +18,12 @@ def test_health_is_public(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_real_inventory_loads_master_and_five_workers(monkeypatch) -> None:
+def test_real_inventory_loads_master_and_eight_workers(monkeypatch) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     registry = yaml.safe_load(
         (repo_root / "config" / "nodes.yaml").read_text(encoding="utf-8")
     )
-    for node_id in ["master", *(f"worker{index}" for index in range(1, 6))]:
+    for node_id in ["master", *(f"worker{index}" for index in range(1, 9))]:
         monkeypatch.setenv(f"{node_id.upper()}_API_TOKEN", f"{node_id}-token-" + "x" * 32)
 
     nodes = _load_devices(registry)
@@ -35,9 +35,12 @@ def test_real_inventory_loads_master_and_five_workers(monkeypatch) -> None:
         "worker3",
         "worker4",
         "worker5",
+        "worker6",
+        "worker7",
+        "worker8",
     ]
-    assert nodes[-1].hostname == "dfl-worker5"
-    assert nodes[-1].ip == "192.168.11.76"
+    assert nodes[-1].hostname == "dfl-worker8"
+    assert nodes[-1].ip == "192.168.11.99"
     assert nodes[-1].role == "worker"
     assert nodes[-1].training_port == 5004
 

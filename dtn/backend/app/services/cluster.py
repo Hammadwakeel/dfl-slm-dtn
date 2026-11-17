@@ -104,6 +104,22 @@ def sync_training_registry(
         error_message = str(error)
         LOGGER.warning("Dynamic training worker synchronization failed: %s", error)
     with sessions.begin() as session:
+        # Configured nodes may not have a row yet (the poller creates rows later);
+        # create them now so newly added workers receive the readiness result.
+        for config in settings.nodes:
+            if session.get(Device, config.node_id) is None:
+                session.add(
+                    Device(
+                        node_id=config.node_id,
+                        role=config.role,
+                        hostname=config.hostname,
+                        ip=config.ip,
+                        port=config.port,
+                        training_port=config.training_port,
+                        online=False,
+                    )
+                )
+        session.flush()
         devices = session.scalars(select(Device)).all()
         for device in devices:
             if device.node_id not in active_worker_ids:

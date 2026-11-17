@@ -16,6 +16,9 @@ NODES = (
     ("worker3", "192.168.11.13", 5001, "WORKER3_API_TOKEN", "worker"),
     ("worker4", "192.168.11.75", 5001, "WORKER4_API_TOKEN", "worker"),
     ("worker5", "192.168.11.76", 5001, "WORKER5_API_TOKEN", "worker"),
+    ("worker6", "192.168.11.97", 5001, "WORKER6_API_TOKEN", "worker"),
+    ("worker7", "192.168.11.100", 5001, "WORKER7_API_TOKEN", "worker"),
+    ("worker8", "192.168.11.99", 5001, "WORKER8_API_TOKEN", "worker"),
 )
 
 

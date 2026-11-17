@@ -9,14 +9,17 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $repoRoot '.env'
-$requiredTokens = @('MASTER_API_TOKEN', 'WORKER1_API_TOKEN', 'WORKER2_API_TOKEN', 'WORKER3_API_TOKEN', 'WORKER4_API_TOKEN', 'WORKER5_API_TOKEN')
+$requiredTokens = @('MASTER_API_TOKEN', 'WORKER1_API_TOKEN', 'WORKER2_API_TOKEN', 'WORKER3_API_TOKEN', 'WORKER4_API_TOKEN', 'WORKER5_API_TOKEN', 'WORKER6_API_TOKEN', 'WORKER7_API_TOKEN', 'WORKER8_API_TOKEN')
 $nodes = @(
     @{ Id = 'master'; Role = 'master'; Ip = '192.168.11.15'; User = 'hammad'; Port = 5002; TokenName = 'MASTER_API_TOKEN' },
     @{ Id = 'worker1'; Role = 'worker'; Ip = '192.168.11.123'; User = 'hammad'; Port = 5001; TokenName = 'WORKER1_API_TOKEN' },
     @{ Id = 'worker2'; Role = 'worker'; Ip = '192.168.11.14'; User = 'hammad'; Port = 5001; TokenName = 'WORKER2_API_TOKEN' },
     @{ Id = 'worker3'; Role = 'worker'; Ip = '192.168.11.13'; User = 'hammad'; Port = 5001; TokenName = 'WORKER3_API_TOKEN' },
     @{ Id = 'worker4'; Role = 'worker'; Ip = '192.168.11.75'; User = 'jetson5'; Port = 5001; TokenName = 'WORKER4_API_TOKEN' },
-    @{ Id = 'worker5'; Role = 'worker'; Ip = '192.168.11.76'; User = 'hammad'; Port = 5001; TokenName = 'WORKER5_API_TOKEN' }
+    @{ Id = 'worker5'; Role = 'worker'; Ip = '192.168.11.76'; User = 'hammad'; Port = 5001; TokenName = 'WORKER5_API_TOKEN' },
+    @{ Id = 'worker6'; Role = 'worker'; Ip = '192.168.11.97'; User = 'hammad'; Port = 5001; TokenName = 'WORKER6_API_TOKEN' },
+    @{ Id = 'worker7'; Role = 'worker'; Ip = '192.168.11.100'; User = 'hammad'; Port = 5001; TokenName = 'WORKER7_API_TOKEN' },
+    @{ Id = 'worker8'; Role = 'worker'; Ip = '192.168.11.99'; User = 'hammad'; Port = 5001; TokenName = 'WORKER8_API_TOKEN' }
 )
 
 if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
@@ -155,5 +158,5 @@ finally {
     }
 }
 
-Write-Output 'Status services were installed on the master and all five workers.'
+Write-Output 'Status services were installed on the selected nodes.'
 Write-Output "Local API tokens are stored in the ignored file: $envPath"

@@ -637,7 +637,6 @@ class Supervisor:
             data = _unwrap_result(
                 self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
             ).get("data") or {}
-            state["last_trained_architecture"] = None  # a pruned model is not pruned again
             return _group_id(data), {
                 "topology": topology,
                 "rounds": rounds,
@@ -769,6 +768,16 @@ class Supervisor:
             return
         summary = summarize_group(group)
         summary["step"] = active.get("step")
+        if summary.get("kind") == "decentralized":
+            # The master records the requested architecture name; workers train the
+            # installed model, which the supervisor tracks, so label the run with it.
+            if active.get("step") == "prune_model" and isinstance(state.get("pruning"), dict):
+                summary["architecture"] = state["pruning"].get("architecture_id")
+                summary["parameter_count"] = state["pruning"].get("parameters_after")
+            elif isinstance(state.get("last_trained_architecture"), dict):
+                deployed = state["last_trained_architecture"]
+                summary["architecture"] = deployed.get("id") or "baseline"
+                summary["parameter_count"] = deployed.get("parameter_count")
         summary["completed_at"] = self._clock().isoformat()
         if status != "completed":
             state["experiments"].append(summary)

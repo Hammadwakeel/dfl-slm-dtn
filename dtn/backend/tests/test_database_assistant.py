@@ -4,110 +4,58 @@ from app.db.models import (
     AgentRun,
     AgentRunEvent,
     AutonomyExecutionEvent,
-    AutonomyLoop,
     Device,
 )
 
 
-def test_database_assistant_answers_from_agent_run_records(client, auth_headers) -> None:
+def _supervisor_run(run_id: str, status: str, timestamp: datetime, **state: object) -> AgentRun:
+    return AgentRun(
+        id=run_id,
+        task="Reach 95.00% mean worker validation accuracy on mnist",
+        status=status,
+        stage="monitoring" if status == "running" else "finished",
+        progress=40,
+        selected_task="run_nas" if status == "running" else None,
+        selected_reason="NAS should find a stronger model." if status == "running" else None,
+        goal={"dataset": "mnist", "target_accuracy": 0.95},
+        state={"completed_steps": [], **state},
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+
+
+def test_database_assistant_reports_the_active_supervisor_run(client, auth_headers) -> None:
     timestamp = datetime.now(timezone.utc)
     with client.app.state.session_factory.begin() as session:
-        run = AgentRun(
-            id="run-database-fact",
-            task="Inspect worker health",
-            status="running",
-            stage="executing_tool",
-            progress=40,
-            selected_task="get_status",
-            selected_reason="The task requests current worker health.",
-            created_at=timestamp,
-            updated_at=timestamp,
+        session.add(
+            _supervisor_run(
+                "run-current",
+                "running",
+                timestamp,
+                best={"validation_accuracy": 0.9124, "step": "baseline_training", "group_id": "g-1"},
+                active={"step": "run_nas", "group_id": "nas-1", "progress": 0.5},
+            )
         )
-        session.add(run)
+        session.add(_supervisor_run("run-old", "stopped", timestamp))
         session.flush()
         session.add(
             AgentRunEvent(
-                run_id=run.id,
-                event_type="tool_started",
-                message="Agent started get_status.",
+                run_id="run-current",
+                event_type="decision",
+                message="run_nas chosen by slm: NAS should find a stronger model.",
                 details={},
                 created_at=timestamp,
             )
         )
-
-    response = client.post(
-        "/api/database-assistant/ask",
-        headers=auth_headers,
-        json={"question": "What is happening with the agent right now?"},
-    )
-
-    assert response.status_code == 200
-    result = response.json()
-    assert "Agent run run-database-fact: running at stage executing_tool (40%)" in result["answer"]
-    assert "The task requests current worker health." in result["answer"]
-    assert "Agent started get_status." in result["answer"]
-    assert any(source["record_id"] == "run-database-fact" for source in result["sources"])
-
-
-def test_database_assistant_reports_only_active_workflow_progress(
-    client,
-    auth_headers,
-) -> None:
-    timestamp = datetime.now(timezone.utc)
-    workflow_id = "workflow-current-progress"
-    with client.app.state.session_factory.begin() as session:
-        session.add(
-            AutonomyLoop(
-                id="loop-current-progress",
-                status="RUNNING",
-                max_iterations=100,
-                iteration=2,
-                time_limit_seconds=86400,
-                stop_rule="target_metric",
-                target_metric=0.8,
-                best_metric=0.6942,
-                no_improvement_count=0,
-                workflow_id=workflow_id,
-                created_at=timestamp,
-                deadline_at=timestamp,
-                updated_at=timestamp,
-            )
-        )
         session.add(
             AutonomyExecutionEvent(
-                action="start_training",
+                action="enable_nas",
                 mode="AGENT",
                 timestamp=timestamp,
                 result_status="executed",
-                dataset_name="cifar10",
-                run_id="cifar-group-current",
-                details={
-                    "parameters": {
-                        "dataset_name": "cifar10",
-                        "rounds": 5,
-                        "epochs": 10,
-                    },
-                    "reason": "Retrain the selected NAS architecture.",
-                    "evidence": {"workflow_id": workflow_id},
-                },
-            )
-        )
-        session.add(
-            AutonomyLoop(
-                id="loop-old-stopped",
-                status="STOPPED",
-                max_iterations=100,
-                iteration=34,
-                time_limit_seconds=86400,
-                stop_rule="target_metric",
-                target_metric=0.8,
-                best_metric=0.236,
-                no_improvement_count=0,
-                workflow_id="workflow-old",
-                created_at=timestamp,
-                deadline_at=timestamp,
-                updated_at=timestamp,
-                failure_reason="Stopped by user.",
+                dataset_name="mnist",
+                run_id="nas-1",
+                details={"parameters": {"dataset_name": "mnist"}, "evidence": {"source": "supervisor", "run_id": "run-current"}},
             )
         )
 
@@ -120,15 +68,30 @@ def test_database_assistant_reports_only_active_workflow_progress(
     assert response.status_code == 200
     result = response.json()
     answer = result["answer"]
-    assert "loop-current-progress is RUNNING" in answer
-    assert "2 experiment(s) recorded" in answer
-    assert "Best recorded accuracy: 69.42%" in answer
-    assert "Latest recorded workflow action: start_training (executed) for cifar10" in answer
-    assert "experiment/group ID cifar-group-current" in answer
-    assert "rounds=5, epochs=10" in answer
-    assert "does not confirm that its experiment is still running or has completed" in answer
-    assert "loop-old-stopped" not in answer
-    assert any(source["record_type"] == "autonomy_execution" for source in result["sources"])
+    assert "Supervisor run run-current: running at stage monitoring (40%)" in answer
+    assert "Best mean worker validation accuracy: 91.24%" in answer
+    assert "Active experiment: run_nas (group nas-1), 50% of rounds done." in answer
+    assert "NAS should find a stronger model." in answer
+    assert "Recorded action enable_nas (executed)" in answer
+    assert "run-old" not in answer
+    assert any(source["record_type"] == "supervisor_run" for source in result["sources"])
+
+
+def test_database_assistant_history_includes_finished_runs(client, auth_headers) -> None:
+    timestamp = datetime.now(timezone.utc)
+    with client.app.state.session_factory.begin() as session:
+        run = _supervisor_run("run-finished", "completed", timestamp)
+        run.result = {"outcome": "objective_achieved", "summary": "Accuracy 0.96 meets the target."}
+        session.add(run)
+
+    response = client.post(
+        "/api/database-assistant/ask",
+        headers=auth_headers,
+        json={"question": "What happened in the last agent run?"},
+    )
+
+    assert response.status_code == 200
+    assert "Outcome: objective_achieved - Accuracy 0.96 meets the target." in response.json()["answer"]
 
 
 def test_database_assistant_reports_worker_status_without_exposing_credentials(

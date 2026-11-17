@@ -1,21 +1,9 @@
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
-
 import pytest
 from fastapi.testclient import TestClient
 from jsonschema import ValidationError
 
-from app.db.models import (
-    AutonomyDecision,
-    AutonomyExecutionEvent,
-    AutonomyLoop,
-    Base,
-    SlmConversation,
-    SlmMessage,
-)
-from app.db.session import create_db_engine, create_session_factory
-from app.services.autonomy import ACTION_VALIDATOR, AutonomyController, AutonomyError
-from common.agent_tools import agent_tool_action
+from app.db.models import AutonomyExecutionEvent
+from app.services.autonomy import ACTION_VALIDATOR
 from common.dataset_nas import build_dataset_architecture
 
 
@@ -109,24 +97,6 @@ def test_model_actions_accept_creation_design_and_installed_manifest() -> None:
             },
         }
     )
-
-
-def test_agent_tool_arguments_coerce_schema_declared_scalar_strings() -> None:
-    action = agent_tool_action(
-        "start_training",
-        {
-            "dataset_name": "cifar10",
-            "rounds": "1",
-            "epochs": "1",
-        },
-    )
-
-    assert action["parameters"] == {
-        "dataset_name": "cifar10",
-        "rounds": 1,
-        "epochs": 1,
-    }
-    ACTION_VALIDATOR.validate(action)
 
 
 def test_preprocess_action_accepts_official_cifar10() -> None:
@@ -227,7 +197,8 @@ def test_autonomy_routes_require_authentication(client: TestClient) -> None:
         ("/api/autonomy/state", "get"),
         ("/api/autonomy/stop", "post"),
         ("/api/autonomy/reset-stop", "post"),
-        ("/api/autonomy/loops", "post"),
+        ("/api/autonomy/dispatch", "post"),
+        ("/api/autonomy/history", "get"),
     ):
         response = client.request(method.upper(), path, json={})
         assert response.status_code == 401
@@ -259,195 +230,6 @@ def test_autonomy_history_limit_bounds_the_combined_event_list(
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["details"]["parameters"] == {"rounds": 5}
-
-
-def test_autonomy_loop_preserves_workflow_run_identifier(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    workflow_id = str(uuid4())
-
-    response = client.post(
-        "/api/autonomy/loops",
-        json={
-            "max_iterations": 2,
-            "time_limit_seconds": 60,
-            "stop_rule": "max_iterations",
-            "workflow_id": workflow_id,
-        },
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 200
-    assert response.json()["workflow_id"] == workflow_id
-    assert client.get("/api/autonomy/state", headers=auth_headers).json()["loops"][0][
-        "workflow_id"
-    ] == workflow_id
-
-
-def test_delete_workflow_removes_its_saved_chat_actions_and_loop(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    now = datetime.now(timezone.utc)
-    workflow_id = str(uuid4())
-    conversation_id = str(uuid4())
-    with client.app.state.session_factory.begin() as session:
-        session.add(
-            AutonomyLoop(
-                id=str(uuid4()),
-                workflow_id=workflow_id,
-                status="STOPPED",
-                max_iterations=2,
-                iteration=1,
-                time_limit_seconds=60,
-                stop_rule="max_iterations",
-                target_metric=None,
-                best_metric=0.5,
-                no_improvement_count=0,
-                failure_reason="finished",
-                created_at=now,
-                deadline_at=now + timedelta(seconds=60),
-                updated_at=now,
-            )
-        )
-        session.add(
-            SlmConversation(
-                id=conversation_id,
-                workflow_id=workflow_id,
-                mode="agent",
-                title="Workflow chat",
-                created_at=now,
-                updated_at=now,
-                messages=[
-                    SlmMessage(
-                        role="assistant",
-                        content="Completed a training action.",
-                        created_at=now,
-                    )
-                ],
-            )
-        )
-    client.app.state.autonomy._record_execution_event(
-        _set_rounds(),
-        "executed",
-        mode="AGENT",
-        reason="Workflow action",
-        evidence={"workflow_id": workflow_id, "conversation_id": conversation_id},
-    )
-    client.app.state.autonomy._record_execution_event(
-        _set_rounds(),
-        "executed",
-        mode="FULL_ACCESS",
-        reason="Workflow setup action",
-        evidence={"source": "agent_workflow", "workflow_id": workflow_id},
-    )
-
-    response = client.request(
-        "DELETE",
-        "/api/autonomy/workflows",
-        json={"workflow_ids": [workflow_id], "conversation_ids": [conversation_id]},
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "deleted_workflows": 1,
-        "deleted_conversations": 1,
-        "deleted_actions": 2,
-    }
-    with client.app.state.session_factory() as session:
-        assert session.query(AutonomyLoop).filter_by(workflow_id=workflow_id).count() == 0
-        assert session.get(SlmConversation, conversation_id) is None
-        assert session.query(AutonomyExecutionEvent).count() == 0
-
-
-def test_delete_legacy_unlinked_workflow_removes_only_unlinked_setup_actions(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    controller = client.app.state.autonomy
-    controller._record_execution_event(
-        _set_rounds(),
-        "executed",
-        mode="FULL_ACCESS",
-        reason="Unlinked setup action",
-        evidence={"source": "agent_workflow"},
-    )
-    controller._record_execution_event(
-        _set_rounds(),
-        "executed",
-        mode="FULL_ACCESS",
-        reason="Unrelated action",
-        evidence={"source": "other"},
-    )
-    workflow_id = str(uuid4())
-    controller._record_execution_event(
-        _set_rounds(),
-        "executed",
-        mode="FULL_ACCESS",
-        reason="Linked setup action",
-        evidence={"source": "agent_workflow", "workflow_id": workflow_id},
-    )
-
-    response = client.request(
-        "DELETE",
-        "/api/autonomy/workflows",
-        json={"workflow_ids": ["legacy-unlinked"]},
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "deleted_workflows": 0,
-        "deleted_conversations": 0,
-        "deleted_actions": 1,
-    }
-    with client.app.state.session_factory() as session:
-        remaining = session.query(AutonomyExecutionEvent).all()
-        assert len(remaining) == 2
-        remaining_evidence = [event.details["evidence"] for event in remaining]
-        assert {"source": "other"} in remaining_evidence
-        assert {"source": "agent_workflow", "workflow_id": workflow_id} in remaining_evidence
-
-
-def test_delete_workflow_rejects_a_running_loop(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    now = datetime.now(timezone.utc)
-    workflow_id = str(uuid4())
-    loop_id = str(uuid4())
-    with client.app.state.session_factory.begin() as session:
-        session.add(
-            AutonomyLoop(
-                id=loop_id,
-                workflow_id=workflow_id,
-                status="RUNNING",
-                max_iterations=2,
-                iteration=0,
-                time_limit_seconds=60,
-                stop_rule="max_iterations",
-                target_metric=None,
-                best_metric=None,
-                no_improvement_count=0,
-                failure_reason=None,
-                created_at=now,
-                deadline_at=now + timedelta(seconds=60),
-                updated_at=now,
-            )
-        )
-
-    response = client.request(
-        "DELETE",
-        "/api/autonomy/workflows",
-        json={"workflow_ids": [workflow_id]},
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 409
-    assert "running workflow cannot be deleted" in response.json()["detail"]
-    assert client.app.state.autonomy.state()["loops"][0]["id"] == loop_id
 
 
 def test_dispatch_executes_immediately_and_has_no_approval_controls(
@@ -571,81 +353,3 @@ def test_global_stop_blocks_writes_but_allows_reads_and_reset(
     assert len(executed) == 1
     assert client.post("/api/autonomy/reset-stop", headers=auth_headers).json()["stop_requested"] is False
 
-
-def test_loops_stop_on_maximum_target_and_no_improvement(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    controller = client.app.state.autonomy
-    maximum = controller.start_loop(max_iterations=1, time_limit_seconds=60)
-    result = controller.record_iteration(maximum["id"], metric=0.5)
-    assert result["status"] == "STOPPED"
-    assert result["failure_reason"] == "maximum iterations reached"
-
-    targeted = controller.start_loop(
-        max_iterations=5,
-        time_limit_seconds=60,
-        stop_rule="target_metric",
-        target_metric=0.8,
-    )
-    result = controller.record_iteration(targeted["id"], metric=0.8)
-    assert result["failure_reason"] == "target metric reached"
-
-    plateau = controller.start_loop(
-        max_iterations=5,
-        time_limit_seconds=60,
-        stop_rule="no_improvement_2",
-    )
-    controller.record_iteration(plateau["id"], metric=0.5)
-    controller.record_iteration(plateau["id"], metric=0.4)
-    result = controller.record_iteration(plateau["id"], metric=0.3)
-    assert result["failure_reason"] == "no improvement for two iterations"
-    assert client.get("/api/autonomy/state", headers=auth_headers).json()["loops"][0]["id"] == plateau["id"]
-
-
-def test_loop_worker_failure_and_global_stop_are_recorded(
-    client: TestClient,
-    auth_headers: dict[str, str],
-) -> None:
-    controller = client.app.state.autonomy
-    loop = controller.start_loop(max_iterations=5, time_limit_seconds=60)
-    paused = controller.record_iteration(loop["id"], worker_failure="worker2 timed out")
-    assert paused["status"] == "PAUSED"
-    assert paused["failure_reason"] == "worker2 timed out"
-
-    another = controller.start_loop(max_iterations=5, time_limit_seconds=60)
-    stopped = client.post("/api/autonomy/stop", headers=auth_headers)
-    assert stopped.json()["loops"][0]["status"] == "STOPPED"
-    with pytest.raises(AutonomyError, match="Global STOP"):
-        controller.start_loop(max_iterations=1, time_limit_seconds=30)
-    client.post("/api/autonomy/reset-stop", headers=auth_headers)
-    reopened = AutonomyController(controller._sessions, lambda action: {"ok": True})
-    assert any(loop["id"] == another["id"] for loop in reopened.state()["loops"])
-
-
-def test_loop_time_limit_stops_iteration(
-    client: TestClient,
-) -> None:
-    clock = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
-    controller = AutonomyController(
-        client.app.state.session_factory,
-        lambda action: {"ok": True},
-        clock=lambda: clock[0],
-    )
-    loop = controller.start_loop(max_iterations=5, time_limit_seconds=1)
-    clock[0] += timedelta(seconds=2)
-    stopped = controller.record_iteration(loop["id"], metric=0.4)
-    assert stopped["status"] == "STOPPED"
-    assert stopped["failure_reason"] == "time limit reached"
-
-
-def test_starting_and_stopping_loops_persist_with_controller_restart(
-    client: TestClient,
-) -> None:
-    controller = client.app.state.autonomy
-    loop = controller.start_loop(max_iterations=3, time_limit_seconds=60)
-    reopened = AutonomyController(controller._sessions, lambda action: {"ok": True})
-    state = reopened.state()
-    assert state["loops"][0]["id"] == loop["id"]
-    assert state["loops"][0]["status"] == "RUNNING"
-    assert reopened.stop_loop(loop["id"], "finished by operator")["status"] == "STOPPED"

@@ -184,7 +184,6 @@ try {
     }
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'common\__init__.py') `
-        (Join-Path $repoRoot 'common\agent_tools.py') `
         (Join-Path $repoRoot 'common\cifar_model.py') `
         (Join-Path $repoRoot 'common\dataset_nas.py') `
         (Join-Path $repoRoot 'common\nas.py') `

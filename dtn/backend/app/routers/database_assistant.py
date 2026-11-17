@@ -13,7 +13,6 @@ from app.db.models import (
     AgentRun,
     AgentRunEvent,
     AutonomyExecutionEvent,
-    AutonomyLoop,
     Device,
 )
 
@@ -69,155 +68,106 @@ def _worker_answer(question: str, request: Request) -> dict[str, Any]:
     return {"answer": "\n".join(lines), "sources": sources}
 
 
+ACTIVE_RUN_STATUSES = ("queued", "running", "stopping")
+
+
+def _run_lines(run: AgentRun) -> list[str]:
+    state = run.state or {}
+    lines = [
+        f"Supervisor run {run.id}: {run.status} at stage {run.stage} ({run.progress}%); goal: {run.task}."
+    ]
+    best = state.get("best")
+    if isinstance(best, dict) and isinstance(best.get("validation_accuracy"), (int, float)):
+        lines.append(
+            f" Best mean worker validation accuracy: {best['validation_accuracy'] * 100:.2f}% "
+            f"(from {best.get('step')}, experiment {best.get('group_id')})."
+        )
+    active = state.get("active")
+    if isinstance(active, dict) and active.get("group_id"):
+        progress = active.get("progress")
+        lines.append(
+            f" Active experiment: {active.get('step')} (group {active['group_id']})"
+            + (f", {progress * 100:.0f}% of rounds done." if isinstance(progress, (int, float)) else ".")
+        )
+    if state.get("waiting_reason") and run.status in ACTIVE_RUN_STATUSES:
+        lines.append(f" Waiting: {state['waiting_reason']}.")
+    if run.selected_task:
+        detail = f" Current step: {run.selected_task}."
+        if run.selected_reason:
+            detail += f" Recorded reason: {run.selected_reason}"
+        lines.append(detail)
+    result = run.result or {}
+    if result.get("outcome"):
+        lines.append(f" Outcome: {result['outcome']} - {result.get('summary', '')}")
+    elif run.error:
+        lines.append(f" Recorded error: {run.error}")
+    return lines
+
+
 def _activity_answer(request: Request, *, active_only: bool) -> dict[str, Any]:
     with request.app.state.session_factory() as session:
-        run_query = select(AgentRun).order_by(AgentRun.created_at.desc()).limit(8)
-        if active_only:
-            run_query = select(AgentRun).where(
-                AgentRun.status.in_(("queued", "running", "stop_requested"))
-            ).order_by(AgentRun.created_at.desc())
+        run_query = select(AgentRun).where(AgentRun.goal.is_not(None)).order_by(AgentRun.created_at.desc())
+        run_query = (
+            run_query.where(AgentRun.status.in_(ACTIVE_RUN_STATUSES))
+            if active_only
+            else run_query.limit(5)
+        )
         runs = session.scalars(run_query).all()
-        loop_query = select(AutonomyLoop).order_by(AutonomyLoop.created_at.desc()).limit(8)
-        if active_only:
-            loop_query = select(AutonomyLoop).where(
-                AutonomyLoop.status == "RUNNING"
-            ).order_by(AutonomyLoop.created_at.desc())
-        loops = session.scalars(loop_query).all()
         events: list[AgentRunEvent] = []
         if runs:
             events = session.scalars(
                 select(AgentRunEvent)
                 .where(AgentRunEvent.run_id.in_([run.id for run in runs]))
-                .order_by(AgentRunEvent.created_at.desc())
-                .limit(16)
+                .order_by(AgentRunEvent.created_at.desc(), AgentRunEvent.id.desc())
+                .limit(12)
             ).all()
+        execution_query = select(AutonomyExecutionEvent).order_by(
+            AutonomyExecutionEvent.timestamp.desc(),
+            AutonomyExecutionEvent.id.desc(),
+        )
         if active_only:
-            active_workflow_ids = [
-                loop.workflow_id for loop in loops if loop.workflow_id is not None
-            ]
-            executions = (
-                session.scalars(
-                    select(AutonomyExecutionEvent)
-                    .where(
-                        AutonomyExecutionEvent.details["evidence"]["workflow_id"]
-                        .as_string()
-                        .in_(active_workflow_ids)
-                    )
-                    .order_by(
-                        AutonomyExecutionEvent.timestamp.desc(),
-                        AutonomyExecutionEvent.id.desc(),
-                    )
-                    .limit(24)
-                ).all()
-                if active_workflow_ids
-                else []
-            )
-        else:
-            executions = session.scalars(
-                select(AutonomyExecutionEvent)
-                .order_by(AutonomyExecutionEvent.timestamp.desc(), AutonomyExecutionEvent.id.desc())
-                .limit(8)
-            ).all()
+            run_ids = [run.id for run in runs]
+            execution_query = execution_query.where(
+                AutonomyExecutionEvent.details["evidence"]["run_id"].as_string().in_(run_ids)
+            ) if run_ids else None
+        executions = session.scalars(execution_query.limit(8)).all() if execution_query is not None else []
+        for run in runs:
+            session.expunge(run)
 
     lines: list[str] = []
     sources: list[dict[str, str]] = []
     for run in runs:
-        lines.append(
-            f"Agent run {run.id}: {run.status} at stage {run.stage} "
-            f"({run.progress}%); task: {run.task}."
-        )
-        if run.selected_task:
-            detail = f" Selected action: {run.selected_task}."
-            if run.selected_reason:
-                detail += f" Recorded reason: {run.selected_reason}"
-            lines.append(detail)
-        if run.error:
-            lines.append(f" Recorded error: {run.error}")
+        lines.extend(_run_lines(run))
+        sources.append({"record_type": "supervisor_run", "record_id": run.id, "recorded_at": _time(run.updated_at)})
+    for event in executions:
+        detail = f"Recorded action {event.action} ({event.result_status}) on {_time(event.timestamp)}"
+        if event.dataset_name:
+            detail += f" for {event.dataset_name}"
+        if event.run_id:
+            detail += f"; experiment/group ID {event.run_id}"
+        parameters = (event.details or {}).get("parameters")
+        if isinstance(parameters, dict):
+            settings = [f"{key}={parameters[key]}" for key in ("rounds", "epochs", "topology") if key in parameters]
+            if settings:
+                detail += "; " + ", ".join(settings)
+        lines.append(detail + ".")
         sources.append({
-            "record_type": "agent_run",
-            "record_id": run.id,
-            "recorded_at": _time(run.updated_at),
+            "record_type": "autonomy_execution",
+            "record_id": str(event.id),
+            "recorded_at": _time(event.timestamp),
         })
-    for loop in loops:
-        rule = loop.stop_rule.replace("_", " ")
-        line = (
-            f"Autonomy loop {loop.id} is {loop.status}; "
-            f"{loop.iteration} experiment(s) recorded, stop criterion: {rule}."
-        )
-        if loop.target_metric is not None:
-            line += f" Target accuracy: {loop.target_metric * 100:.2f}%."
-        if loop.best_metric is not None:
-            line += f" Best recorded accuracy: {loop.best_metric * 100:.2f}%."
-        if loop.failure_reason:
-            line += f" Recorded reason: {loop.failure_reason}."
-        lines.append(line)
-        sources.append({
-            "record_type": "autonomy_loop",
-            "record_id": loop.id,
-            "recorded_at": _time(loop.updated_at),
-        })
-    if active_only:
-        workflow_events = executions[:8]
-        for event in workflow_events:
-            action_detail = f"Latest recorded workflow action: {event.action} ({event.result_status})"
-            if event.dataset_name:
-                action_detail += f" for {event.dataset_name}"
-            if event.run_id:
-                action_detail += f"; experiment/group ID {event.run_id}"
-            parameters = (event.details or {}).get("parameters")
-            if isinstance(parameters, dict):
-                settings = [
-                    f"{key}={parameters[key]}"
-                    for key in ("rounds", "epochs", "topology")
-                    if key in parameters
-                ]
-                if settings:
-                    action_detail += f"; " + ", ".join(settings)
-            reason = (event.details or {}).get("reason")
-            if isinstance(reason, str) and reason:
-                action_detail += f". Agent rationale: {reason[:300]}"
-            if event.result_status == "executed":
-                action_detail += (
-                    ". The action was accepted; this record alone does not confirm "
-                    "that its experiment is still running or has completed."
-                )
-            lines.append(action_detail)
-            sources.append({
-                "record_type": "autonomy_execution",
-                "record_id": str(event.id),
-                "recorded_at": _time(event.timestamp),
-            })
-        if loops:
-            lines.append(
-                "The coordinator database records loop counts and actions, but not live per-worker "
-                "epochs or experiment status. Use the Agent Runs page for live worker progress."
-            )
-            if not workflow_events:
-                lines.append("No workflow-linked action record is available yet.")
     for event in events:
-        lines.append(f"Agent log ({_time(event.created_at)}): {event.message}")
+        lines.append(f"Supervisor log ({_time(event.created_at)}): {event.message}")
         sources.append({
             "record_type": "agent_run_event",
             "record_id": str(event.id),
             "recorded_at": _time(event.created_at),
         })
-    if not active_only:
-        for event in executions:
-            lines.append(
-                f"Recorded action {event.action} ({event.result_status}) "
-                f"on {_time(event.timestamp)}"
-                f"{f' for {event.dataset_name}' if event.dataset_name else ''}."
-            )
-            sources.append({
-                "record_type": "autonomy_execution",
-                "record_id": str(event.id),
-                "recorded_at": _time(event.timestamp),
-            })
     if not lines:
         answer = (
-            "The coordinator database has no active Agent runs or autonomy loops."
+            "The coordinator database has no active supervisor runs."
             if active_only
-            else "The coordinator database has no Agent-run or autonomy activity recorded yet."
+            else "The coordinator database has no supervisor-run or action history recorded yet."
         )
     else:
         answer = "\n".join(lines)
@@ -245,7 +195,7 @@ def ask_database(question: DatabaseQuestion, request: Request) -> dict[str, Any]
     return {
         "answer": (
             "I can only answer from records stored in the coordinator database. "
-            "Ask about worker/device status, active Agent runs, checkpoints, or recent actions and experiments."
+            "Ask about worker/device status, the supervisor run, or recent actions and experiments."
         ),
         "sources": [],
     }

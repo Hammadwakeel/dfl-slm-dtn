@@ -20,12 +20,11 @@ from app.routers.devices import router as devices_router
 from app.routers.autonomy import router as autonomy_router
 from app.routers.database_assistant import router as database_assistant_router
 from app.routers.datasets import router as datasets_router
-from app.routers.agent_runs import router as agent_runs_router
 from app.routers.slm import router as slm_router
+from app.routers.supervisor import router as supervisor_router
 from app.routers.ws import router as websocket_router
 from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
-from app.services.agent_runs import AgentRunManager
 from app.services.cluster import cluster_nodes, sync_training_registry
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
@@ -33,8 +32,10 @@ from app.services.events import EventManager
 from app.services.initial_models import InitialModelError, create_and_distribute_initial_model
 from app.services.poller import DevicePoller
 from app.services.preprocessing import PreprocessingError
+from app.services.supervisor import Supervisor
+from app.services.worker_memory import cleanup_worker_memory_cluster
 from app.services.worker_shards import WorkerShardError
-from app.routers.slm import _forward
+from app.routers.slm import _forward, _record_completed_master_action
 
 LOGGER = logging.getLogger(__name__)
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -54,11 +55,13 @@ def create_app(
     *,
     run_poller: bool = True,
     run_migrations: bool = True,
+    run_supervisor: bool | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
+    if run_supervisor is None:
+        run_supervisor = run_poller
     engine = create_db_engine(resolved_settings.database_url)
     sessions = create_session_factory(engine)
-    agent_runs = AgentRunManager(sessions, resolved_settings.database_url)
     events = EventManager()
     poller = DevicePoller(resolved_settings, sessions, events)
     dataset_store = DatasetStore(resolved_settings.dataset_root)
@@ -111,11 +114,45 @@ def create_app(
             return {"available": True, "data": report}
         return _forward(resolved_settings, "/command", payload=action)
 
+    def supervisor_dispatch(action: dict[str, Any], reason: str, run_id: str) -> dict[str, Any]:
+        dispatched = app.state.autonomy.dispatch(
+            action,
+            reason=reason,
+            evidence={"source": "supervisor", "run_id": run_id},
+            mode="AGENT",
+        )
+        result = dispatched.get("result")
+        if isinstance(result, dict) and result.get("available") is True:
+            # Keep the master's action history (used by human-mode advisory chat) complete.
+            _record_completed_master_action(resolved_settings, action, dispatched)
+        return dispatched
+
+    def supervisor_model_call(
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
+        else:
+            payload["allow_tools"] = False
+        message = _forward(resolved_settings, "/agent/model", payload=payload).get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("The SLM master returned an invalid agent model response")
+        return message
+
+    def supervisor_memory_cleanup() -> dict[str, Any]:
+        workers = tuple(
+            node
+            for node in cluster_nodes(resolved_settings, sessions)
+            if node.role == "worker"
+        )
+        return cleanup_worker_memory_cluster(workers, timeout_seconds=30.0)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if run_migrations:
             _run_migrations(engine)
-        agent_runs.recover_interrupted_runs()
         app.state.autonomy = AutonomyController(
             sessions,
             execute_action,
@@ -126,9 +163,21 @@ def create_app(
             sessions,
             stop_requested=lambda: bool(app.state.autonomy.state()["stop_requested"]),
         )
+        app.state.supervisor = Supervisor(
+            sessions,
+            dispatch=supervisor_dispatch,
+            master_results=lambda: _forward(resolved_settings, "/results"),
+            model_call=supervisor_model_call,
+            memory_cleanup=supervisor_memory_cleanup,
+            min_free_memory_mb=resolved_settings.supervisor_min_free_memory_mb,
+            tick_seconds=resolved_settings.supervisor_tick_seconds,
+        )
+        if run_supervisor:
+            app.state.supervisor.start()
         if run_poller:
             await poller.start()
         yield
+        app.state.supervisor.shutdown()
         app.state.apg_jobs.shutdown()
         if run_poller:
             await poller.stop()
@@ -147,7 +196,7 @@ def create_app(
     app.state.poller = poller
     app.state.autonomy = None
     app.state.apg_jobs = None
-    app.state.agent_runs = agent_runs
+    app.state.supervisor = None
     app.state.datasets = dataset_store
 
     app.add_middleware(
@@ -163,7 +212,7 @@ def create_app(
     app.include_router(database_assistant_router)
     app.include_router(datasets_router)
     app.include_router(slm_router)
-    app.include_router(agent_runs_router)
+    app.include_router(supervisor_router)
     app.include_router(websocket_router)
 
     @app.get("/healthz", tags=["health"])

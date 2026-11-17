@@ -21,7 +21,7 @@ import ModelStudioPage from "./pages/ModelStudioPage";
 import ModelDetailsPage from "./pages/ModelDetailsPage";
 import DevicesPage from "./pages/DevicesPage";
 import WorkerOperationsPage from "./pages/WorkerOperationsPage";
-import AgentRunsPage from "./pages/AgentRunsPage";
+import AgentPage from "./pages/AgentPage";
 
 const navigation = [
   { id: "dashboard", label: "Dashboard" },
@@ -32,8 +32,8 @@ const navigation = [
   { id: "datasets", label: "Datasets" },
   { id: "models", label: "Model Studio" },
   { id: "search", label: "Architecture Search" },
+  { id: "agent", label: "Agent Supervisor" },
   { id: "assistant", label: "SLM Assistant" },
-  { id: "agent-runs", label: "Agent Runs" },
 ] as const;
 type NavigationIconName = (typeof navigation)[number]["id"] | "activity" | "network" | "nodes" | "expand" | "collapse" | "signOut";
 const TOPOLOGY_SMOKE_GROUP_KEY = "dtn-topology-smoke-group-id";
@@ -56,7 +56,7 @@ function NavigationIcon({ name }: { name: NavigationIconName }) {
     models: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" /><path d="m4.5 7.7 7.5 4.4 7.5-4.4M12 12v9" /></>,
     search: <><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4.5 4.5M10.8 7.5v6.6m-3.3-3.3h6.6" /></>,
     assistant: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14ZM5 3l.7 1.8L7.5 5.5l-1.8.7L5 8l-.7-1.8-1.8-.7 1.8-.7L5 3Z" /></>,
-    "agent-runs": <><path d="M5 4h14v4H5zM5 10h14v4H5zM5 16h9v4H5z" /><path d="m17 18 2 2 3-4" /></>,
+    agent: <><path d="M5 4h14v4H5zM5 10h14v4H5zM5 16h9v4H5z" /><path d="m17 18 2 2 3-4" /></>,
     nodes: <><circle cx="6" cy="12" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="m8.6 10.7 6.8-3.4m-6.8 6 6.8 3.4" /></>,
     activity: <><path d="M3 12h4l3-8 4 16 3-8h4" /></>,
     network: <><path d="M12 3v5m0 8v5M3 12h5m8 0h5" /><circle cx="12" cy="12" r="4" /><circle cx="12" cy="3" r="1" /><circle cx="12" cy="21" r="1" /><circle cx="3" cy="12" r="1" /><circle cx="21" cy="12" r="1" /></>,
@@ -322,12 +322,12 @@ export default function App() {
         )}
         {visitedPages.has("assistant") && (
           <div hidden={page !== "assistant"}>
-            <AssistantPage token={token} />
+            <AssistantPage token={token} onOpenAgent={() => navigateTo("agent")} />
           </div>
         )}
-        {visitedPages.has("agent-runs") && (
-          <div hidden={page !== "agent-runs"}>
-            <AgentRunsPage token={token} active={page === "agent-runs"} />
+        {visitedPages.has("agent") && (
+          <div hidden={page !== "agent"}>
+            <AgentPage token={token} active={page === "agent"} />
           </div>
         )}
         {visitedPages.has("datasets") && (

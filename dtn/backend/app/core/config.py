@@ -56,6 +56,8 @@ class Settings:
     agent_max_tool_calls: int = 8
     agent_history_messages: int = 8
     agent_action_history_limit: int = 20
+    supervisor_min_free_memory_mb: int = 1200
+    supervisor_tick_seconds: float = 10.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -119,6 +121,12 @@ class Settings:
         agent_action_history_limit = int(
             os.environ.get("DTN_AGENT_ACTION_HISTORY_LIMIT", "20")
         )
+        supervisor_min_free_memory_mb = int(
+            os.environ.get("DTN_SUPERVISOR_MIN_FREE_MEMORY_MB", "1200")
+        )
+        supervisor_tick_seconds = float(os.environ.get("DTN_SUPERVISOR_TICK_SECONDS", "10"))
+        if not 256 <= supervisor_min_free_memory_mb <= 7000 or not 2 <= supervisor_tick_seconds <= 300:
+            raise ValueError("Supervisor memory admission or tick interval is out of range")
         if (
             not 1 <= agent_max_tool_calls <= 32
             or not 0 <= agent_history_messages <= 32
@@ -152,6 +160,8 @@ class Settings:
             agent_max_tool_calls=agent_max_tool_calls,
             agent_history_messages=agent_history_messages,
             agent_action_history_limit=agent_action_history_limit,
+            supervisor_min_free_memory_mb=supervisor_min_free_memory_mb,
+            supervisor_tick_seconds=supervisor_tick_seconds,
         )
 
 

@@ -106,6 +106,9 @@ class AgentRun(Base):
     selected_reason: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
+    # Supervisor runs store their goal and resumable workflow state; legacy rows have NULL.
+    goal: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    state: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -238,7 +238,6 @@ def build_verdict(
         input_summaries = _input_summary(rounds)
         follows = False
         for index in range(1, min(len(rounds), len(input_summaries))):
-            previous_inputs = input_summaries[index - 1]
             current_inputs = input_summaries[index]
             input_changed = any(
                 current_inputs.get(key) is True

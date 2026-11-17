@@ -13,7 +13,6 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
-from uuid import uuid4
 
 from PIL import Image
 

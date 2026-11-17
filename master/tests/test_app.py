@@ -41,7 +41,7 @@ def test_schema_allows_exactly_the_declared_actions() -> None:
     assert len(names) == 17
 
 
-def test_agent_model_forwards_schema_tools_to_ollama(
+def test_agent_model_without_tools_answers_in_text_with_configured_limits(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -52,61 +52,66 @@ def test_agent_model_forwards_schema_tools_to_ollama(
 
     def fake_ollama(settings, path, payload):
         forwarded.update({"path": path, "payload": payload})
-        return {
-            "message": {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "optimize_topology",
-                            "arguments": {"rounds": 10, "epochs": 5},
-                        }
-                    }
-                ],
-            }
-        }
+        return {"message": {"role": "assistant", "content": "The baseline is running."}}
 
     monkeypatch.setattr(service_module, "_ollama_request", fake_ollama)
     response = app.test_client().post(
         "/agent/model",
         headers={"Authorization": f"Bearer {config(tmp_path).api_token}"},
-        json={"messages": [{"role": "user", "content": "Optimize the topology."}]},
+        json={"messages": [{"role": "user", "content": "What is running?"}], "allow_tools": False},
     )
 
     assert response.status_code == 200
-    assert response.json["message"]["tool_calls"][0]["function"]["name"] == "optimize_topology"
+    assert response.json["message"]["content"] == "The baseline is running."
     assert forwarded["path"] == "/api/chat"
-    assert forwarded["payload"]["model"] == "qwen3.5:4b"
-    assert forwarded["payload"]["think"] is False
-    assert forwarded["payload"]["options"]["num_ctx"] == 4096
-    assert forwarded["payload"]["options"]["temperature"] == 0.1
-    tools = forwarded["payload"]["tools"]
-    assert {
-        tool["function"]["name"] for tool in tools
-    } == {
-        "preprocess_dataset",
-        "create_initial_model",
-        "start_training",
-        "stop_training",
-        "set_topology",
-        "optimize_topology",
-        "set_rounds",
-        "set_epochs",
-        "enable_nas",
-        "get_status",
-        "get_logs",
-        "get_results",
-        "compare_runs",
-        "finish_agent_workflow",
-    }
-    initial_model_tool = next(
-        tool["function"]
-        for tool in tools
-        if tool["function"]["name"] == "create_initial_model"
+    payload = forwarded["payload"]
+    assert payload["model"] == "qwen3.5:4b"
+    assert payload["think"] is False
+    assert payload["options"]["num_ctx"] == 4096
+    assert payload["keep_alive"] == "15m"
+    assert "tools" not in payload
+
+
+def test_agent_model_uses_caller_supplied_compact_tools(tmp_path: Path, monkeypatch) -> None:
+    import master.app as service_module
+
+    app = create_app(config(tmp_path))
+    forwarded = {}
+
+    def fake_ollama(settings, path, payload):
+        forwarded.update(payload)
+        return {"message": {"role": "assistant", "content": "NAS first."}}
+
+    monkeypatch.setattr(service_module, "_ollama_request", fake_ollama)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run_nas",
+                "description": "Search a better CNN.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    headers = {"Authorization": f"Bearer {config(tmp_path).api_token}"}
+    response = app.test_client().post(
+        "/agent/model",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "Next?"}], "tools": tools},
     )
-    assert initial_model_tool["parameters"]["required"] == ["model_name"]
-    assert list(initial_model_tool["parameters"]["properties"]) == ["model_name"]
+
+    assert response.status_code == 200
+    assert forwarded["tools"] == tools
+
+    rejected = app.test_client().post(
+        "/agent/model",
+        headers=headers,
+        json={
+            "messages": [{"role": "user", "content": "Next?"}],
+            "tools": [{"type": "function", "function": {"name": "bad name", "parameters": {}}}],
+        },
+    )
+    assert rejected.status_code == 400
 
 
 def test_agent_model_rejects_malformed_messages(tmp_path: Path) -> None:

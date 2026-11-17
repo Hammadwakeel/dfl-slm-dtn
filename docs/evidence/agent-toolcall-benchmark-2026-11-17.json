@@ -1,0 +1,270 @@
+{
+ "A_full_tools_ctx4096": {
+  "rows": [
+   {
+    "seconds": 61.8,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   }
+  ],
+  "loaded": [
+   {
+    "size_mb": 2985,
+    "vram_mb": 2985,
+    "ctx": 4096
+   }
+  ],
+  "mem_available_mb": 1249
+ },
+ "B_compact_ctx4096": {
+  "rows": [
+   {
+    "seconds": 4.6,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   }
+  ],
+  "loaded": [
+   {
+    "size_mb": 2985,
+    "vram_mb": 2985,
+    "ctx": 4096
+   }
+  ],
+  "mem_available_mb": 1018
+ },
+ "C_compact_ctx8192": {
+  "rows": [
+   {
+    "seconds": 60.9,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   },
+   {
+    "seconds": 2.8,
+    "prompt_tokens": 743,
+    "output_tokens": 30,
+    "tool_call": true,
+    "tool": "run_nas",
+    "valid_name": true,
+    "arguments": {
+     "budget_seconds": 60
+    },
+    "content_preview": ""
+   }
+  ],
+  "loaded": [
+   {
+    "size_mb": 3117,
+    "vram_mb": 3117,
+    "ctx": 8192
+   }
+  ],
+  "mem_available_mb": 1130
+ },
+ "D_full_tools_ctx8192": {
+  "rows": [
+   {
+    "seconds": 8.0,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   },
+   {
+    "seconds": 1.4,
+    "prompt_tokens": 2822,
+    "output_tokens": 14,
+    "tool_call": true,
+    "tool": "get_results",
+    "valid_name": true,
+    "arguments": {},
+    "content_preview": ""
+   }
+  ],
+  "loaded": [
+   {
+    "size_mb": 3117,
+    "vram_mb": 3117,
+    "ctx": 8192
+   }
+  ],
+  "mem_available_mb": 1034
+ }
+}

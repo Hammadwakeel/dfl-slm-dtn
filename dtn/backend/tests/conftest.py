@@ -1,6 +1,5 @@
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
 
 from app.core.config import DeviceConfig, Settings
 from app.db.models import Base

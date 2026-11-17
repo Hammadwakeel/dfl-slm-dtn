@@ -124,26 +124,12 @@ export interface NASGeneration {
 
 export interface SlmChatResponse {
   conversation_id: string;
-  workflow_id?: string;
   reply: string;
-  mode?: "human" | "agent";
-  tool_calls?: number;
-  terminated?: boolean;
-  trace?: Array<{
-    tool: string;
-    arguments: Record<string, unknown>;
-    result: Record<string, unknown>;
-    decision?: string;
-  }>;
 }
-
-export type SlmMode = "human" | "agent";
 
 export interface SlmConversationSummary {
   id: string;
   title: string;
-  mode?: SlmMode;
-  workflow_id?: string | null;
   updated_at: string;
   message_count: number;
 }
@@ -152,7 +138,6 @@ export interface SlmConversationMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
-  response_data?: SlmChatResponse | null;
   created_at: string;
 }
 
@@ -535,37 +520,6 @@ export interface PreprocessingReport {
 
 export interface AutonomyState {
   stop_requested: boolean;
-  loops: AutonomyLoop[];
-}
-
-export interface AutonomyLoop {
-  id: string;
-  workflow_id?: string | null;
-  status: string;
-  iteration: number;
-  max_iterations: number;
-  time_limit_seconds: number;
-  stop_rule: string;
-  target_metric: number | null;
-  best_metric: number | null;
-  no_improvement_count: number;
-  failure_reason: string | null;
-  created_at: string;
-  deadline_at: string;
-  updated_at: string;
-}
-
-export interface AutonomyHistoryEntry {
-  id: string | number;
-  decision_id: string | null;
-  event: string;
-  action?: string;
-  mode?: string;
-  timestamp?: string;
-  result_status?: string;
-  dataset_name?: string | null;
-  details?: Record<string, unknown> | null;
-  created_at: string;
 }
 
 export interface ExecutedDispatch {
@@ -743,76 +697,12 @@ export async function getAutonomyState(token: string): Promise<AutonomyState> {
   return coordinatorRequest(token, "/api/autonomy/state");
 }
 
-export async function getAutonomyHistory(
-  token: string,
-  limit = 250,
-): Promise<AutonomyHistoryEntry[]> {
-  const boundedLimit = Math.min(500, Math.max(1, Math.trunc(limit)));
-  return coordinatorRequest(token, `/api/autonomy/history?limit=${boundedLimit}`);
-}
-
-export async function deleteAgentWorkflows(
-  token: string,
-  workflowIds: string[],
-  conversationIds: string[],
-): Promise<{ deleted_workflows: number; deleted_conversations: number; deleted_actions: number }> {
-  return coordinatorRequest(token, "/api/autonomy/workflows", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      workflow_ids: workflowIds,
-      conversation_ids: conversationIds,
-    }),
-  });
-}
-
 export async function requestGlobalStop(token: string): Promise<AutonomyState> {
   return coordinatorRequest(token, "/api/autonomy/stop", { method: "POST" });
 }
 
 export async function resetGlobalStop(token: string): Promise<AutonomyState> {
   return coordinatorRequest(token, "/api/autonomy/reset-stop", { method: "POST" });
-}
-
-export async function startAutonomyLoop(
-  token: string,
-  request: {
-    max_iterations: number;
-    time_limit_seconds: number;
-    stop_rule: "max_iterations" | "target_metric" | "no_improvement_2";
-    target_metric?: number;
-    workflow_id?: string;
-  },
-): Promise<AutonomyLoop> {
-  return coordinatorRequest(token, "/api/autonomy/loops", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-}
-
-export async function recordAutonomyIteration(
-  token: string,
-  loopId: string,
-  metric?: number,
-): Promise<AutonomyLoop> {
-  return coordinatorRequest(token, `/api/autonomy/loops/${encodeURIComponent(loopId)}/iterations`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(metric === undefined ? {} : { metric }),
-  });
-}
-
-export async function stopAutonomyLoop(
-  token: string,
-  loopId: string,
-  reason: string,
-): Promise<AutonomyLoop> {
-  return coordinatorRequest(token, `/api/autonomy/loops/${encodeURIComponent(loopId)}/stop`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason }),
-  });
 }
 
 export async function dispatchDatasetPreprocessing(
@@ -1038,31 +928,7 @@ export async function sendSlmMessage(
   token: string,
   message: string,
   conversationId?: string,
-  mode: SlmMode = "human",
-  workflowDataset?: "mnist" | "cifar10",
-  workflowBaseline = false,
-  workflowId?: string,
-  workflowPreviousGroupId?: string,
 ): Promise<SlmChatResponse> {
-  if (mode === "agent") {
-    return coordinatorRequest<SlmChatResponse>(
-      token,
-      "/api/slm/agent/chat",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          ...(conversationId ? { conversation_id: conversationId } : {}),
-          ...(workflowDataset ? { workflow_dataset: workflowDataset } : {}),
-          ...(workflowBaseline ? { workflow_baseline: true } : {}),
-          ...(workflowId ? { workflow_id: workflowId } : {}),
-          ...(workflowPreviousGroupId ? { workflow_previous_group_id: workflowPreviousGroupId } : {}),
-        }),
-      },
-      1_800_000,
-    );
-  }
   const response = await fetch(`${masterSlmBase}/rag/chat`, {
     method: "POST",
     signal: AbortSignal.timeout(150_000),
@@ -1082,6 +948,170 @@ export async function sendSlmMessage(
   return response.json() as Promise<SlmChatResponse>;
 }
 
+export async function getSlmConversations(token: string): Promise<SlmConversationSummary[]> {
+  return masterSlmRequest(token, "/rag/conversations");
+}
+
+export async function getSlmConversation(token: string, conversationId: string): Promise<SlmConversation> {
+  return masterSlmRequest(token, `/rag/conversations/${encodeURIComponent(conversationId)}`);
+}
+
+export async function deleteSlmConversation(token: string, conversationId: string): Promise<void> {
+  return masterSlmRequest(
+    token,
+    `/rag/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export type SupervisorRunStatus = "queued" | "running" | "stopping" | "completed" | "failed" | "stopped";
+
+export interface SupervisorGoal {
+  dataset: "mnist" | "cifar10";
+  target_accuracy: number;
+  max_experiments: number;
+  time_budget_minutes: number;
+  dataset_split: "stratified" | "dirichlet_a01" | "dirichlet_a03" | "dirichlet_a05" | "dirichlet_a07";
+  rounds: number;
+  local_epochs: number;
+  topology: "directed_ring" | "bidirectional_ring" | "mesh" | "chain" | "star";
+  nas_budget_seconds: number;
+  seed?: number;
+}
+
+export interface SupervisorExperiment {
+  step: string;
+  group_id: string;
+  kind: string;
+  status: string;
+  validation_accuracy?: number | null;
+  macro_f1?: number | null;
+  architecture?: string | null;
+  parameter_count?: number | null;
+  topology?: string | null;
+  selected_topology?: string | null;
+  error?: string;
+  completed_at?: string;
+}
+
+export interface SupervisorBest {
+  validation_accuracy: number;
+  macro_f1: number | null;
+  group_id: string;
+  step: string;
+  architecture: string | null;
+  topology: string | null;
+}
+
+export interface SupervisorCounters {
+  slm_decisions: number;
+  slm_repairs: number;
+  fallback_decisions: number;
+  rule_decisions: number;
+}
+
+export interface SupervisorState {
+  stage?: string;
+  completed_steps: string[];
+  experiments: SupervisorExperiment[];
+  best: SupervisorBest | null;
+  selected_topology: string | null;
+  nas_architecture: Record<string, unknown> | null;
+  active: { step: string; group_id: string; started_at: string; progress?: number } | null;
+  pending_step: { step: string; rationale?: string; source?: string } | null;
+  counters: SupervisorCounters;
+  waiting_reason?: string;
+  deadline?: string;
+}
+
+export interface SupervisorEvent {
+  id: number;
+  event_type: string;
+  message: string;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface SupervisorRun {
+  id: string;
+  task: string;
+  status: SupervisorRunStatus;
+  stage: string;
+  progress: number;
+  current_step: string | null;
+  rationale: string | null;
+  goal: SupervisorGoal;
+  state: SupervisorState;
+  result: {
+    outcome: string;
+    summary: string;
+    decided_by?: string;
+    best?: SupervisorBest | null;
+    counters?: SupervisorCounters;
+  } | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  minutes_left?: number | null;
+  events?: SupervisorEvent[];
+}
+
+export interface SupervisorCluster {
+  workers: number;
+  workers_ready: number;
+  not_ready: string[];
+  min_free_mb: number | null;
+  low_memory: string[];
+  min_free_memory_mb_required: number;
+  global_stop: boolean;
+}
+
+export async function listSupervisorRuns(token: string): Promise<SupervisorRun[]> {
+  return coordinatorRequest(token, "/api/supervisor/runs");
+}
+
+export async function getSupervisorRun(token: string, runId: string): Promise<SupervisorRun> {
+  return coordinatorRequest(token, `/api/supervisor/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function startSupervisorRun(token: string, goal: SupervisorGoal): Promise<SupervisorRun> {
+  return coordinatorRequest(token, "/api/supervisor/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(goal),
+  });
+}
+
+export async function stopSupervisorRun(token: string, runId: string, reason: string): Promise<SupervisorRun> {
+  return coordinatorRequest(token, `/api/supervisor/runs/${encodeURIComponent(runId)}/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function askSupervisor(
+  token: string,
+  runId: string,
+  question: string,
+): Promise<{ run_id: string; answer: string }> {
+  return coordinatorRequest(
+    token,
+    `/api/supervisor/runs/${encodeURIComponent(runId)}/ask`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    },
+    150_000,
+  );
+}
+
+export async function getSupervisorCluster(token: string): Promise<SupervisorCluster> {
+  return coordinatorRequest(token, "/api/supervisor/cluster");
+}
+
 export async function askDatabaseAssistant(
   token: string,
   question: string,
@@ -1094,56 +1124,6 @@ export async function askDatabaseAssistant(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
     },
-  );
-}
-
-export async function getSlmConversations(
-  token: string,
-  mode: SlmMode = "human",
-): Promise<SlmConversationSummary[]> {
-  if (mode === "agent") {
-    const conversations = await coordinatorRequest<SlmConversationSummary[]>(
-      token,
-      "/api/slm/conversations",
-    );
-    return conversations.filter((conversation) => conversation.mode === "agent");
-  }
-  return masterSlmRequest(token, "/rag/conversations");
-}
-
-export async function getSlmConversation(
-  token: string,
-  conversationId: string,
-  mode: SlmMode = "human",
-): Promise<SlmConversation> {
-  if (mode === "agent") {
-    return coordinatorRequest(
-      token,
-      `/api/slm/conversations/${encodeURIComponent(conversationId)}`,
-    );
-  }
-  return masterSlmRequest(
-    token,
-    `/rag/conversations/${encodeURIComponent(conversationId)}`,
-  );
-}
-
-export async function deleteSlmConversation(
-  token: string,
-  conversationId: string,
-  mode: SlmMode = "human",
-): Promise<void> {
-  if (mode === "agent") {
-    return coordinatorRequest(
-      token,
-      `/api/slm/conversations/${encodeURIComponent(conversationId)}`,
-      { method: "DELETE" },
-    );
-  }
-  return masterSlmRequest(
-    token,
-    `/rag/conversations/${encodeURIComponent(conversationId)}`,
-    { method: "DELETE" },
   );
 }
 

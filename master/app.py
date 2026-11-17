@@ -25,7 +25,6 @@ from urllib.request import Request, urlopen
 from flask import Flask, jsonify, request
 from jsonschema import Draft202012Validator, ValidationError
 
-from common.agent_tools import agent_tool_definitions
 from master.training import TrainingError, TrainingWorker
 
 ACTION_NAMES = (
@@ -619,6 +618,24 @@ def _generate_rag_reply(
         )
 
 
+def _valid_caller_tools(tools: Any) -> bool:
+    if not isinstance(tools, list) or not 1 <= len(tools) <= 12:
+        return False
+    if len(json.dumps(tools, separators=(",", ":"))) > 16_384:
+        return False
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if (
+            tool.get("type") != "function"
+            or not isinstance(function, dict)
+            or not isinstance(function.get("name"), str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", function["name"])
+            or not isinstance(function.get("parameters"), dict)
+        ):
+            return False
+    return True
+
+
 def _fallback_rag_action(context: dict[str, Any]) -> str:
     training = context.get("live_training_results")
     if not isinstance(training, dict):
@@ -1191,10 +1208,13 @@ def create_app(
     @app.post("/agent/model")
     def agent_model() -> tuple[Any, int] | Any:
         payload = request.get_json(silent=True)
-        if not isinstance(payload, dict) or set(payload) - {"messages", "allow_tools"}:
-            return jsonify({"error": "Agent model requests require messages and optional allow_tools"}), 400
+        if not isinstance(payload, dict) or set(payload) - {"messages", "allow_tools", "tools"}:
+            return jsonify(
+                {"error": "Agent model requests require messages and optional allow_tools or tools"}
+            ), 400
         messages = payload.get("messages")
         allow_tools = payload.get("allow_tools", True)
+        caller_tools = payload.get("tools")
         if (
             not isinstance(messages, list)
             or not messages
@@ -1202,6 +1222,8 @@ def create_app(
             or not isinstance(allow_tools, bool)
         ):
             return jsonify({"error": "Agent messages or tool settings are invalid"}), 400
+        if caller_tools is not None and not _valid_caller_tools(caller_tools):
+            return jsonify({"error": "tools must be 1-12 function definitions under 16 KB"}), 400
         for message in messages:
             if (
                 not isinstance(message, dict)
@@ -1224,8 +1246,11 @@ def create_app(
             },
             "keep_alive": settings.keep_alive,
         }
-        if allow_tools:
-            model_payload["tools"] = agent_tool_definitions()
+        if caller_tools is not None and allow_tools:
+            # The supervisor sends a compact, stage-filtered tool set; offering the full
+            # schema toolset made the SLM choose read-only tools instead of progress steps
+            # (docs/evidence/agent-toolcall-benchmark-2026-11-17.json).
+            model_payload["tools"] = caller_tools
         started = time.perf_counter()
         try:
             response = _ollama_request(settings, "/api/chat", model_payload)

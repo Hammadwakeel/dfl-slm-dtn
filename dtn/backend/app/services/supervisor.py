@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
+    DATASET_IMAGE_SIZES,
     PRUNE_RATIO,
     Decision,
     DecisionError,
@@ -497,6 +498,10 @@ class Supervisor:
             "parameters": {
                 "dataset_name": goal["dataset"],
                 "dataset_split": goal["dataset_split"],
+                "target_size": {
+                    "height": DATASET_IMAGE_SIZES[goal["dataset"]],
+                    "width": DATASET_IMAGE_SIZES[goal["dataset"]],
+                },
                 "replace_existing": True,
                 "seed": int(goal["seed"]),
             },

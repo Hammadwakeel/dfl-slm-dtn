@@ -571,3 +571,13 @@ def test_hpo_budget_fits_one_worker_search_request(sessions) -> None:
     run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
     hpo = next(action for action in cluster.actions if action["action"] == "run_hpo")
     assert hpo["parameters"]["search_time_limit_seconds"] <= 300
+
+
+def test_prepare_data_keeps_each_dataset_at_its_native_size(sessions) -> None:
+    for dataset, size in (("mnist", 28), ("cifar10", 32)):
+        cluster = FakeCluster()
+        slm = FakeSLM([tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "x"}, "x")])
+        supervisor = make_supervisor(sessions, cluster, slm)
+        run_until_done(supervisor, supervisor.create_run(default_goal(dataset=dataset, target_accuracy=0.99))["id"])
+        prepare = next(action for action in cluster.actions if action["action"] == "preprocess_dataset")
+        assert prepare["parameters"]["target_size"] == {"height": size, "width": size}

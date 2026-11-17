@@ -21,6 +21,8 @@ from jsonschema import Draft202012Validator, ValidationError
 from common.pruning import PASS_THROUGH_LAYERS, PRUNABLE_LAYERS
 
 DATASETS = ("mnist", "cifar10")
+# Native image size of each supported dataset (preprocessing must not resize them).
+DATASET_IMAGE_SIZES = {"mnist": 28, "cifar10": 32}
 DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07")
 TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned")
 AGGREGATIONS = ("fedavg", "uniform", "metropolis", "trimmed_mean")

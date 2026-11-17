@@ -18,6 +18,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
+from common.pruning import PASS_THROUGH_LAYERS, PRUNABLE_LAYERS
+
 DATASETS = ("mnist", "cifar10")
 DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07")
 TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star")
@@ -27,8 +29,11 @@ FINISH_OUTCOMES = ("objective_achieved", "no_worthwhile_action", "blocked")
 
 # Steps that start a measured experiment on the cluster, in the order the
 # deterministic fallback policy tries them.
-SEARCH_STEPS = ("run_nas", "optimize_topology")
-EXPERIMENT_STEPS = ("baseline_training", "run_nas", "optimize_topology", "train_final")
+SEARCH_STEPS = ("run_nas", "run_hpo", "optimize_topology")
+EXPERIMENT_STEPS = ("baseline_training", "run_nas", "run_hpo", "optimize_topology", "train_final", "prune_model")
+# Steps that need a measured, trained model (and a custom layer architecture).
+MODEL_STEPS = ("train_final", "prune_model")
+PRUNE_RATIO = 0.5
 MAX_STEP_FAILURES = 2
 
 STEP_TOOLS: dict[str, dict[str, Any]] = {
@@ -39,6 +44,21 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
         ),
         # The search budget comes from the operator's goal: a model-chosen budget was
         # too small for even two candidates and made every search time out.
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "run_hpo": {
+        "description": (
+            "Tune the learning rate and batch size of the best architecture so far on every "
+            "worker's own data. Useful after NAS, or when training looks unstable or slow."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "prune_model": {
+        "description": (
+            "Remove half of the least important channels of the best trained model and "
+            "fine-tune it on all workers. Makes the model smaller and faster on the Jetsons; "
+            "useful once accuracy is good enough."
+        ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "optimize_topology": {
@@ -140,6 +160,9 @@ def new_state() -> dict[str, Any]:
         "experiments": [],
         "best": None,
         "nas_architecture": None,
+        "baseline_architecture": None,
+        "last_trained_architecture": None,
+        "pruning": None,
         "selected_topology": None,
         "trained_configs": [],
         "failures": {},
@@ -179,12 +202,45 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
             and failures.get("optimize_topology", 0) < MAX_STEP_FAILURES
         ):
             steps.append("optimize_topology")
+        if (
+            "run_hpo" not in completed
+            and failures.get("run_hpo", 0) < MAX_STEP_FAILURES
+            and is_custom_architecture(tuning_architecture(state))
+        ):
+            steps.append("run_hpo")
         has_improvement = bool(state.get("nas_architecture") or state.get("selected_topology"))
         untried = final_training_config(goal, state) not in state.get("trained_configs", [])
         if has_improvement and untried and failures.get("train_final", 0) < MAX_STEP_FAILURES:
             steps.append("train_final")
+        if can_prune(state):
+            steps.append("prune_model")
     steps.append("finish_workflow")
     return steps
+
+
+def tuning_architecture(state: dict[str, Any]) -> dict[str, Any] | None:
+    """The architecture HPO tunes: the NAS result if any, else the deployed baseline."""
+    return state.get("nas_architecture") or state.get("baseline_architecture")
+
+
+def is_custom_architecture(architecture: Any) -> bool:
+    return isinstance(architecture, dict) and architecture.get("model_type") == "custom"
+
+
+def can_prune(state: dict[str, Any]) -> bool:
+    """Prune once, after a completed training, if the trained model is a prunable CNN."""
+    completed = set(state.get("completed_steps", []))
+    if "prune_model" in completed or state.get("failures", {}).get("prune_model", 0) >= MAX_STEP_FAILURES:
+        return False
+    trained = [item for item in state.get("experiments", []) if item.get("kind") == "decentralized" and item.get("status") == "completed"]
+    if not trained:
+        return False
+    # The newest training is what workers hold; only plain CNN/MLP layers can be pruned.
+    architecture = state.get("last_trained_architecture")
+    if not is_custom_architecture(architecture):
+        return False
+    layer_types = {layer.get("type") for layer in architecture.get("layers", []) if isinstance(layer, dict)}
+    return bool(layer_types) and layer_types <= PRUNABLE_LAYERS | PASS_THROUGH_LAYERS
 
 
 def tool_definitions(steps: list[str]) -> list[dict[str, Any]]:
@@ -321,7 +377,15 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
     """Deterministic stop rules that never need the language model."""
     best = state.get("best") or {}
     accuracy = best.get("validation_accuracy")
-    if isinstance(accuracy, (int, float)) and accuracy >= float(goal["target_accuracy"]):
+    target_met = isinstance(accuracy, (int, float)) and accuracy >= float(goal["target_accuracy"])
+    if target_met and minutes_left > 0 and "prune_model" in allowed_steps(goal, state):
+        return Decision(
+            "prune_model",
+            {},
+            "The target is met; compress the model for the Jetsons before finishing.",
+            "rule",
+        )
+    if target_met:
         return Decision(
             "finish_workflow",
             {
@@ -357,12 +421,9 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
 def fallback_decision(goal: dict[str, Any], state: dict[str, Any]) -> Decision:
     """Used when the SLM is unreachable or keeps returning invalid steps."""
     allowed = allowed_steps(goal, state)
-    for step in ("run_nas", "optimize_topology", "train_final"):
+    for step in ("run_nas", "run_hpo", "optimize_topology", "train_final", "prune_model"):
         if step in allowed:
-            arguments: dict[str, Any] = {}
-            if step == "run_nas":
-                arguments = {}
-            return Decision(step, arguments, "Default improvement order: NAS, topology, retrain.", "fallback")
+            return Decision(step, {}, "Default improvement order: NAS, HPO, topology, retrain, prune.", "fallback")
     return Decision(
         "finish_workflow",
         {"outcome": "no_worthwhile_action", "summary": "No improvement step remains."},
@@ -395,6 +456,7 @@ def prompt_state(goal: dict[str, Any], state: dict[str, Any], cluster: dict[str,
         "best": state.get("best"),
         "recent_experiments": recent,
         "nas_architecture_found": bool(state.get("nas_architecture")),
+        "pruned_model": (state.get("pruning") or {}).get("compression"),
         "selected_topology": state.get("selected_topology"),
         "cluster": cluster,
     }
@@ -483,6 +545,18 @@ def summarize_group(group: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(candidate.get(key), (int, float)):
                     summary["search_validation_accuracy"] = float(candidate[key])
                     break
+    elif kind == "hyperparameter_search":
+        architecture = group.get("selected_architecture")
+        if isinstance(architecture, dict):
+            summary["selected_architecture"] = architecture
+            summary["architecture"] = architecture.get("id")
+            summary["parameter_count"] = architecture.get("parameter_count")
+        if isinstance(group.get("selected_hyperparameters"), dict):
+            summary["hyperparameters"] = group["selected_hyperparameters"]
+        selection = group.get("selection")
+        candidate = selection.get("selected_candidate") if isinstance(selection, dict) else None
+        if isinstance(candidate, dict) and isinstance(candidate.get("validation_accuracy"), (int, float)):
+            summary["search_validation_accuracy"] = float(candidate["validation_accuracy"])
     elif kind == "topology_optimization":
         selected = group.get("selected_configuration")
         if isinstance(selected, dict):

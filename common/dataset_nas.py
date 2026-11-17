@@ -11,8 +11,11 @@ MAX_DATASET_NAS_PARAMETERS = 1_000_000
 INITIAL_POPULATION_SIZE = 8
 CIFAR_INITIAL_POPULATION_SIZE = 3
 FINAL_POPULATION_SIZE = 4
-INITIAL_EPOCHS = 3
-FINAL_EPOCHS = 10
+# Fidelity schedule measured on 8 Jetson workers (~7.5k MNIST samples each, ~16 s per
+# epoch): 8 candidates x 1 epoch, then 4 x 3 epochs, fits the 600 s budget with margin.
+# The former 3/10 schedule needed ~670 s and timed out on every worker.
+INITIAL_EPOCHS = 1
+FINAL_EPOCHS = 3
 MAX_BLOCKS = 3
 CHANNEL_CHOICES = (16, 32, 64)
 KERNEL_CHOICES = (3, 5)

@@ -20,6 +20,7 @@ for required in \
   "$stage_dir/common/__init__.py" \
   "$stage_dir/common/cifar_model.py" \
   "$stage_dir/common/dataset_nas.py" \
+  "$stage_dir/common/hpo.py" \
   "$stage_dir/common/nas.py" \
   "$stage_dir/common/model_design.py" \
   "$stage_dir/common/slm_action_schema.json" \
@@ -111,6 +112,7 @@ install -o root -g root -m 0644 "$stage_dir/master/cifar_evaluator.py" "$app_roo
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/cifar_model.py" "$app_root/common/cifar_model.py"
 install -o root -g root -m 0644 "$stage_dir/common/dataset_nas.py" "$app_root/common/dataset_nas.py"
+install -o root -g root -m 0644 "$stage_dir/common/hpo.py" "$app_root/common/hpo.py"
 install -o root -g root -m 0644 "$stage_dir/common/nas.py" "$app_root/common/nas.py"
 install -o root -g root -m 0644 "$stage_dir/common/model_design.py" "$app_root/common/model_design.py"
 install -o root -g root -m 0644 "$stage_dir/common/slm_action_schema.json" "$app_root/common/slm_action_schema.json"

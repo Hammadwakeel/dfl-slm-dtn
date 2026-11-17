@@ -206,6 +206,8 @@ def test_model_creation_action_dispatches_the_chosen_architecture(
         *,
         seed,
         architecture="b2_c8_k3",
+        replace_existing=False,
+        restore_baseline=False,
     ):
         calls.append((dataset_store, workers, dataset_name, seed, architecture))
         return {"dataset_name": dataset_name, "architecture": architecture}

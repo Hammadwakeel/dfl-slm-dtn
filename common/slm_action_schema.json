@@ -278,7 +278,9 @@
                     {"type": "object", "maxProperties": 0, "additionalProperties": false}
                   ]
                 },
-                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+                "replace_existing": {"type": "boolean"},
+                "restore_baseline": {"type": "boolean"}
               },
               "required": ["model_name"],
               "additionalProperties": false
@@ -456,6 +458,43 @@
                 "smoke_test": {"type": "boolean"}
               },
               "required": ["enabled"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "run_hpo", "description": "Tune the learning rate and batch size of one custom architecture on every worker's own data split and select the best mean validation accuracy."},
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "dataset_name": {"$ref": "#/$defs/datasetName"},
+                "architecture": {"$ref": "#/$defs/customArchitecture"},
+                "search_time_limit_seconds": {"type": "integer", "minimum": 90, "maximum": 600},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+              },
+              "required": ["dataset_name", "architecture"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["action", "parameters"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {"const": "prune_model", "description": "Structurally prune the best trained worker model (remove the least important channels and units) and redistribute the smaller model with its trained weights to every worker."},
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "model_name": {"$ref": "#/$defs/datasetName"},
+                "ratio": {"type": "number", "minimum": 0.1, "maximum": 0.8},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+              },
+              "required": ["model_name"],
               "additionalProperties": false
             }
           },

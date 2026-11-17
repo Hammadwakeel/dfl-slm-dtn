@@ -26,6 +26,7 @@ from app.routers.ws import router as websocket_router
 from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
 from app.services.cluster import cluster_nodes, sync_training_registry
+from app.services.pruning import prune_and_distribute
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
 from app.services.events import EventManager
@@ -104,7 +105,24 @@ def create_app(
                     cluster_nodes(resolved_settings, sessions),
                     dataset_name,
                     seed=action["parameters"].get("seed", 0),
+                    replace_existing=action["parameters"].get("replace_existing", False) is True,
+                    restore_baseline=action["parameters"].get("restore_baseline", False) is True,
                     **architecture,
+                )
+            except DatasetError as error:
+                raise AutonomyError(str(error), error.status_code) from error
+            except (InitialModelError, WorkerShardError) as error:
+                status_code = 502 if isinstance(error, WorkerShardError) else 422
+                raise AutonomyError(str(error), status_code) from error
+            return {"available": True, "data": report}
+        if action["action"] == "prune_model":
+            try:
+                report = prune_and_distribute(
+                    app.state.datasets,
+                    cluster_nodes(resolved_settings, sessions),
+                    action["parameters"]["model_name"],
+                    ratio=float(action["parameters"].get("ratio", 0.5)),
+                    seed=action["parameters"].get("seed", 0),
                 )
             except DatasetError as error:
                 raise AutonomyError(str(error), error.status_code) from error

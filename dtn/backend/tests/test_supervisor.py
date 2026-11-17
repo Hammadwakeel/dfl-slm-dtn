@@ -36,7 +36,7 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
 
     state["completed_steps"].append("run_nas")
     state["nas_architecture"] = NAS_ARCHITECTURE
-    assert allowed_steps(goal, state) == ["optimize_topology", "train_final", "finish_workflow"]
+    assert allowed_steps(goal, state) == ["optimize_topology", "run_hpo", "train_final", "finish_workflow"]
 
     cifar = default_goal(dataset="cifar10")
     assert "optimize_topology" not in allowed_steps(cifar, state)
@@ -45,7 +45,7 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
 def test_trained_configuration_is_not_offered_again() -> None:
     goal = default_goal()
     state = new_state()
-    state["completed_steps"] = ["run_nas", "optimize_topology"]
+    state["completed_steps"] = ["run_nas", "run_hpo", "optimize_topology"]
     state["nas_architecture"] = NAS_ARCHITECTURE
     state["trained_configs"] = ["b2_c16_k5|directed_ring"]
 
@@ -143,12 +143,19 @@ class FakeCluster:
         self.fail_next: dict[str, str] = {}
         self.cleanups = 0
         self.counter = 0
+        self.model_report: dict[str, Any] = {}
+        self.nas_architecture: dict[str, Any] = NAS_ARCHITECTURE
+        self.pruned = False
 
     def dispatch(self, action: dict[str, Any], reason: str, run_id: str) -> dict[str, Any]:
         self.actions.append(action)
         name = action["action"]
         if name in {"preprocess_dataset", "create_initial_model"}:
-            return {"status": "executed", "result": {"available": True, "data": {"dataset_name": "mnist"}}}
+            return {"status": "executed", "result": {"available": True, "data": {"dataset_name": "mnist", **self.model_report}}}
+        if name == "prune_model":
+            self.pruned = True
+            report = {"ratio": action["parameters"]["ratio"], "parameters_before": 1000, "parameters_after": 400, "compression": 2.5, "architecture_id": "nas-x-pruned50", "source_worker": "worker1"}
+            return {"status": "executed", "result": {"available": True, "data": report}}
         if name in {"set_topology", "stop_training"}:
             for group in self.groups:
                 if name == "stop_training" and group["status"] == "running":
@@ -158,6 +165,7 @@ class FakeCluster:
         group_id = f"group-{self.counter}"
         kind = {
             "enable_nas": "dataset_architecture_search",
+            "run_hpo": "hyperparameter_search",
             "optimize_topology": "topology_optimization",
             "start_training": "decentralized",
         }[name]
@@ -170,6 +178,7 @@ class FakeCluster:
                 "architecture": action["parameters"].get("architecture", {"id": "b1_c8_k3"}),
                 "runs": [],
                 "_action": action,
+                "_fine_tune": name == "start_training" and self.pruned,
             }
         )
         return {
@@ -185,7 +194,7 @@ class FakeCluster:
                 continue
             action = group["_action"]
             if group["kind"] == "decentralized":
-                step = "train_final" if "architecture" in action["parameters"] else "baseline_training"
+                step = "fine_tune" if group["_fine_tune"] else "train_final" if "architecture" in action["parameters"] else "baseline_training"
                 if step in self.fail_next:
                     group.update(status="failed", error=self.fail_next.pop(step))
                     continue
@@ -193,7 +202,10 @@ class FakeCluster:
                 group["runs"] = [{"rounds": [{"workers": {"worker1": {"validation_accuracy": accuracy, "validation_macro_f1": accuracy - 0.01}}}]}]
                 group["topology"] = "directed_ring"
             elif group["kind"] == "dataset_architecture_search":
-                group["selected_architecture"] = NAS_ARCHITECTURE
+                group["selected_architecture"] = self.nas_architecture
+            elif group["kind"] == "hyperparameter_search":
+                group["selected_architecture"] = {**action["parameters"]["architecture"], "id": "hpo-adam-lr3e-3-bs64"}
+                group["selected_hyperparameters"] = {"optimizer": "adam", "learning_rate": 0.003, "batch_size": 64}
             elif group["kind"] == "topology_optimization":
                 group["selected_configuration"] = {"topology": "bidirectional_ring"}
             group["status"] = "completed"
@@ -471,3 +483,59 @@ def test_reason_argument_becomes_the_rationale_and_is_not_a_step_argument() -> N
     )
     assert wordy.step == "run_nas" and len(wordy.rationale) == 300
     assert decision.rationale == "Baseline is 4 points below target."
+
+
+CNN_LAYERS = [
+    {"type": "conv2d", "filters": 16, "kernel_size": 3, "padding": "same", "activation": "relu"},
+    {"type": "batch_normalization"},
+    {"type": "global_average_pooling2d"},
+    {"type": "dense", "units": 10, "activation": "linear"},
+]
+
+
+def test_supervisor_tunes_hyperparameters_then_prunes_once_the_target_is_met(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy["fine_tune"] = 0.955
+    slm = FakeSLM([
+        tool_call("run_nas", {}, "Search a better CNN."),
+        tool_call("run_hpo", {}, "Tune the learning rate of the searched CNN."),
+        tool_call("train_final", {}, "Retrain with the tuned CNN."),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    assert finished["status"] == "completed"
+    assert finished["result"]["outcome"] == "objective_achieved"
+    names = [action["action"] for action in cluster.actions]
+    hpo = cluster.actions[names.index("run_hpo")]
+    assert hpo["parameters"]["architecture"]["id"] == "nas-cnn"
+    retrain = [action for action in cluster.actions if action["action"] == "start_training" and "architecture" in action["parameters"]]
+    assert retrain[-1]["parameters"]["architecture"]["id"] == "hpo-adam-lr3e-3-bs64"
+    # Target met -> the rule prunes once, then a shorter fine-tune runs without a new architecture.
+    prune_index = names.index("prune_model")
+    assert cluster.actions[prune_index]["parameters"]["ratio"] == 0.5
+    fine_tune = next(action for action in cluster.actions[prune_index:] if action["action"] == "start_training")
+    assert "architecture" not in fine_tune["parameters"]
+    assert fine_tune["parameters"]["rounds"] == 5
+    pruning = finished["state"]["pruning"]
+    assert pruning["compression"] == 2.5
+    assert pruning["validation_accuracy"] == pytest.approx(0.955)
+    assert names.count("prune_model") == 1
+    decisions = [event for event in finished["events"] if event["event_type"] == "decision"]
+    assert [event["details"]["source"] for event in decisions][-2:] == ["rule", "rule"]
+
+
+def test_baseline_architecture_enables_hpo_without_nas(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.model_report = {"architecture": {"model_type": "custom", "id": "baseline", "layers": CNN_LAYERS}}
+    slm = FakeSLM([tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "stop"}, "stop")])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run = supervisor.create_run(default_goal(target_accuracy=0.99))
+
+    run_until_done(supervisor, run["id"])
+
+    offered = {tool["function"]["name"] for tool in slm.calls[0][1]}
+    assert {"run_nas", "run_hpo", "optimize_topology", "prune_model"} <= offered

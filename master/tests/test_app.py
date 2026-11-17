@@ -38,7 +38,7 @@ def test_schema_allows_exactly_the_declared_actions() -> None:
         for branch in ACTION_SCHEMA["oneOf"]
     }
     assert names == set(ACTION_NAMES)
-    assert len(names) == 17
+    assert len(names) == 19
 
 
 def test_agent_model_without_tools_answers_in_text_with_configured_limits(

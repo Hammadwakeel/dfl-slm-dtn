@@ -38,6 +38,26 @@ class InitialModelError(ValueError):
 
 
 
+
+BASELINE_ARCHITECTURE_FILE = "baseline_architecture.json"
+
+
+def _same_design(
+    current: dict[str, Any],
+    requested: str | dict[str, Any],
+    input_shape: tuple[int, int, int],
+    num_classes: int,
+) -> bool:
+    """True when two designs build the same network with the same training settings."""
+    if not isinstance(requested, dict):
+        return False
+    try:
+        left, _ = validate_model_design(current, input_shape, num_classes)
+        right, _ = validate_model_design(requested, input_shape, num_classes)
+    except ModelDesignError:
+        return False
+    return left == right
+
 def _normalization_matches(stored: Any, current: Any, tolerance: float = 1e-3) -> bool:
     """Compare normalization settings, tolerating tiny drift in recomputed statistics.
 
@@ -216,7 +236,7 @@ def _make_bundle(architecture: dict[str, Any], weights: dict[str, np.ndarray]) -
             "architecture.json",
             json.dumps(architecture, indent=2, sort_keys=True) + "\n",
         )
-        if architecture["model_type"] not in {"custom", "pretrained_deit"}:
+        if weights or architecture["model_type"] not in {"custom", "pretrained_deit"}:
             zipped.writestr("initial_weights.npz", weight_buffer.getvalue())
     return bundle.getvalue()
 
@@ -234,7 +254,19 @@ def create_and_distribute_initial_model(
     *,
     seed: int = 0,
     architecture: str | dict[str, Any] | None = None,
+    replace_existing: bool = False,
+    restore_baseline: bool = False,
+    initial_weights: Sequence[np.ndarray] | None = None,
 ) -> dict[str, Any]:
+    """Create (or reuse) one identical initial model on the PC and every worker.
+
+    ``replace_existing`` swaps a deployed model for a different ``architecture``
+    (e.g. a NAS/HPO/pruning result); the first replaced model is kept as the
+    dataset baseline. ``restore_baseline`` puts that baseline back so every
+    supervisor run measures the same starting model. ``initial_weights`` (the
+    flat Keras weight list of a custom model) starts every worker from those
+    trained weights instead of a seeded initialization, as pruning needs.
+    """
     validate_dataset_name(dataset_name)
     selected_workers = sorted(
         (worker for worker in workers if worker.role == "worker"),
@@ -287,11 +319,28 @@ def create_and_distribute_initial_model(
         raise InitialModelError("Dataset metadata or preprocessing report is invalid") from error
 
     local_model_path = dataset_path / "models" / INITIAL_MODEL_DIRECTORY
+    baseline_path = dataset_path / "models" / BASELINE_ARCHITECTURE_FILE
     existing_report = (
         get_initial_model_report(dataset_store, dataset_name)
         if local_model_path.exists() or local_model_path.is_symlink()
         else None
     )
+    if restore_baseline and architecture is None and baseline_path.is_file():
+        architecture = json.loads(baseline_path.read_text(encoding="utf-8"))
+        replace_existing = True
+    if existing_report is not None and architecture is not None and replace_existing:
+        if initial_weights is None and _same_design(
+            existing_report["architecture"], architecture, input_shape, len(classes)
+        ):
+            architecture = None  # already deployed: reuse it unchanged
+        else:
+            if not baseline_path.is_file():
+                baseline_path.write_text(
+                    json.dumps(existing_report["architecture"], indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            delete_initial_model(dataset_store, workers, dataset_name)
+            existing_report = None
     if existing_report is not None:
         if architecture is not None:
             raise InitialModelError(
@@ -336,6 +385,15 @@ def create_and_distribute_initial_model(
             architecture=architecture or FIXED_ARCHITECTURE,
             normalization=normalization,
         )
+        if initial_weights is not None:
+            if architecture["model_type"] != "custom":
+                raise InitialModelError("Supplied initial weights require a custom architecture")
+            weights = {
+                f"weight_{index}": np.asarray(value, dtype=np.float32)
+                for index, value in enumerate(initial_weights)
+            }
+            if sum(int(value.size) for value in weights.values()) != architecture["parameter_count"]:
+                raise InitialModelError("Supplied initial weights do not match the architecture size")
         bundle = _make_bundle(architecture, weights)
         architecture_bytes = json.dumps(
             architecture, indent=2, sort_keys=True

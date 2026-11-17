@@ -34,6 +34,12 @@ from common.dataset_nas import (
     select_best_architecture,
     select_evolutionary_parents,
 )
+from common.hpo import (
+    HPO_EPOCHS,
+    MEMORY_CONSTRAINED_HPO_EPOCHS,
+    hpo_candidates,
+    select_best_hyperparameters,
+)
 from topology_opt.reward import RewardConfig, calculate_run_reward
 from topology_opt.selector import select_candidate
 from common.model_design import (
@@ -727,6 +733,162 @@ class TrainingCoordinator:
             "seed": seed,
             "smoke_test": smoke_test,
         }
+
+    def start_hpo(
+        self,
+        *,
+        dataset_name: str,
+        architecture: dict[str, Any],
+        search_time_limit_seconds: int = 300,
+        seed: int = 2026,
+    ) -> dict[str, Any]:
+        """Tune training settings of one architecture on every worker's own data."""
+        if not isinstance(dataset_name, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", dataset_name
+        ):
+            raise ValueError("A valid dataset_name is required for HPO")
+        if not isinstance(architecture, dict) or architecture.get("model_type") != "custom":
+            raise ValueError("HPO requires a custom architecture")
+        input_shape = architecture.get("input_shape")
+        classes = architecture.get("classes")
+        if (
+            not isinstance(input_shape, list)
+            or len(input_shape) != 3
+            or not isinstance(classes, list)
+            or len(classes) < 2
+        ):
+            raise ValueError("HPO architecture must carry its dataset input_shape and classes")
+        if not 90 <= search_time_limit_seconds <= 600:
+            raise ValueError("HPO search time limit must be between 90 and 600 seconds")
+        if not 0 <= seed <= 2**32 - 1:
+            raise ValueError("HPO seed is out of range")
+        candidates = hpo_candidates(
+            architecture,
+            input_shape=tuple(int(value) for value in input_shape),
+            num_classes=len(classes),
+            memory_constrained=dataset_name == "cifar10",
+        )
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError(f"Training group {self._active_group_id} is already active")
+            group_id = f"hpo-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+            group = {
+                "group_id": group_id,
+                "kind": "hyperparameter_search",
+                "dataset_name": dataset_name,
+                "topology": self._settings["topology"],
+                "seed": seed,
+                "search_time_limit_seconds": search_time_limit_seconds,
+                "search_method": "grid_learning_rate_batch_size",
+                "base_architecture": architecture,
+                "hpo_candidates": candidates,
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+                "worker_search": [],
+                "runs": [],
+            }
+            self._groups.append(group)
+            self._active_group_id = group_id
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run_hpo_group,
+                args=(group_id,),
+                name=f"hpo-group-{group_id}",
+                daemon=True,
+            )
+            self._thread.start()
+            self._persist_locked()
+        return {
+            "accepted": True,
+            "group_id": group_id,
+            "dataset_name": dataset_name,
+            "candidate_count": len(candidates),
+            "search_time_limit_seconds": search_time_limit_seconds,
+        }
+
+    def _run_hpo_group(self, group_id: str) -> None:
+        group = self._get_group(group_id)
+        try:
+            base = group["base_architecture"]
+            candidates = group["hpo_candidates"]
+            epochs = MEMORY_CONSTRAINED_HPO_EPOCHS if group["dataset_name"] == "cifar10" else HPO_EPOCHS
+            payload = {
+                "dataset_name": group["dataset_name"],
+                "seed": group["seed"],
+                "time_limit_seconds": group["search_time_limit_seconds"],
+                "epochs": epochs,
+                "architectures": candidates,
+            }
+
+            def record(result: dict[str, Any]) -> None:
+                with self._lock:
+                    rows = {row["node_id"]: row for row in group["worker_search"]}
+                    rows[result["node_id"]] = {
+                        "node_id": result["node_id"],
+                        "elapsed_seconds": result.get("elapsed_seconds"),
+                        "candidate_count": len(result.get("candidates", [])),
+                    }
+                    group["worker_search"] = sorted(rows.values(), key=lambda row: row["node_id"])
+                    self._persist_locked()
+
+            searches = self._parallel_workers(
+                lambda worker: self._post(
+                    worker,
+                    "/v1/nas/search",
+                    payload,
+                    timeout=group["search_time_limit_seconds"] + 60,
+                ),
+                on_result=record,
+            )
+            if self._stop.is_set():
+                raise TrainingCancelled("HPO was cancelled")
+            if any(result.get("fidelity_epochs") != epochs for result in searches):
+                raise TrainingError("Workers evaluated HPO candidates at a different fidelity")
+            measured = aggregate_worker_candidates(searches, worker_count=len(self.config.workers))
+            if {row["architecture"]["id"] for row in measured} != {item["id"] for item in candidates}:
+                raise TrainingError("HPO workers did not evaluate the same candidate list")
+            best = select_best_hyperparameters(measured)
+            selected_architecture = {
+                **best["architecture"],
+                "dataset_name": group["dataset_name"],
+                "input_shape": list(base["input_shape"]),
+                "classes": list(base["classes"]),
+                "num_classes": len(base["classes"]),
+            }
+            if isinstance(base.get("normalization"), dict):
+                selected_architecture["normalization"] = base["normalization"]
+            with self._lock:
+                group["hpo_results"] = measured
+                group["selected_architecture"] = selected_architecture
+                group["selected_hyperparameters"] = best["architecture"]["training"]
+                self._persist_locked()
+            self._update_group(
+                group_id,
+                status="completed",
+                completed_at=time.time(),
+                selection={
+                    "method": group["search_method"],
+                    "fidelity_epochs": epochs,
+                    "selected_candidate": {**best, "architecture": selected_architecture},
+                },
+            )
+        except TrainingCancelled as error:
+            self._update_group(group_id, status="stopped", completed_at=time.time(), error=str(error))
+        except Exception as error:
+            LOGGER.exception("HPO group %s failed", group_id)
+            self._update_group(
+                group_id,
+                status="failed",
+                completed_at=time.time(),
+                error=f"{type(error).__name__}: {error}",
+            )
+        finally:
+            with self._lock:
+                if self._active_group_id == group_id:
+                    self._active_group_id = None
+                    self._persist_locked()
 
     def start_optimization(
         self,

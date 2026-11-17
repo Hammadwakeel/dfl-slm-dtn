@@ -37,6 +37,8 @@ ACTION_NAMES = (
     "set_rounds",
     "set_epochs",
     "enable_nas",
+    "run_hpo",
+    "prune_model",
     "get_status",
     "get_logs",
     "get_results",
@@ -46,6 +48,8 @@ ACTION_NAMES = (
     "redirect",
     "suggest_next_action",
 )
+# Actions executed by the DTN backend (it holds the datasets and model files).
+BACKEND_ACTIONS = frozenset({"preprocess_dataset", "create_initial_model", "prune_model"})
 ACTION_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "common" / "slm_action_schema.json"
 ACTION_SCHEMA_DOCUMENT = json.loads(ACTION_SCHEMA_PATH.read_text(encoding="utf-8"))
 ACTION_SCHEMA = {
@@ -830,6 +834,16 @@ def _execute_action(
                     smoke_test=parameters.get("smoke_test", False),
                 ),
             }
+        if name == "run_hpo":
+            return {
+                "available": True,
+                "data": training_coordinator.start_hpo(
+                    dataset_name=parameters["dataset_name"],
+                    architecture=parameters["architecture"],
+                    search_time_limit_seconds=parameters.get("search_time_limit_seconds", 300),
+                    seed=parameters.get("seed", 2026),
+                ),
+            }
         if name == "start_training":
             return {
                 "available": True,
@@ -878,6 +892,11 @@ def _execute_action(
             }
         if name in {"get_results", "suggest_next_action"}:
             return {"available": True, "data": training_coordinator.results()}
+    if name in BACKEND_ACTIONS:
+        return {
+            "available": False,
+            "message": f"{name} runs on the DTN backend, which owns the datasets and models.",
+        }
     return {
         "available": False,
         "message": f"{name} is not available yet; this action has no Phase 4 implementation.",

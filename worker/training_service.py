@@ -60,6 +60,9 @@ from worker.nas_search import (
 
 LOGGER = logging.getLogger("dfl_slm.worker_training")
 ROUND_WEIGHTS_RETAINED = 2
+# Newest aggregated model of a dataset run, kept on disk for pruning.
+LATEST_MODEL_WEIGHTS = "latest_model.npz"
+LATEST_MODEL_METADATA = "latest_model.json"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_WEIGHT_BYTES = MAX_MODEL_WEIGHT_BYTES
 MAX_DATASET_SHARD_BYTES = 256 * 1024 * 1024
@@ -448,6 +451,14 @@ def install_initial_model(
             )
         if model_type == "custom" and actual_parameters != estimated_parameters:
             raise ValueError("Model layer parameter count differs from its validated estimate")
+        if model_type == "custom" and weights_bytes:
+            # A supplied bundle (e.g. a pruned, already-trained model) starts from those
+            # weights instead of a fresh seeded initialization.
+            supplied = deserialize_weights(weights_bytes)
+            expected_shapes = [tuple(value.shape) for value in model.get_weights()]
+            if [tuple(value.shape) for value in supplied] != expected_shapes:
+                raise ValueError("Supplied initial weights do not match the model architecture")
+            model.set_weights([value.astype(np.float32) for value in supplied])
         weights = [np.asarray(value) for value in model.get_weights()]
         weights_bytes = serialize_weights(weights)
         parameter_count = actual_parameters
@@ -1345,6 +1356,59 @@ class WorkerTrainer:
         _log_event("training_cancel_requested", run_id=active_run)
         return {"accepted": True, "run_id": active_run}
 
+    def _persist_latest_model(
+        self,
+        run_id: str,
+        round_index: int,
+        weights: list[np.ndarray],
+        architecture: Any,
+        result: dict[str, Any],
+    ) -> None:
+        """Keep the newest aggregated model on disk so it survives memory cleanup.
+
+        Only custom dataset models are kept; pruning reads this file after training.
+        A failure here never fails the round.
+        """
+        dataset_name = getattr(self, "dataset_name", None)
+        if not dataset_name or not isinstance(architecture, dict) or architecture.get("model_type") != "custom":
+            return
+        try:
+            models_dir = Path(self.config.dataset_root).resolve() / dataset_name / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            payload = serialize_weights([np.asarray(item) for item in weights])
+            metadata = {
+                "dataset_name": dataset_name,
+                "run_id": run_id,
+                "round": round_index,
+                "architecture": architecture,
+                "validation_accuracy": result.get("validation_accuracy"),
+                "validation_macro_f1": result.get("validation_macro_f1"),
+                "weights_sha256": hashlib.sha256(payload).hexdigest(),
+                "saved_at": time.time(),
+            }
+            for name, data in (
+                (LATEST_MODEL_WEIGHTS, payload),
+                (LATEST_MODEL_METADATA, (json.dumps(metadata) + "\n").encode("utf-8")),
+            ):
+                temporary = models_dir / f".{name}.tmp"
+                temporary.write_bytes(data)
+                os.replace(temporary, models_dir / name)
+        except (OSError, ValueError) as error:
+            _log_event("latest_model_save_failed", run_id=run_id, round=round_index, error=str(error))
+
+    def latest_model(self, dataset_name: str) -> dict[str, Any]:
+        """Return the newest aggregated model of a dataset run with base64 weights."""
+        models_dir = Path(self.config.dataset_root).resolve() / dataset_name / "models"
+        weights_path = models_dir / LATEST_MODEL_WEIGHTS
+        metadata_path = models_dir / LATEST_MODEL_METADATA
+        if not weights_path.is_file() or not metadata_path.is_file():
+            raise FileNotFoundError(f"No trained model is stored for {dataset_name}")
+        payload = weights_path.read_bytes()
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("weights_sha256") != hashlib.sha256(payload).hexdigest():
+            raise ValueError("Stored trained model is incomplete")
+        return {**metadata, "weights_b64": base64.b64encode(payload).decode("ascii")}
+
     def weights(self, run_id: str, round_index: int) -> tuple[bytes, int]:
         with self._lock:
             weights = self._round_weights.get((run_id, round_index))
@@ -1686,6 +1750,8 @@ class WorkerTrainer:
                     self._round_weights.pop((run_id, stale_round), None)
                     self._round_sample_counts.pop((run_id, stale_round), None)
                 self._results[run_id].append(result)
+                run_architecture = self._run_architectures.get(run_id)
+            self._persist_latest_model(run_id, round_index, averaged, run_architecture, result)
             _log_event("round_completed", **result)
             return result
         except Exception as error:
@@ -1746,6 +1812,13 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
             elif parsed.path == "/v1/results":
                 run_id = parse_qs(parsed.query).get("run_id", [None])[0]
                 self._send_json(HTTPStatus.OK, trainer.results(run_id))
+            elif re.fullmatch(r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/latest-model", parsed.path):
+                try:
+                    self._send_json(HTTPStatus.OK, trainer.latest_model(parsed.path.split("/")[-2]))
+                except FileNotFoundError as error:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                except (OSError, ValueError, json.JSONDecodeError) as error:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
             elif re.fullmatch(r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}", parsed.path):
                 dataset_name = parsed.path.rsplit("/", 1)[-1]
                 metadata_path = (

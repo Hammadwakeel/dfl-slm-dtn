@@ -285,3 +285,35 @@ def upload_worker_shard(
     if result.get("node_id") != worker.node_id:
         raise WorkerShardError(f"{worker.node_id} returned a mismatched shard identity")
     return result
+
+
+def get_worker_latest_model(
+    worker: DeviceConfig,
+    dataset_name: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any] | None:
+    """Newest aggregated model a worker trained for a dataset (None if it has none)."""
+    if worker.role != "worker":
+        raise ValueError(f"Cannot query a model on non-worker node {worker.node_id}")
+    request = Request(
+        f"{worker.training_url}/v1/datasets/{quote(dataset_name, safe='')}/latest-model",
+        headers={"Authorization": f"Bearer {worker.token}", "Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        detail = error.read().decode("utf-8", errors="replace").strip()[:500]
+        raise WorkerShardError(
+            f"{worker.node_id} returned HTTP {error.code} while reading its trained model: {detail}"
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise WorkerShardError(f"Could not reach {worker.node_id} to read its trained model: {error}") from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise WorkerShardError(f"{worker.node_id} returned an invalid trained model") from error
+    if not isinstance(result, dict) or result.get("dataset_name") != dataset_name:
+        raise WorkerShardError(f"{worker.node_id} returned a trained model for another dataset")
+    return result

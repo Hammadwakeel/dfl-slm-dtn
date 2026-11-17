@@ -9,6 +9,8 @@ import pytest
 
 from common.dataset_nas import (
     CIFAR_INITIAL_POPULATION_SIZE,
+    FINAL_EPOCHS,
+    INITIAL_EPOCHS,
     INITIAL_POPULATION_SIZE,
     initial_population,
     smoke_test_architecture,
@@ -962,7 +964,7 @@ def test_dataset_nas_searches_selected_shards_and_persists_selection(
     assert group["selected_architecture"]["num_classes"] == 2
     assert group["selected_parameter_count"] == group["selected_architecture"]["parameter_count"]
     assert group["search_method"] == "pareto_evolutionary_multifidelity"
-    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [3, 10]
+    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [INITIAL_EPOCHS, FINAL_EPOCHS]
     assert [len(stage["candidates"]) for stage in group["nas_generations"]] == [8, 4]
     assert group["selection"]["selected_candidate"]["architecture"]["id"] == best_candidate_id
     assert (
@@ -988,8 +990,8 @@ def test_dataset_nas_searches_selected_shards_and_persists_selection(
         and payload["dataset_name"] == "cats-and-dogs"
         for _, path, payload, _ in calls
     )
-    assert [payload["epochs"] for _, _, payload, _ in calls[:3]] == [3, 3, 3]
-    assert [payload["epochs"] for _, _, payload, _ in calls[3:]] == [10, 10, 10]
+    assert [payload["epochs"] for _, _, payload, _ in calls[:3]] == [INITIAL_EPOCHS] * 3
+    assert [payload["epochs"] for _, _, payload, _ in calls[3:]] == [FINAL_EPOCHS] * 3
     assert [payload["time_limit_seconds"] for _, _, payload, _ in calls[:3]] == [300, 300, 300]
     assert [payload["time_limit_seconds"] for _, _, payload, _ in calls[3:]] == [300, 300, 300]
     assert all("architectures" not in payload for _, _, payload, _ in calls[:3])
@@ -1043,11 +1045,11 @@ def test_cifar10_dataset_nas_uses_memory_constrained_candidates(tmp_path: Path) 
     assert group["status"] == "completed"
     assert len(calls) == len(coordinator.config.workers)
     assert group["search_method"] == "pareto_constrained_single_stage"
-    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [3]
+    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [INITIAL_EPOCHS]
     assert [len(stage["candidates"]) for stage in group["nas_generations"]] == [3]
     assert [
         payload["epochs"] for payload in calls[: len(coordinator.config.workers)]
-    ] == [3] * len(coordinator.config.workers)
+    ] == [INITIAL_EPOCHS] * len(coordinator.config.workers)
     assert all("architectures" not in payload for payload in calls)
     assert all(
         candidate["architecture"]["blocks"] == 2
@@ -1208,3 +1210,58 @@ def test_configure_validates_aggregation_and_sync_settings(tmp_path: Path) -> No
         coordinator.configure(sync_mode="async")
     with pytest.raises(ValueError, match="sync_deadline_seconds"):
         coordinator.configure(sync_deadline_seconds=1)
+
+
+def test_hpo_tunes_training_settings_of_one_architecture_on_every_worker(
+    tmp_path: Path,
+) -> None:
+    from common.hpo import HPO_EPOCHS
+
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    base = {
+        **initial_population(seed=17, input_shape=(28, 28, 1), num_classes=2)[0],
+        "dataset_name": "cats-and-dogs",
+        "input_shape": [28, 28, 1],
+        "classes": ["cat", "dog"],
+        "num_classes": 2,
+    }
+    calls = []
+
+    def fake_post(worker, path, payload, timeout):
+        calls.append((path, payload))
+        return dataset_search_response(worker, payload, best_candidate_id="hpo-adam-lr3e-3-bs64")
+
+    def run_workers(operation, *, on_result=None):
+        results = []
+        for worker in coordinator.config.workers:
+            result = operation(worker)
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+        return results
+
+    coordinator._parallel_workers = run_workers
+    coordinator._post = fake_post
+    accepted = coordinator.start_hpo(dataset_name="cats-and-dogs", architecture=base, search_time_limit_seconds=300)
+    deadline = time.monotonic() + 3
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    group = next(item for item in coordinator.results()["groups"] if item["group_id"] == accepted["group_id"])
+    assert group["status"] == "completed", group.get("error")
+    assert group["kind"] == "hyperparameter_search"
+    assert accepted["candidate_count"] == 6
+    assert all(path == "/v1/nas/search" and payload["epochs"] == HPO_EPOCHS for path, payload in calls)
+    assert len(calls[0][1]["architectures"]) == 6
+    assert group["selected_hyperparameters"] == {"optimizer": "adam", "learning_rate": 0.003, "batch_size": 64}
+    selected = group["selected_architecture"]
+    assert selected["id"] == "hpo-adam-lr3e-3-bs64"
+    assert selected["layers"] == base["layers"]
+    assert selected["classes"] == ["cat", "dog"] and selected["input_shape"] == [28, 28, 1]
+
+
+def test_hpo_rejects_architectures_without_dataset_shape(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    base = initial_population(seed=17, input_shape=(28, 28, 1), num_classes=2)[0]
+    with pytest.raises(ValueError, match="input_shape and classes"):
+        coordinator.start_hpo(dataset_name="cats-and-dogs", architecture=base)

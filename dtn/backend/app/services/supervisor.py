@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
+    PRUNE_RATIO,
     Decision,
     DecisionError,
     decision_messages,
@@ -42,6 +43,7 @@ from app.services.supervisor_policy import (
     rule_decision,
     summarize_group,
     tool_definitions,
+    tuning_architecture,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -514,14 +516,17 @@ class Supervisor:
     def _stage_initial_model(self, run_id: str, goal: dict[str, Any], state: dict[str, Any]) -> None:
         action = {
             "action": "create_initial_model",
-            "parameters": {"model_name": goal["dataset"], "seed": int(goal["seed"])},
+            "parameters": {"model_name": goal["dataset"], "seed": int(goal["seed"]), "restore_baseline": True},
         }
         self._set_current(run_id, "initial_model", "Create and distribute one identical initial model.")
         try:
-            _unwrap_result(self._dispatch(action, "Supervisor initial model", run_id))
+            result = _unwrap_result(self._dispatch(action, "Supervisor initial model", run_id))
         except Exception as error:  # noqa: BLE001
             self._step_failed(run_id, goal, state, "initial_model", str(error), retry_stage="initial_model")
             return
+        report = result.get("data") if isinstance(result, dict) else None
+        if isinstance(report, dict) and isinstance(report.get("architecture"), dict):
+            state["baseline_architecture"] = report["architecture"]
         state["completed_steps"].append("initial_model")
         state["pending_step"] = {
             "step": "baseline_training",
@@ -581,6 +586,64 @@ class Supervisor:
             }
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
             return _group_id(data), {}
+        if step == "run_hpo":
+            architecture = tuning_architecture(state)
+            if not isinstance(architecture, dict):
+                raise StepFailed("HPO needs a custom architecture; none is known yet")
+            action = {
+                "action": "run_hpo",
+                "parameters": {
+                    "dataset_name": goal["dataset"],
+                    "architecture": architecture,
+                    "search_time_limit_seconds": min(600, max(90, int(goal["nas_budget_seconds"]))),
+                    "seed": int(goal["seed"]),
+                },
+            }
+            data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
+            return _group_id(data), {}
+        if step == "prune_model":
+            prune = {
+                "action": "prune_model",
+                "parameters": {"model_name": goal["dataset"], "ratio": PRUNE_RATIO, "seed": int(goal["seed"])},
+            }
+            report = _unwrap_result(self._dispatch(prune, reason, run_id)).get("data") or {}
+            state["pruning"] = {
+                key: report.get(key)
+                for key in (
+                    "ratio",
+                    "parameters_before",
+                    "parameters_after",
+                    "compression",
+                    "architecture_id",
+                    "source_worker",
+                    "source_validation_accuracy",
+                )
+            }
+            # Fine-tune the pruned model (already installed with its trained weights).
+            topology = state.get("selected_topology") or goal["topology"]
+            rounds = max(3, int(goal["rounds"]) // 2)
+            epochs = int(goal["local_epochs"])
+            _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
+            parameters = {
+                "rounds": rounds,
+                "epochs": epochs,
+                "dataset_name": goal["dataset"],
+                "dataset_split": goal["dataset_split"],
+                "aggregation": goal.get("aggregation", "fedavg"),
+                "sync_mode": goal.get("sync_mode", "sync"),
+            }
+            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
+                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
+            data = _unwrap_result(
+                self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
+            ).get("data") or {}
+            state["last_trained_architecture"] = None  # a pruned model is not pruned again
+            return _group_id(data), {
+                "topology": topology,
+                "rounds": rounds,
+                "local_epochs": epochs,
+                "pruning": state["pruning"],
+            }
         if step == "optimize_topology":
             action = {
                 "action": "optimize_topology",
@@ -614,6 +677,7 @@ class Supervisor:
                                 "model_name": goal["dataset"],
                                 "architecture": architecture,
                                 "seed": int(goal["seed"]),
+                                "replace_existing": True,
                             },
                         },
                         reason,
@@ -635,6 +699,7 @@ class Supervisor:
                 parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
             if architecture:
                 parameters["architecture"] = architecture
+            state["last_trained_architecture"] = architecture or state.get("baseline_architecture")
             data = _unwrap_result(
                 self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
             ).get("data") or {}
@@ -722,12 +787,16 @@ class Supervisor:
         if step not in state["completed_steps"]:
             state["completed_steps"].append(step)
         state["consecutive_failures"] = 0
-        if step == "run_nas" and isinstance(summary.get("selected_architecture"), dict):
+        if step in {"run_nas", "run_hpo"} and isinstance(summary.get("selected_architecture"), dict):
             state["nas_architecture"] = summary.pop("selected_architecture")
         else:
             summary.pop("selected_architecture", None)
         if step == "optimize_topology" and summary.get("selected_topology"):
             state["selected_topology"] = summary["selected_topology"]
+        if step == "prune_model" and isinstance(state.get("pruning"), dict):
+            state["pruning"]["validation_accuracy"] = summary.get("validation_accuracy")
+            state["pruning"]["macro_f1"] = summary.get("macro_f1")
+            summary["pruning"] = state["pruning"]
         accuracy = summary.get("validation_accuracy")
         best = state.get("best")
         if isinstance(accuracy, (int, float)) and (not best or accuracy > best.get("validation_accuracy", -1)):

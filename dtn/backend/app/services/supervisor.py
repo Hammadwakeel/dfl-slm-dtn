@@ -608,6 +608,10 @@ class Supervisor:
                 "parameters": {"model_name": goal["dataset"], "ratio": PRUNE_RATIO, "seed": int(goal["seed"])},
             }
             report = _unwrap_result(self._dispatch(prune, reason, run_id)).get("data") or {}
+            pruned_from = (state.get("last_trained_architecture") or {}).get("id")
+            if pruned_from:
+                # Workers store the deployed design without its search id; restore it.
+                report["architecture_id"] = f"{pruned_from}-pruned{int(round(PRUNE_RATIO * 100))}"
             state["pruning"] = {
                 key: report.get(key)
                 for key in (

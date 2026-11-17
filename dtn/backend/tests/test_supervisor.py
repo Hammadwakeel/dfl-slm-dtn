@@ -53,15 +53,16 @@ def test_trained_configuration_is_not_offered_again() -> None:
 
 
 def test_parse_decision_accepts_native_and_text_tool_calls() -> None:
-    allowed = ["run_nas", "finish_workflow"]
+    allowed = ["run_nas", "train_final", "finish_workflow"]
     native = parse_decision(
         {
             "content": "NAS can find a stronger model.",
-            "tool_calls": [{"function": {"name": "run_nas", "arguments": {"budget_seconds": "300"}}}],
+            "tool_calls": [{"function": {"name": "train_final", "arguments": {"rounds": "50", "local_epochs": "3"}}}],
         },
         allowed,
     )
-    assert (native.step, native.arguments, native.source) == ("run_nas", {"budget_seconds": 300}, "slm")
+    # Out-of-range integers are clamped to the tool bounds instead of rejected.
+    assert (native.step, native.arguments, native.source) == ("train_final", {"rounds": 20, "local_epochs": 3}, "slm")
     assert native.rationale == "NAS can find a stronger model."
 
     text = parse_decision(
@@ -76,13 +77,13 @@ def test_parse_decision_accepts_native_and_text_tool_calls() -> None:
     [
         {"content": "Let me check the results first."},
         {"tool_calls": [{"function": {"name": "get_results", "arguments": {}}}]},
-        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"budget_seconds": 5}}}]},
+        {"tool_calls": [{"function": {"name": "train_final", "arguments": {"topology": "torus"}}}]},
         {"tool_calls": [{"function": {"name": "finish_workflow", "arguments": {"outcome": "done"}}}]},
     ],
 )
 def test_parse_decision_rejects_prose_unknown_tools_and_bad_arguments(message: dict[str, Any]) -> None:
     with pytest.raises(DecisionError):
-        parse_decision(message, ["run_nas", "finish_workflow"])
+        parse_decision(message, ["run_nas", "train_final", "finish_workflow"])
 
 
 def test_rule_decision_finishes_when_target_met_and_fallback_order() -> None:
@@ -98,7 +99,7 @@ def test_rule_decision_finishes_when_target_met_and_fallback_order() -> None:
     assert rule_decision(goal, state, minutes_left=100) is None
     assert rule_decision(goal, state, minutes_left=0).arguments["outcome"] == "blocked"
     fallback = fallback_decision(goal, state)
-    assert (fallback.step, fallback.arguments, fallback.source) == ("run_nas", {"budget_seconds": 600}, "fallback")
+    assert (fallback.step, fallback.arguments, fallback.source) == ("run_nas", {}, "fallback")
 
 
 def test_summarize_group_reads_final_round_worker_metrics() -> None:
@@ -277,7 +278,7 @@ def run_until_done(supervisor: Supervisor, run_id: str, ticks: int = 40) -> dict
 def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architecture(sessions) -> None:
     cluster = FakeCluster()
     slm = FakeSLM([
-        tool_call("run_nas", {"budget_seconds": 300}, "NAS should find a stronger model."),
+        tool_call("run_nas", {}, "NAS should find a stronger model."),
         tool_call("train_final", {"rounds": 4, "local_epochs": 3, "aggregation": "metropolis"}, "Retrain with the searched model."),
     ])
     supervisor = make_supervisor(sessions, cluster, slm)
@@ -455,8 +456,13 @@ def test_supervisor_api_requires_auth_and_validates_goal(client, auth_headers) -
 
 def test_reason_argument_becomes_the_rationale_and_is_not_a_step_argument() -> None:
     decision = parse_decision(
-        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"budget_seconds": 300, "reason": "Baseline is 4 points below target."}}}]},
+        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"reason": "Baseline is 4 points below target."}}}]},
         ["run_nas", "finish_workflow"],
     )
-    assert decision.arguments == {"budget_seconds": 300}
+    assert decision.arguments == {}
+    stale = parse_decision(
+        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"budget_seconds": 100}}}]},
+        ["run_nas"],
+    )
+    assert stale.arguments == {}
     assert decision.rationale == "Baseline is 4 points below target."

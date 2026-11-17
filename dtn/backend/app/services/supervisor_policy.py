@@ -37,11 +37,9 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
             "Search a better small CNN on every worker's own data and validation split. "
             "Useful when the baseline model may be too small or too large."
         ),
-        "parameters": {
-            "type": "object",
-            "properties": {"budget_seconds": {"type": "integer", "minimum": 90, "maximum": 600}},
-            "additionalProperties": False,
-        },
+        # The search budget comes from the operator's goal: a model-chosen budget was
+        # too small for even two candidates and made every search time out.
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "optimize_topology": {
         "description": (
@@ -226,10 +224,33 @@ def _coerce_arguments(raw: Any) -> dict[str, Any]:
     return coerced
 
 
+def _clamp_integers(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Clamp out-of-range integers to the tool bounds (e.g. rounds 50 -> 20).
+
+    A small model asking for "more rounds than allowed" means "as many as allowed";
+    rejecting it wasted the repair attempt and ended runs early.
+    """
+    properties = STEP_TOOLS.get(name, {}).get("parameters", {}).get("properties", {})
+    # Drop arguments the tool does not declare (e.g. a stale budget_seconds habit).
+    clamped = {key: value for key, value in arguments.items() if key in properties or key == "reason"}
+    for key, value in list(clamped.items()):
+        schema = properties.get(key)
+        if not isinstance(schema, dict) or schema.get("type") != "integer":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if "minimum" in schema:
+            value = max(int(schema["minimum"]), value)
+        if "maximum" in schema:
+            value = min(int(schema["maximum"]), value)
+        clamped[key] = value
+    return clamped
+
+
 def validate_step(name: Any, arguments: Any, allowed: list[str]) -> dict[str, Any]:
     if not isinstance(name, str) or name not in allowed:
         raise DecisionError(f"Step {name!r} is not one of the allowed steps: {', '.join(allowed)}")
-    parsed = _coerce_arguments(arguments)
+    parsed = _clamp_integers(name, _coerce_arguments(arguments))
     try:
         _VALIDATORS[name].validate(parsed)
     except ValidationError as error:
@@ -337,7 +358,7 @@ def fallback_decision(goal: dict[str, Any], state: dict[str, Any]) -> Decision:
         if step in allowed:
             arguments: dict[str, Any] = {}
             if step == "run_nas":
-                arguments = {"budget_seconds": int(goal["nas_budget_seconds"])}
+                arguments = {}
             return Decision(step, arguments, "Default improvement order: NAS, topology, retrain.", "fallback")
     return Decision(
         "finish_workflow",

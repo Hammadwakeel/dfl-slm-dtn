@@ -576,7 +576,7 @@ class Supervisor:
                 "parameters": {
                     "enabled": True,
                     "dataset_name": goal["dataset"],
-                    "search_time_limit_seconds": int(arguments.get("budget_seconds", goal["nas_budget_seconds"])),
+                    "search_time_limit_seconds": int(goal["nas_budget_seconds"]),
                 },
             }
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}

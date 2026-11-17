@@ -419,3 +419,38 @@ def test_initial_model_deletion_reports_partial_worker_failure(tmp_path, monkeyp
         delete_initial_model(store, workers, "sample-dataset")
 
     assert model_path.is_dir()
+
+
+def test_report_accepts_a_pruned_custom_model_with_stored_trained_weights(tmp_path):
+    store = DatasetStore(tmp_path)
+    store.upload_folder(
+        "sample-dataset",
+        [("cat/cat.png", _image_bytes((255, 0, 0))), ("dog/dog.png", _image_bytes((0, 0, 255)))],
+    )
+    model_path = tmp_path / "sample-dataset" / "models" / "initial_model"
+    model_path.mkdir(parents=True)
+    architecture = {
+        "model_type": "custom",
+        "dataset_name": "sample-dataset",
+        "input_shape": [4, 4, 3],
+        "classes": ["cat", "dog"],
+        "num_classes": 2,
+        "parameter_count": 98,
+        "layers": [{"type": "flatten"}, {"type": "dense", "units": 2, "activation": "linear"}],
+    }
+    architecture_bytes = json.dumps(architecture).encode("utf-8")
+    (model_path / "architecture.json").write_bytes(architecture_bytes)
+    (model_path / "initial_weights.npz").write_bytes(b"trained-weights")
+    (model_path / "metadata.json").write_text(
+        json.dumps({
+            "dataset_name": "sample-dataset",
+            "architecture_sha256": hashlib.sha256(architecture_bytes).hexdigest(),
+            "weights_sha256": "a" * 64,
+            "parameter_count": 98,
+        }),
+        encoding="utf-8",
+    )
+
+    report = get_initial_model_report(store, "sample-dataset")
+
+    assert report is not None and report["architecture"]["model_type"] == "custom"

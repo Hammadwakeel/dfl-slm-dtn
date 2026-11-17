@@ -534,9 +534,11 @@ def get_initial_model_report(
     if not isinstance(architecture, dict) or not isinstance(metadata, dict):
         raise InitialModelError("Initial-model bundle metadata or hashes do not match")
     if architecture.get("model_type") in {"custom", "pretrained_deit"}:
+        # Custom models are seeded on the workers; a stored weight file only exists for
+        # a pruned model (its trained weights). weights_sha256 is the workers' hash of
+        # the built model, so only its format is checked here.
         weights_hash_valid = (
-            weights_bytes is None
-            and isinstance(metadata.get("weights_sha256"), str)
+            isinstance(metadata.get("weights_sha256"), str)
             and len(metadata["weights_sha256"]) == 64
             and all(character in "0123456789abcdef" for character in metadata["weights_sha256"])
         )

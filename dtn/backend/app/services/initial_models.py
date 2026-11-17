@@ -37,6 +37,30 @@ class InitialModelError(ValueError):
     pass
 
 
+
+def _normalization_matches(stored: Any, current: Any, tolerance: float = 1e-3) -> bool:
+    """Compare normalization settings, tolerating tiny drift in recomputed statistics.
+
+    Re-preprocessing the same dataset recomputes mean/std and can differ in the
+    5th decimal place; that must not block reuse of the deployed initial model.
+    """
+    if not isinstance(stored, dict) or not isinstance(current, dict):
+        return stored == current
+    if stored.keys() != current.keys() or stored.get("method") != current.get("method"):
+        return False
+    for key, value in stored.items():
+        other = current[key]
+        if isinstance(value, list) and isinstance(other, list):
+            if len(value) != len(other) or any(
+                not isinstance(a, (int, float)) or not isinstance(b, (int, float))
+                or abs(a - b) > tolerance * max(1.0, abs(a))
+                for a, b in zip(value, other)
+            ):
+                return False
+        elif value != other:
+            return False
+    return True
+
 def build_initial_model(
     *,
     dataset_name: str,
@@ -285,7 +309,9 @@ def create_and_distribute_initial_model(
             )
         if (
             architecture.get("model_type") in {"custom", "pretrained_deit"}
-            and architecture.get("normalization", {"method": "minmax"}) != normalization
+            and not _normalization_matches(
+                architecture.get("normalization", {"method": "minmax"}), normalization
+            )
         ):
             raise InitialModelError(
                 f"Existing initial model normalization does not match the preprocessed {dataset_name} dataset"

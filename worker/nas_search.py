@@ -658,8 +658,9 @@ def search_dataset_architectures_isolated(
         str(seed),
         str(time_limit_seconds),
     ]
-    if architectures is not None:
-        command.extend((str(epochs), json.dumps(architectures, separators=(",", ":"))))
+    # Always pass the fidelity: the first generation has no architectures but must
+    # still train for the requested epochs (it silently used 1 before).
+    command.extend((str(epochs), json.dumps(architectures, separators=(",", ":"))))
     if cancel_event is None:
         try:
             completed = subprocess.run(

@@ -465,4 +465,9 @@ def test_reason_argument_becomes_the_rationale_and_is_not_a_step_argument() -> N
         ["run_nas"],
     )
     assert stale.arguments == {}
+    wordy = parse_decision(
+        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"reason": "x" * 900}}}]},
+        ["run_nas"],
+    )
+    assert wordy.step == "run_nas" and len(wordy.rationale) == 300
     assert decision.rationale == "Baseline is 4 points below target."

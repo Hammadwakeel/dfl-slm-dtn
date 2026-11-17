@@ -233,6 +233,9 @@ def _clamp_integers(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     properties = STEP_TOOLS.get(name, {}).get("parameters", {}).get("properties", {})
     # Drop arguments the tool does not declare (e.g. a stale budget_seconds habit).
     clamped = {key: value for key, value in arguments.items() if key in properties or key == "reason"}
+    if isinstance(clamped.get("reason"), str):
+        # A long explanation is still a valid decision; keep it, shortened.
+        clamped["reason"] = " ".join(clamped["reason"].split())[: REASON_PROPERTY["maxLength"]]
     for key, value in list(clamped.items()):
         schema = properties.get(key)
         if not isinstance(schema, dict) or schema.get("type") != "integer":

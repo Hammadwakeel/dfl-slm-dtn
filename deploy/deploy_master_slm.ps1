@@ -198,6 +198,8 @@ try {
     }
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'topology_opt\__init__.py') `
+        (Join-Path $repoRoot 'topology_opt\apg.py') `
+        (Join-Path $repoRoot 'topology_opt\learning.py') `
         (Join-Path $repoRoot 'topology_opt\reward.py') `
         (Join-Path $repoRoot 'topology_opt\selector.py') `
         (Join-Path $repoRoot 'topology_opt\reward_config.json') `

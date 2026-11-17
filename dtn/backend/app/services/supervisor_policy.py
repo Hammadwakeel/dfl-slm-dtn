@@ -22,15 +22,23 @@ from common.pruning import PASS_THROUGH_LAYERS, PRUNABLE_LAYERS
 
 DATASETS = ("mnist", "cifar10")
 DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07")
-TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star")
+TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned")
 AGGREGATIONS = ("fedavg", "uniform", "metropolis", "trimmed_mean")
 SYNC_MODES = ("sync", "semi_sync")
 FINISH_OUTCOMES = ("objective_achieved", "no_worthwhile_action", "blocked")
 
 # Steps that start a measured experiment on the cluster, in the order the
 # deterministic fallback policy tries them.
-SEARCH_STEPS = ("run_nas", "run_hpo", "optimize_topology")
-EXPERIMENT_STEPS = ("baseline_training", "run_nas", "run_hpo", "optimize_topology", "train_final", "prune_model")
+SEARCH_STEPS = ("run_nas", "run_hpo", "learn_topology", "optimize_topology")
+EXPERIMENT_STEPS = (
+    "baseline_training",
+    "run_nas",
+    "run_hpo",
+    "learn_topology",
+    "optimize_topology",
+    "train_final",
+    "prune_model",
+)
 # Steps that need a measured, trained model (and a custom layer architecture).
 MODEL_STEPS = ("train_final", "prune_model")
 PRUNE_RATIO = 0.5
@@ -58,6 +66,14 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
             "Remove half of the least important channels of the best trained model and "
             "fine-tune it on all workers. Makes the model smaller and faster on the Jetsons; "
             "useful once accuracy is good enough."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "learn_topology": {
+        "description": (
+            "Learn a new peer-to-peer topology with APG from measured peer-model losses and "
+            "waiting times on the real workers, then train on it. Useful on non-IID data "
+            "when peers learn slowly from each other; works for every dataset."
         ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -202,6 +218,8 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
             and failures.get("optimize_topology", 0) < MAX_STEP_FAILURES
         ):
             steps.append("optimize_topology")
+        if "learn_topology" not in completed and failures.get("learn_topology", 0) < MAX_STEP_FAILURES:
+            steps.append("learn_topology")
         if (
             "run_hpo" not in completed
             and failures.get("run_hpo", 0) < MAX_STEP_FAILURES
@@ -421,9 +439,11 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
 def fallback_decision(goal: dict[str, Any], state: dict[str, Any]) -> Decision:
     """Used when the SLM is unreachable or keeps returning invalid steps."""
     allowed = allowed_steps(goal, state)
-    for step in ("run_nas", "run_hpo", "optimize_topology", "train_final", "prune_model"):
+    for step in ("run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final", "prune_model"):
         if step in allowed:
-            return Decision(step, {}, "Default improvement order: NAS, HPO, topology, retrain, prune.", "fallback")
+            return Decision(
+                step, {}, "Default improvement order: NAS, HPO, learned topology, topology sweep, retrain, prune.", "fallback"
+            )
     return Decision(
         "finish_workflow",
         {"outcome": "no_worthwhile_action", "summary": "No improvement step remains."},
@@ -532,6 +552,12 @@ def summarize_group(group: dict[str, Any]) -> dict[str, Any]:
         if isinstance(architecture, dict):
             summary["architecture"] = architecture.get("id") or architecture.get("model_id")
             summary["parameter_count"] = architecture.get("parameter_count")
+        learning = group.get("topology_learning")
+        if isinstance(learning, dict):
+            summary["topology_learning"] = {
+                key: learning.get(key)
+                for key in ("edges", "mesh_edges", "ring_added_for_connectivity", "iterations", "objective", "senders")
+            }
     elif kind == "dataset_architecture_search":
         architecture = group.get("selected_architecture")
         if isinstance(architecture, dict):

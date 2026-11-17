@@ -265,24 +265,60 @@ function groupDatasetName(group: ExperimentGroup): string {
   return group.dataset_name ?? group.architecture?.dataset_name ?? "Dataset not reported";
 }
 
-function TrainingTopology({ topology }: { topology: TrainingTopology | "centralized" }) {
-  let links: string[];
-  if (topology === "centralized") {
-    links = ["dfl-master · centralized"];
-  } else if (topology === "chain") {
-    links = ["worker1 ↔ worker2", "worker2 ↔ worker3"];
-  } else if (topology === "star") {
-    links = ["worker1 ↔ worker2", "worker1 ↔ worker3"];
-  } else if (topology === "mesh") {
-    links = ["worker1 ↔ worker2", "worker1 ↔ worker3", "worker2 ↔ worker3"];
-  } else if (topology === "bidirectional_ring") {
-    links = ["worker1 ↔ worker2", "worker2 ↔ worker3", "worker3 ↔ worker1"];
-  } else {
-    links = ["worker1 → worker2", "worker2 → worker3", "worker3 → worker1"];
+/** Directed "sender → receiver" links, computed exactly as the workers do. */
+export function topologyLinks(
+  topology: TrainingTopology | "centralized" | "candidate_sweep",
+  workers: string[],
+  learnedSenders?: Record<string, string[]>,
+): string[] {
+  const ordered = [...workers].sort();
+  if (topology === "centralized") return ["dfl-master · centralized"];
+  if (topology === "learned") {
+    return Object.entries(learnedSenders ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .flatMap(([receiver, senders]) => senders.map((sender) => `${sender} → ${receiver}`));
   }
+  const pairs = new Set<string>();
+  const undirected = (left: string, right: string) => pairs.add(left < right ? `${left} ↔ ${right}` : `${right} ↔ ${left}`);
+  ordered.forEach((node, index) => {
+    const next = ordered[(index + 1) % ordered.length];
+    if (topology === "mesh") ordered.slice(index + 1).forEach((peer) => undirected(node, peer));
+    else if (topology === "bidirectional_ring") undirected(node, next);
+    else if (topology === "chain" && index + 1 < ordered.length) undirected(node, next);
+    else if (topology === "star" && index > 0) undirected(ordered[0], node);
+    else if (topology === "directed_ring" || topology === "ring" || topology === "candidate_sweep") pairs.add(`${node} → ${next}`);
+  });
+  return [...pairs];
+}
+
+function groupWorkers(group: ExperimentGroup): string[] {
+  for (const run of [...group.runs].reverse()) {
+    const lastRound = run.rounds[run.rounds.length - 1];
+    if (lastRound) return Object.keys(lastRound.workers);
+  }
+  return Object.keys(group.learned_senders ?? {}).length
+    ? Object.keys(group.learned_senders ?? {})
+    : ["worker1", "worker2", "worker3"];
+}
+
+function TrainingTopology({ group }: { group: ExperimentGroup }) {
+  const topology =
+    group.topology === "candidate_sweep" ? group.selected_configuration?.topology ?? "directed_ring" : group.topology;
+  const links = topologyLinks(topology, groupWorkers(group), group.learned_senders);
+  const learning = group.topology_learning;
   return (
     <div className="training-topology" aria-label={`${topology} training topology`}>
-      <strong>{topology} topology</strong>
+      <strong>
+        {topology === "learned" ? "APG-learned topology" : `${topology} topology`}
+        {learning ? ` · ${learning.edges} of ${learning.mesh_edges} mesh links` : ""}
+      </strong>
+      {learning && (
+        <small>
+          Learned from a mesh probe: mean peer-model loss {learning.mean_peer_loss.toFixed(3)}, mean wait{" "}
+          {learning.mean_wait_seconds.toFixed(1)} s, {learning.iterations} APG iterations
+          {learning.ring_added_for_connectivity ? "; ring links added to keep every worker connected" : ""}.
+        </small>
+      )}
       <div>{links.map((link) => <span key={link}>{link}</span>)}</div>
     </div>
   );
@@ -294,11 +330,12 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
   const [deleteError, setDeleteError] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
+  const [datasetFilter, setDatasetFilter] = useState("all");
   const allGroups = results?.groups ?? [];
-  const mnistGroups = allGroups.filter((group) =>
-    group.dataset_name === "mnist" || group.architecture?.dataset_name === "mnist",
-  );
-  const groups = [...(mnistGroups.length > 0 ? mnistGroups : allGroups)].reverse();
+  const datasets = [...new Set(allGroups.map((group) => groupDatasetName(group)))].sort();
+  const groups = allGroups
+    .filter((group) => datasetFilter === "all" || groupDatasetName(group) === datasetFilter)
+    .reverse();
   const deletableGroups = groups.filter((group) =>
     group.status !== "running" && results?.active_group_id !== group.group_id,
   );
@@ -366,6 +403,13 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
     <section className="content experiments-page">
       <div className="page-heading">
         <h1>Experiments</h1>
+        <label className="dataset-filter">
+          Dataset
+          <select value={datasetFilter} onChange={(event) => setDatasetFilter(event.target.value)}>
+            <option value="all">All datasets</option>
+            {datasets.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
         <button className="quiet-button" onClick={onRefresh} type="button">Refresh</button>
       </div>
 
@@ -412,7 +456,7 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
                 {deletingGroupId === selectedGroup.group_id ? "Deleting…" : "Delete experiment"}
               </button>
             </div>
-            <TrainingTopology topology={selectedGroup.topology === "candidate_sweep" ? selectedGroup.selected_configuration?.topology ?? "directed_ring" : selectedGroup.topology} />
+            <TrainingTopology group={selectedGroup} />
             {selectedGroup.kind === "decentralized" && (
               <p className="experiment-sync-note">
                 Aggregation: <strong>{selectedGroup.aggregation ?? "fedavg"}</strong> · Synchronization:{" "}

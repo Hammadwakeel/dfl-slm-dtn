@@ -656,13 +656,14 @@ class Supervisor:
             }
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
             return _group_id(data), {}
-        if step in {"baseline_training", "train_final"}:
-            architecture = state.get("nas_architecture") if step == "train_final" else None
-            topology = (
-                arguments.get("topology") or state.get("selected_topology") or goal["topology"]
-                if step == "train_final"
-                else goal["topology"]
-            )
+        if step in {"baseline_training", "train_final", "learn_topology"}:
+            architecture = state.get("nas_architecture") if step != "baseline_training" else None
+            if step == "learn_topology":
+                topology = "learned"
+            elif step == "train_final":
+                topology = arguments.get("topology") or state.get("selected_topology") or goal["topology"]
+            else:
+                topology = goal["topology"]
             rounds = int(arguments.get("rounds", goal["rounds"]))
             epochs = int(arguments.get("local_epochs", goal["local_epochs"]))
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
@@ -793,6 +794,11 @@ class Supervisor:
             summary.pop("selected_architecture", None)
         if step == "optimize_topology" and summary.get("selected_topology"):
             state["selected_topology"] = summary["selected_topology"]
+        if step == "learn_topology":
+            accuracy_now = summary.get("validation_accuracy")
+            best_now = (state.get("best") or {}).get("validation_accuracy")
+            if isinstance(accuracy_now, (int, float)) and (best_now is None or accuracy_now >= best_now):
+                state["selected_topology"] = "learned"
         if step == "prune_model" and isinstance(state.get("pruning"), dict):
             state["pruning"]["validation_accuracy"] = summary.get("validation_accuracy")
             state["pruning"]["macro_f1"] = summary.get("macro_f1")

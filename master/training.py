@@ -40,6 +40,7 @@ from common.hpo import (
     hpo_candidates,
     select_best_hyperparameters,
 )
+from topology_opt.learning import learn_senders
 from topology_opt.reward import RewardConfig, calculate_run_reward
 from topology_opt.selector import select_candidate
 from common.model_design import (
@@ -63,6 +64,10 @@ TOPOLOGIES = (
     "chain",
     "star",
 )
+# "learned": a short mesh probe measures peer-model losses and waits on the real
+# workers, APG picks each worker's senders, then training uses that graph.
+TRAINING_TOPOLOGIES = (*TOPOLOGIES, "learned")
+TOPOLOGY_PROBE_ROUNDS = 2
 AGGREGATION_RULES = ("fedavg", "uniform", "metropolis", "trimmed_mean")
 SYNC_MODES = ("sync", "semi_sync")
 DATASET_SPLITS = {
@@ -141,7 +146,7 @@ class TrainingConfig:
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Training rounds or epochs are out of range")
         if (
-            topology not in {"ring", *TOPOLOGIES}
+            topology not in {"ring", *TRAINING_TOPOLOGIES}
             or peer_timeout <= 0
             or round_timeout <= 0
         ):
@@ -452,8 +457,8 @@ class TrainingCoordinator:
             if topology is not None:
                 if topology == "ring":
                     topology = "directed_ring"
-                if topology not in TOPOLOGIES:
-                    raise ValueError(f"topology must be one of {', '.join(TOPOLOGIES)}")
+                if topology not in TRAINING_TOPOLOGIES:
+                    raise ValueError(f"topology must be one of {', '.join(TRAINING_TOPOLOGIES)}")
                 updated["topology"] = topology
             if dataset_split is not None:
                 if dataset_split not in {"stratified", *DATASET_SPLITS.values()}:
@@ -553,6 +558,8 @@ class TrainingCoordinator:
                 }
             else:
                 selected_architecture = architecture_spec(architecture)
+            if self._settings["topology"] == "learned" and dataset_name is None:
+                raise ValueError("The learned topology measures validation loss, so it needs a dataset run")
             settings = self.configure(
                 rounds=rounds,
                 epochs=epochs,
@@ -1080,6 +1087,8 @@ class TrainingCoordinator:
     def _run_group(self, group_id: str) -> None:
         group = self._get_group(group_id)
         try:
+            if group["topology"] == "learned" and not group.get("learned_senders"):
+                self._learn_topology(group_id, group)
             for seed in group["seeds"]:
                 if self._stop.is_set():
                     raise TrainingCancelled("Training was cancelled")
@@ -1130,6 +1139,35 @@ class TrainingCoordinator:
                     self._active_group_id = None
                 self._persist_locked()
 
+    def _learn_topology(self, group_id: str, group: dict[str, Any]) -> None:
+        """Probe on a mesh, then let APG choose every worker's senders."""
+        probe_group = {
+            **group,
+            "topology": "mesh",
+            "rounds": TOPOLOGY_PROBE_ROUNDS,
+            "epochs": 1,
+            "measure_peers": True,
+        }
+        probe = {
+            "run_id": f"probe-mesh-{uuid.uuid4().hex[:8]}",
+            "seed": group["seeds"][0],
+            "topology": "mesh",
+            "phase": "topology_probe",
+            "status": "running",
+            "rounds": [],
+        }
+        with self._lock:
+            group["runs"].append(probe)
+            self._persist_locked()
+        self._run_distributed_seed(group_id, probe_group, probe)
+        probe["status"] = "completed"
+        worker_ids = [worker.node_id for worker in self.config.workers]
+        senders, diagnostics = learn_senders(worker_ids, probe["rounds"][-1]["workers"])
+        with self._lock:
+            group["learned_senders"] = senders
+            group["topology_learning"] = {**diagnostics, "probe_run_id": probe["run_id"], "senders": senders}
+            self._persist_locked()
+
     def _run_distributed_seed(
         self,
         group_id: str,
@@ -1175,6 +1213,10 @@ class TrainingCoordinator:
             configuration["sync_deadline_seconds"] = group["sync_deadline_seconds"]
         if group.get("dataset_name") is not None:
             configuration["dataset_name"] = group["dataset_name"]
+        if group.get("learned_senders"):
+            configuration["learned_senders"] = group["learned_senders"]
+        if group.get("measure_peers"):
+            configuration["measure_peers"] = True
         self._parallel_workers(
             lambda worker: self._post(worker, "/v1/config", configuration)
         )

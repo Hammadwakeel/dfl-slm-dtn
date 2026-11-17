@@ -1265,3 +1265,44 @@ def test_hpo_rejects_architectures_without_dataset_shape(tmp_path: Path) -> None
     base = initial_population(seed=17, input_shape=(28, 28, 1), num_classes=2)[0]
     with pytest.raises(ValueError, match="input_shape and classes"):
         coordinator.start_hpo(dataset_name="cats-and-dogs", architecture=base)
+
+
+def test_learned_topology_probes_a_mesh_then_trains_on_the_apg_graph(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    worker_ids = [worker.node_id for worker in coordinator.config.workers]
+    seen: list[dict] = []
+
+    def fake_seed(group_id, group, run):
+        seen.append({"topology": group["topology"], "measure": group.get("measure_peers"), "senders": group.get("learned_senders")})
+        row = {}
+        for receiver in worker_ids:
+            others = [worker for worker in worker_ids if worker != receiver]
+            row[receiver] = {
+                "validation_accuracy": 0.9,
+                "peer_losses": {sender: (2.0 if sender == "worker3" else 0.3) for sender in others},
+                "peer_arrival_seconds": {sender: 1.0 for sender in others},
+                "class_histogram": [5, 5],
+            }
+        run["rounds"].append({"round": 1, "workers": row})
+
+    coordinator._run_distributed_seed = fake_seed
+    coordinator.configure(topology="learned")
+    accepted = coordinator.start_training(rounds=2, epochs=1, dataset_name="cats-and-dogs")
+    deadline = time.monotonic() + 3
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    group = next(item for item in coordinator.results()["groups"] if item["group_id"] == accepted["group_id"])
+    assert group["status"] == "completed", group.get("error")
+    assert seen[0] == {"topology": "mesh", "measure": True, "senders": None}
+    assert seen[1]["topology"] == "learned" and seen[1]["senders"] == group["learned_senders"]
+    assert set(group["learned_senders"]) == set(worker_ids)
+    assert group["runs"][0]["phase"] == "topology_probe"
+    assert group["topology_learning"]["edges"] <= group["topology_learning"]["mesh_edges"]
+
+
+def test_learned_topology_requires_a_dataset_run(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    coordinator.configure(topology="learned")
+    with pytest.raises(ValueError, match="dataset"):
+        coordinator.start_training(rounds=2, epochs=1)

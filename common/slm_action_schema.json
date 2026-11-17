@@ -347,7 +347,8 @@
                     "bidirectional_ring",
                     "mesh",
                     "chain",
-                    "star"
+                    "star",
+                    "learned"
                   ]
                 }
               },

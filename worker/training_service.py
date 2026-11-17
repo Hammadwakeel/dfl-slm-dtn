@@ -62,6 +62,8 @@ LOGGER = logging.getLogger("dfl_slm.worker_training")
 ROUND_WEIGHTS_RETAINED = 2
 # Newest aggregated model of a dataset run, kept on disk for pruning.
 LATEST_MODEL_WEIGHTS = "latest_model.npz"
+# "learned" uses an explicit receiver -> senders map chosen by APG topology learning.
+TRAINING_TOPOLOGIES = frozenset({"ring", "directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned"})
 LATEST_MODEL_METADATA = "latest_model.json"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_WEIGHT_BYTES = MAX_MODEL_WEIGHT_BYTES
@@ -229,6 +231,32 @@ def topology_neighbours(
         hub = ordered[0]
         return tuple(peer for peer in ordered if peer != node_id) if node_id == hub else (hub,)
     raise ValueError(f"Unsupported topology: {topology}")
+
+
+def _cross_entropy(labels: Any, logits: Any) -> float:
+    """Mean sparse categorical cross-entropy of linear logits (numerically stable)."""
+    values = np.asarray(logits, dtype=np.float64)
+    shifted = values - values.max(axis=1, keepdims=True)
+    log_probabilities = shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
+    targets = np.asarray(labels, dtype=np.int64).reshape(-1)
+    return float(-log_probabilities[np.arange(targets.size), targets].mean())
+
+
+def _validate_learned_senders(raw: Any) -> dict[str, tuple[str, ...]]:
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("The learned topology needs a receiver -> senders map")
+    senders_map: dict[str, tuple[str, ...]] = {}
+    for receiver, senders in raw.items():
+        if (
+            not isinstance(receiver, str)
+            or not isinstance(senders, list)
+            or not senders
+            or any(not isinstance(sender, str) or sender == receiver for sender in senders)
+            or len(set(senders)) != len(senders)
+        ):
+            raise ValueError("Every learned-topology receiver needs one or more distinct other senders")
+        senders_map[receiver] = tuple(sorted(senders))
+    return senders_map
 
 
 def topology_senders(
@@ -825,6 +853,9 @@ class WorkerTrainer:
         self._sync_mode = "sync"
         self._sync_deadline_seconds: float | None = None
         self._min_peers = 1
+        self._learned_senders: dict[str, tuple[str, ...]] = {}
+        self._measure_peers = False
+        self._arrivals: dict[tuple[str, int], dict[str, float]] = {}
 
     def configure_peers(self, peers: tuple[Peer, ...]) -> dict[str, Any]:
         peer_ids = [peer.node_id for peer in peers]
@@ -1092,7 +1123,12 @@ class WorkerTrainer:
         sync_mode: str = "sync",
         sync_deadline_seconds: float | None = None,
         min_peers: int = 1,
+        learned_senders: dict[str, list[str]] | None = None,
+        measure_peers: bool = False,
     ) -> dict[str, Any]:
+        if not isinstance(measure_peers, bool):
+            raise ValueError("measure_peers must be a boolean")
+        senders_map = _validate_learned_senders(learned_senders) if topology == "learned" else {}
         if aggregation not in AGGREGATION_RULES:
             raise ValueError(f"aggregation must be one of {', '.join(AGGREGATION_RULES)}")
         if sync_mode not in SYNC_MODES:
@@ -1103,14 +1139,7 @@ class WorkerTrainer:
             raise ValueError("min_peers must be an integer between 0 and 64")
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Rounds must be 1-100 and local epochs 1-50")
-        if topology not in {
-            "ring",
-            "directed_ring",
-            "bidirectional_ring",
-            "mesh",
-            "chain",
-            "star",
-        }:
+        if topology not in TRAINING_TOPOLOGIES:
             raise ValueError("Unsupported training topology")
         if dataset_split not in {
             "stratified",
@@ -1183,6 +1212,8 @@ class WorkerTrainer:
                 float(sync_deadline_seconds) if sync_deadline_seconds is not None else None
             )
             self._min_peers = min_peers
+            self._learned_senders = senders_map
+            self._measure_peers = measure_peers
         return {
             "rounds": rounds,
             "epochs": epochs,
@@ -1195,19 +1226,60 @@ class WorkerTrainer:
             "sync_mode": sync_mode,
             "sync_deadline_seconds": sync_deadline_seconds,
             "min_peers": min_peers,
+            "learned_senders": {key: list(value) for key, value in senders_map.items()},
+            "measure_peers": measure_peers,
         }
+
+    def _measure_peer_models(
+        self,
+        model: Any,
+        peer_contributions: list[Contribution],
+        validation_images: Any,
+        validation_labels: Any,
+        arrivals: dict[str, float],
+        exchange_started: float,
+    ) -> dict[str, Any]:
+        peer_losses: dict[str, float] = {}
+        if validation_images is not None and validation_labels is not None and len(validation_labels):
+            for contribution in peer_contributions:
+                model.set_weights(contribution.weights)
+                logits = model.predict(
+                    validation_images,
+                    batch_size=min(256, int(validation_labels.size)),
+                    verbose=0,
+                )
+                peer_losses[contribution.node_id] = round(_cross_entropy(validation_labels, logits), 6)
+        labels = np.asarray(self.labels).reshape(-1) if getattr(self, "labels", None) is not None else np.zeros(0, int)
+        class_count = len(self._dataset_class_names or []) or int(labels.max(initial=-1)) + 1
+        return {
+            "peer_losses": peer_losses,
+            # Seconds after this worker finished training until each peer model arrived
+            # (0 when it was already waiting).
+            "peer_arrival_seconds": {
+                sender: round(max(0.0, arrived - exchange_started), 3) for sender, arrived in arrivals.items()
+            },
+            "class_histogram": np.bincount(labels.astype(np.int64), minlength=class_count).astype(int).tolist(),
+        }
+
+    def _round_senders(self, node_id: str, worker_ids: tuple[str, ...], topology: str) -> tuple[str, ...]:
+        """Peers whose models ``node_id`` aggregates this round."""
+        if topology == "learned":
+            senders = self._learned_senders.get(node_id)
+            if senders is None or not set(senders) <= set(worker_ids) - {node_id}:
+                raise ValueError(f"The learned topology has no valid senders for {node_id}")
+            return senders
+        return topology_senders(node_id, worker_ids, topology)
+
+    def _round_neighbours(self, node_id: str, worker_ids: tuple[str, ...], topology: str) -> tuple[str, ...]:
+        """Peers ``node_id`` sends its model to this round."""
+        if topology == "learned":
+            return tuple(sorted(peer for peer in worker_ids if node_id in self._learned_senders.get(peer, ())))
+        return topology_neighbours(node_id, worker_ids, topology)
 
     def start_run(self, run_id: str, seed: int, topology: str) -> dict[str, Any]:
         if not RUN_ID_PATTERN.fullmatch(run_id) or not 0 <= seed <= 2**32 - 1:
             raise ValueError("run_id or seed is invalid")
-        if topology not in {
-            "ring",
-            "directed_ring",
-            "bidirectional_ring",
-            "mesh",
-            "chain",
-            "star",
-        }:
+        if topology not in TRAINING_TOPOLOGIES:
             raise ValueError("Unsupported training topology")
         with self._lock:
             if self._reboot_requested:
@@ -1452,6 +1524,7 @@ class WorkerTrainer:
             if sender in senders:
                 raise ValueError("Duplicate weights received from a peer for this round")
             senders[sender] = (weights, sample_count, len(payload))
+            self._arrivals.setdefault(key, {})[sender] = time.monotonic()
             self._condition.notify_all()
         _log_event(
             "peer_weights_received",
@@ -1502,8 +1575,8 @@ class WorkerTrainer:
         if not 0 <= round_index < 100 or not 1 <= epochs <= 50 or seed < 0:
             raise ValueError("Round, epoch, or seed value is out of range")
         worker_ids = tuple(sorted((self.config.node_id, *self._peer_map.keys())))
-        neighbors = topology_neighbours(self.config.node_id, worker_ids, topology)
-        expected_senders = topology_senders(self.config.node_id, worker_ids, topology)
+        neighbors = self._round_neighbours(self.config.node_id, worker_ids, topology)
+        expected_senders = self._round_senders(self.config.node_id, worker_ids, topology)
         with self._lock:
             if self._reboot_requested:
                 raise RuntimeError("The Jetson is preparing to reboot")
@@ -1579,6 +1652,7 @@ class WorkerTrainer:
             local_signature = model_signature(local_weights)
             sent_bytes = 0
             exchange_started = time.perf_counter()
+            exchange_monotonic = time.monotonic()
             for peer_id in neighbors:
                 peer = self._peer_map[peer_id]
                 transfer_started = time.perf_counter()
@@ -1639,6 +1713,7 @@ class WorkerTrainer:
                         raise TimeoutError(f"Timed out waiting for peer weights from {missing}")
                     self._condition.wait(timeout=min(remaining, 1.0))
                 incoming = self._incoming.pop((run_id, round_index), {})
+                arrivals = self._arrivals.pop((run_id, round_index), {})
             peer_wait_seconds = time.perf_counter() - peer_wait_started
             used_senders = [peer_id for peer_id in expected_senders if peer_id in incoming]
             missing_senders = sorted(set(expected_senders) - set(used_senders))
@@ -1653,10 +1728,17 @@ class WorkerTrainer:
                         peer_id,
                         peer_weights,
                         sample_count,
-                        len(topology_senders(peer_id, worker_ids, topology)),
+                        len(self._round_senders(peer_id, worker_ids, topology)),
                     )
                 )
                 bytes_received += received_bytes
+            peer_measurements: dict[str, Any] = {}
+            if self._measure_peers:
+                # APG topology learning inputs: how well each sender's model fits this
+                # worker's validation data, and how long this worker waited for it.
+                peer_measurements = self._measure_peer_models(
+                    model, contributions[1:], validation_images, validation_labels, arrivals, exchange_monotonic
+                )
             averaged = aggregate(aggregation_rule, contributions)
             del contributions, incoming
             model.set_weights(averaged)
@@ -1729,6 +1811,7 @@ class WorkerTrainer:
                 "peers_used": used_senders,
                 "missing_peers": missing_senders,
                 "model_signature": local_signature,
+                **peer_measurements,
                 "exchange_seconds": round(exchange_seconds, 3),
                 "peer_wait_seconds": round(peer_wait_seconds, 3),
                 "neighbours": list(neighbors),
@@ -2069,6 +2152,8 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     sync_mode=payload.get("sync_mode", "sync"),
                     sync_deadline_seconds=payload.get("sync_deadline_seconds"),
                     min_peers=payload.get("min_peers", 1),
+                    learned_senders=payload.get("learned_senders"),
+                    measure_peers=payload.get("measure_peers", False),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})

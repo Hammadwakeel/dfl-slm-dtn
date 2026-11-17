@@ -11,7 +11,8 @@ export type TrainingTopology =
   | "bidirectional_ring"
   | "mesh"
   | "chain"
-  | "star";
+  | "star"
+  | "learned";
 
 export interface NASLegacyArchitecture {
   id: string;
@@ -253,6 +254,16 @@ export interface ExperimentGroup {
     elapsed_seconds: number;
   }>;
   selected_hyperparameters?: { optimizer: string; learning_rate: number; batch_size: number };
+  learned_senders?: Record<string, string[]>;
+  topology_learning?: {
+    edges: number;
+    mesh_edges: number;
+    iterations: number;
+    objective: number;
+    ring_added_for_connectivity: boolean;
+    mean_peer_loss: number;
+    mean_wait_seconds: number;
+  };
   topology: TrainingTopology | "centralized" | "candidate_sweep";
   dataset_split?: string;
   aggregation?: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";

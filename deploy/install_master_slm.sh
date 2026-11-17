@@ -27,6 +27,8 @@ for required in \
   "$stage_dir/data/cifar10_test.npz" \
   "$stage_dir/data/cifar10_train.npz" \
   "$stage_dir/topology_opt/__init__.py" \
+  "$stage_dir/topology_opt/apg.py" \
+  "$stage_dir/topology_opt/learning.py" \
   "$stage_dir/topology_opt/reward.py" \
   "$stage_dir/topology_opt/selector.py" \
   "$stage_dir/topology_opt/reward_config.json" \
@@ -117,6 +119,8 @@ install -o root -g root -m 0644 "$stage_dir/common/nas.py" "$app_root/common/nas
 install -o root -g root -m 0644 "$stage_dir/common/model_design.py" "$app_root/common/model_design.py"
 install -o root -g root -m 0644 "$stage_dir/common/slm_action_schema.json" "$app_root/common/slm_action_schema.json"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/__init__.py" "$app_root/topology_opt/__init__.py"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/apg.py" "$app_root/topology_opt/apg.py"
+install -o root -g root -m 0644 "$stage_dir/topology_opt/learning.py" "$app_root/topology_opt/learning.py"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/reward.py" "$app_root/topology_opt/reward.py"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/selector.py" "$app_root/topology_opt/selector.py"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/reward_config.json" "$app_root/topology_opt/reward_config.json"

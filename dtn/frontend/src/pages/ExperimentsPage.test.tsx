@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExperimentResults } from "../api/client";
-import ExperimentsPage from "./ExperimentsPage";
+import ExperimentsPage, { topologyLinks } from "./ExperimentsPage";
 
 const results: ExperimentResults = {
   configuration: { rounds: 10, epochs: 5, topology: "ring", dataset_split: "stratified" },
@@ -248,5 +248,38 @@ describe("Experiments page", () => {
     const lowerExperiment = screen.getByRole("button", { name: "View experiment details for lower-accuracy" });
     expect(bestExperiment).toHaveTextContent("Best experiment");
     expect(lowerExperiment).not.toHaveTextContent("Best experiment");
+  });
+
+  it("draws the real worker graph for eight workers and the APG-learned links", () => {
+    const workers = Array.from({ length: 8 }, (_, index) => `worker${index + 1}`);
+    expect(topologyLinks("directed_ring", workers)).toHaveLength(8);
+    expect(topologyLinks("directed_ring", workers)).toContain("worker8 → worker1");
+    expect(topologyLinks("mesh", workers)).toHaveLength(28);
+    expect(topologyLinks("chain", workers)).toHaveLength(7);
+    expect(topologyLinks("star", workers)).toEqual(workers.slice(1).map((worker) => `worker1 ↔ ${worker}`));
+    expect(topologyLinks("learned", workers, { worker2: ["worker1", "worker3"], worker1: ["worker2"] })).toEqual([
+      "worker2 → worker1",
+      "worker1 → worker2",
+      "worker3 → worker2",
+    ]);
+  });
+
+  it("shows every dataset's experiments and filters by dataset", () => {
+    const cifar = { ...results.groups[0], group_id: "cifar-run", dataset_name: "cifar10" };
+    render(
+      <ExperimentsPage
+        token="token"
+        results={{ ...results, groups: [...results.groups, cifar] }}
+        error=""
+        onRefresh={vi.fn()}
+        onOpenModelStudio={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "View experiment details for cifar-run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View experiment details for ring-seed-test" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Dataset"), { target: { value: "cifar10" } });
+    expect(screen.queryByRole("button", { name: "View experiment details for ring-seed-test" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View experiment details for cifar-run" })).toBeInTheDocument();
   });
 });

@@ -34,6 +34,7 @@ const STEP_LABELS: Record<string, string> = {
   baseline_training: "Baseline DFL",
   run_nas: "Architecture search",
   run_hpo: "Hyperparameter tuning",
+  learn_topology: "Learned topology (APG)",
   optimize_topology: "Topology optimization",
   prune_model: "Pruning + fine-tune",
   train_final: "Final DFL",

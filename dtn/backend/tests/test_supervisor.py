@@ -32,11 +32,11 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
     state = new_state()
     state["completed_steps"] = ["prepare_data", "initial_model", "baseline_training"]
 
-    assert allowed_steps(goal, state) == ["run_nas", "optimize_topology", "finish_workflow"]
+    assert allowed_steps(goal, state) == ["run_nas", "optimize_topology", "learn_topology", "finish_workflow"]
 
     state["completed_steps"].append("run_nas")
     state["nas_architecture"] = NAS_ARCHITECTURE
-    assert allowed_steps(goal, state) == ["optimize_topology", "run_hpo", "train_final", "finish_workflow"]
+    assert allowed_steps(goal, state) == ["optimize_topology", "learn_topology", "run_hpo", "train_final", "finish_workflow"]
 
     cifar = default_goal(dataset="cifar10")
     assert "optimize_topology" not in allowed_steps(cifar, state)
@@ -45,7 +45,7 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
 def test_trained_configuration_is_not_offered_again() -> None:
     goal = default_goal()
     state = new_state()
-    state["completed_steps"] = ["run_nas", "run_hpo", "optimize_topology"]
+    state["completed_steps"] = ["run_nas", "run_hpo", "learn_topology", "optimize_topology"]
     state["nas_architecture"] = NAS_ARCHITECTURE
     state["trained_configs"] = ["b2_c16_k5|directed_ring"]
 
@@ -318,7 +318,7 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert baseline["parameters"]["aggregation"] == "fedavg"
     # Every SLM decision received only the compact allowed tool set.
     offered = [{tool["function"]["name"] for tool in tools} for _messages, tools in slm.calls]
-    assert offered[0] == {"run_nas", "optimize_topology", "finish_workflow"}
+    assert offered[0] == {"run_nas", "optimize_topology", "learn_topology", "finish_workflow"}
     assert all("get_results" not in names for names in offered)
     assert finished["state"]["counters"]["slm_decisions"] == 2
     event_types = [event["event_type"] for event in finished["events"]]
@@ -539,3 +539,20 @@ def test_baseline_architecture_enables_hpo_without_nas(sessions) -> None:
 
     offered = {tool["function"]["name"] for tool in slm.calls[0][1]}
     assert {"run_nas", "run_hpo", "optimize_topology", "prune_model"} <= offered
+
+
+def test_learn_topology_trains_on_the_apg_graph_and_keeps_it_when_it_helps(sessions) -> None:
+    cluster = FakeCluster()
+    slm = FakeSLM([
+        tool_call("learn_topology", {}, "Peers learn slowly on non-IID data."),
+        tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "done"}, "done"),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run = supervisor.create_run(default_goal(target_accuracy=0.99))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    topologies = [action["parameters"]["topology"] for action in cluster.actions if action["action"] == "set_topology"]
+    assert topologies == ["directed_ring", "learned"]
+    assert finished["state"]["selected_topology"] == "learned"
+    assert "learn_topology" in finished["state"]["completed_steps"]

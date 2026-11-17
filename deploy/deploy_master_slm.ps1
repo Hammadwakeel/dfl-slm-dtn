@@ -12,7 +12,9 @@ $servicePort = 5003
 $workers = @(
     @{ Id = 'worker1'; Ip = '192.168.11.123'; TokenName = 'WORKER1_API_TOKEN' },
     @{ Id = 'worker2'; Ip = '192.168.11.14'; TokenName = 'WORKER2_API_TOKEN' },
-    @{ Id = 'worker3'; Ip = '192.168.11.13'; TokenName = 'WORKER3_API_TOKEN' }
+    @{ Id = 'worker3'; Ip = '192.168.11.13'; TokenName = 'WORKER3_API_TOKEN' },
+    @{ Id = 'worker4'; Ip = '192.168.11.75'; TokenName = 'WORKER4_API_TOKEN' },
+    @{ Id = 'worker5'; Ip = '192.168.11.76'; TokenName = 'WORKER5_API_TOKEN' }
 )
 $values = @{}
 $lines = [System.Collections.Generic.List[string]]::new()
@@ -54,13 +56,16 @@ if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
 if (-not $values.ContainsKey('MASTER_API_TOKEN') -or $values['MASTER_API_TOKEN'].Length -lt 32) {
     throw 'MASTER_API_TOKEN must be present in the ignored root .env file'
 }
+if (-not $values.ContainsKey('DTN_API_TOKEN') -or $values['DTN_API_TOKEN'].Length -lt 32) {
+    throw 'DTN_API_TOKEN must be present in the ignored root .env file for read-only browser chat'
+}
 if (-not $values.ContainsKey('MASTER_SLM_API_TOKEN') -or
     $values['MASTER_SLM_API_TOKEN'].Length -lt 32 -or
     $values['MASTER_SLM_API_TOKEN'] -like 'replace-*') {
     Set-EnvValue 'MASTER_SLM_API_TOKEN' (New-ApiToken)
 }
 if (-not $values.ContainsKey('MASTER_OLLAMA_MODEL') -or -not $values['MASTER_OLLAMA_MODEL']) {
-    Set-EnvValue 'MASTER_OLLAMA_MODEL' 'llama3.2:1b'
+    Set-EnvValue 'MASTER_OLLAMA_MODEL' 'qwen3.5:4b'
 }
 foreach ($worker in $workers) {
     if (-not $values.ContainsKey($worker.TokenName) -or $values[$worker.TokenName].Length -lt 32) {
@@ -87,6 +92,7 @@ $sshConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-ssh-" + [guid
 $stageName = '.dfl-slm-master-stage'
 $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-master-" + [guid]::NewGuid().ToString('N'))
 $localEnv = Join-Path $stageRoot 'master.env'
+$replyEnv = Join-Path $stageRoot 'reply.env'
 $remote = "hammad@$masterIp"
 $tempFiles = [System.Collections.Generic.List[string]]::new()
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'master') -Force | Out-Null
@@ -109,29 +115,43 @@ $workersJsonBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($w
 $nodeEnv = @(
     "DFL_API_TOKEN=$($values['MASTER_SLM_API_TOKEN'])",
     "DFL_STATUS_API_TOKEN=$($values['MASTER_API_TOKEN'])",
+    "DFL_CHAT_API_TOKEN=$($values['DTN_API_TOKEN'])",
+    'DFL_CHAT_ALLOWED_ORIGINS=http://localhost:5173,http://192.168.11.12:5173',
     "DFL_PORT=$servicePort",
     'DFL_BIND_HOST=0.0.0.0',
-    "DFL_OLLAMA_MODEL=$($values['MASTER_OLLAMA_MODEL'])",
+    "SLM_MODEL_NAME=$($values['MASTER_OLLAMA_MODEL'])",
     'DFL_OLLAMA_URL=http://127.0.0.1:11434',
     'DFL_STATUS_URL=http://127.0.0.1:5002',
     'DFL_LOG_FILE=/var/log/dfl-slm-master/events.jsonl',
+    'DFL_ACTION_HISTORY_PATH=/var/lib/dfl-slm-master/action_history.sqlite3',
     'DFL_OLLAMA_TIMEOUT_SECONDS=120',
     "DFL_WORKERS_JSON_B64=$workersJsonBase64",
     'DFL_TRAINING_ROUNDS=10',
     'DFL_LOCAL_EPOCHS=5',
     'DFL_TOPOLOGY=directed_ring',
     'DFL_TRAINING_PEER_TIMEOUT_SECONDS=60',
+    'DFL_TRAINING_ROUND_TIMEOUT_SECONDS=7200',
     'DFL_EVALUATOR_PYTHON=/usr/bin/python3',
     'DFL_EVALUATOR_SCRIPT=/opt/dfl-slm-dtn/master/cifar_evaluator.py',
     'DFL_TEST_DATA_PATH=/opt/dfl-slm-dtn/data/cifar10_test.npz',
     'DFL_BASELINE_TRAIN_DATA_PATH=/opt/dfl-slm-dtn/data/cifar10_train.npz',
     'DFL_EVALUATOR_LOG_PATH=/var/log/dfl-slm-master/cifar-evaluator.log',
-    'DFL_TRAINING_RESULTS_PATH=/var/lib/dfl-slm-master/experiments.json',
+    'DFL_TRAINING_RESULTS_PATH=/var/lib/dfl-slm-master/experiments.sqlite3',
     'DFL_TOPOLOGY_REWARD_CONFIG=/opt/dfl-slm-dtn/topology_opt/reward_config.json',
     'PYTHONDONTWRITEBYTECODE=1'
 )
 [System.IO.File]::WriteAllText($localEnv, [string]::Join("`n", $nodeEnv) + "`n", $utf8NoBom)
 $tempFiles.Add($localEnv)
+$replyModelEnv = @(
+    "DFL_REPLY_API_TOKEN=$($values['MASTER_SLM_API_TOKEN'])",
+    'DFL_REPLY_BASE_MODEL=/home/hammad/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B-Instruct/snapshots/9213176726f574b556790deb65791e0c5aa438b6',
+    'DFL_REPLY_ADAPTER=/home/hammad/slm-ft-outputs/reply-style-20261102T2158JST/adapter',
+    'DFL_REPLY_REPORT_PATH=/home/hammad/slm-ft-outputs/reply-style-20261102T2158JST/training_report.json',
+    'DFL_REPLY_MODEL_NAME=llama3.2-1b-reply-style-lora',
+    'DFL_REPLY_PORT=5004'
+)
+[System.IO.File]::WriteAllText($replyEnv, [string]::Join("`n", $replyModelEnv) + "`n", $utf8NoBom)
+$tempFiles.Add($replyEnv)
 [System.IO.File]::WriteAllText($sshConfigPath, [string]::Join("`n", $headers), $utf8NoBom)
 
 try {
@@ -155,7 +175,9 @@ try {
         (Join-Path $repoRoot 'master\requirements.txt'),
         (Join-Path $repoRoot 'master\wsgi.py'),
         (Join-Path $repoRoot 'master\training.py'),
-        (Join-Path $repoRoot 'master\cifar_evaluator.py')
+        (Join-Path $repoRoot 'master\cifar_evaluator.py'),
+        (Join-Path $repoRoot 'master\reply_inference.py'),
+        (Join-Path $repoRoot 'master\reply_service.py')
     )
     & scp -F $sshConfigPath @sources "${remote}:$stageName/master/"
     if ($LASTEXITCODE -ne 0) {
@@ -163,6 +185,7 @@ try {
     }
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'master\tests\test_app.py') `
+        (Join-Path $repoRoot 'master\tests\test_reply_service.py') `
         "${remote}:$stageName/master/tests/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage SLM application tests on the master'
@@ -173,8 +196,11 @@ try {
     }
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'common\__init__.py') `
+        (Join-Path $repoRoot 'common\agent_tools.py') `
         (Join-Path $repoRoot 'common\cifar_model.py') `
+        (Join-Path $repoRoot 'common\dataset_nas.py') `
         (Join-Path $repoRoot 'common\nas.py') `
+        (Join-Path $repoRoot 'common\model_design.py') `
         "${remote}:$stageName/common/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the shared CIFAR-10 model on the master'
@@ -195,6 +221,7 @@ try {
     & scp -F $sshConfigPath `
         (Join-Path $PSScriptRoot 'install_master_slm.sh') `
         (Join-Path $PSScriptRoot 'dfl-slm-master.service') `
+        (Join-Path $PSScriptRoot 'dfl-slm-reply.service') `
         "${remote}:$stageName/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the SLM service installer on the master'
@@ -203,8 +230,12 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage protected SLM environment values on the master'
     }
+    & scp -F $sshConfigPath $replyEnv "${remote}:$stageName/reply.env"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not stage protected reply-model environment values on the master'
+    }
 
-    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' && sudo -n bash '$stageName/install_master_slm.sh'"
+    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' '$stageName/dfl-slm-reply.service' && sudo -n bash '$stageName/install_master_slm.sh'"
     if ($LASTEXITCODE -ne 0) {
         throw "Master SLM install failed; protected staging files remain at ~/$stageName for diagnosis"
     }
@@ -221,5 +252,6 @@ finally {
 }
 
 Write-Output "Master SLM service is installed on $masterIp`:$servicePort."
+Write-Output 'The reply-style LoRA service is installed on the master loopback interface.'
 Write-Output 'The existing dfl-slm-status.service continues on port 5002.'
 Write-Output "The coordinator token is stored locally in the ignored file: $envPath"

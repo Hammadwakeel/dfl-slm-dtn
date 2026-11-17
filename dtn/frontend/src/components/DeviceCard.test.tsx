@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach } from "vitest";
 import { describe, expect, it } from "vitest";
 
 import DeviceCard from "./DeviceCard";
@@ -26,6 +27,8 @@ const onlineDevice: Device = {
 };
 
 describe("DeviceCard", () => {
+  afterEach(() => cleanup());
+
   it("shows real device metrics and online state", () => {
     render(<DeviceCard device={onlineDevice} />);
     expect(screen.getByText("dfl-master")).toBeInTheDocument();
@@ -50,5 +53,21 @@ describe("DeviceCard", () => {
     expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.getAllByText("--")).toHaveLength(4);
     expect(screen.getByText("Never")).toBeInTheDocument();
+  });
+
+  it("does not present cached readings as live metrics when a device is offline", () => {
+    render(
+      <DeviceCard
+        device={{
+          ...onlineDevice,
+          online: false,
+          last_seen: new Date(Date.now() - 4 * 60_000).toISOString(),
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.getAllByText("--")).toHaveLength(4);
+    expect(screen.getByText("4m ago")).toBeInTheDocument();
   });
 });

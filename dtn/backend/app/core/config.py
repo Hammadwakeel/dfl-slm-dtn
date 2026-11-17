@@ -20,10 +20,20 @@ class DeviceConfig:
     role: str
     port: int
     token: str
+    training_port: int | None = None
+    is_managed: bool = False
 
     @property
     def base_url(self) -> str:
-        return f"http://{self.ip}:{self.port}"
+        host = f"[{self.ip}]" if ":" in self.ip else self.ip
+        return f"http://{host}:{self.port}"
+
+    @property
+    def training_url(self) -> str:
+        if self.training_port is None:
+            raise ValueError(f"Training API port is not configured for {self.node_id}")
+        host = f"[{self.ip}]" if ":" in self.ip else self.ip
+        return f"http://{host}:{self.training_port}"
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,11 @@ class Settings:
     master_slm_url: str = "http://192.168.11.15:5003"
     master_slm_token: str = ""
     slm_timeout_seconds: float = 150.0
+    dataset_root: Path = REPO_ROOT / "data" / "datasets"
+    feedback_rule_fallback_enabled: bool = False
+    agent_max_tool_calls: int = 8
+    agent_history_messages: int = 8
+    agent_action_history_limit: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,6 +108,23 @@ class Settings:
         slm_timeout = float(os.environ.get("DTN_SLM_TIMEOUT_SECONDS", "150"))
         if slm_timeout <= 0:
             raise ValueError("DTN_SLM_TIMEOUT_SECONDS must be positive")
+        raw_feedback_fallback = os.environ.get(
+            "DTN_FEEDBACK_RULE_FALLBACK",
+            "false",
+        ).strip().lower()
+        if raw_feedback_fallback not in {"true", "false"}:
+            raise ValueError("DTN_FEEDBACK_RULE_FALLBACK must be true or false")
+        agent_max_tool_calls = int(os.environ.get("DTN_AGENT_MAX_TOOL_CALLS", "8"))
+        agent_history_messages = int(os.environ.get("DTN_AGENT_HISTORY_MESSAGES", "8"))
+        agent_action_history_limit = int(
+            os.environ.get("DTN_AGENT_ACTION_HISTORY_LIMIT", "20")
+        )
+        if (
+            not 1 <= agent_max_tool_calls <= 32
+            or not 0 <= agent_history_messages <= 32
+            or not 1 <= agent_action_history_limit <= 100
+        ):
+            raise ValueError("Agent tool-call and history limits are out of range")
         return cls(
             app_name="DFL-SLM Digital Twin Network",
             host=os.environ.get("DTN_HOST", "0.0.0.0"),
@@ -107,9 +139,19 @@ class Settings:
             master_slm_url=os.environ.get(
                 "MASTER_SLM_URL",
                 f"http://{master['ip']}:{master_slm_port}",
-            ).rstrip("/"),
+            ).rstrip("/"            ),
             master_slm_token=master_slm_token,
             slm_timeout_seconds=slm_timeout,
+            dataset_root=Path(
+                os.environ.get(
+                    "DTN_DATASET_ROOT",
+                    str(REPO_ROOT / "data" / "datasets"),
+                )
+            ).resolve(),
+            feedback_rule_fallback_enabled=raw_feedback_fallback == "true",
+            agent_max_tool_calls=agent_max_tool_calls,
+            agent_history_messages=agent_history_messages,
+            agent_action_history_limit=agent_action_history_limit,
         )
 
 
@@ -142,6 +184,10 @@ def _load_devices(registry: dict[str, Any]) -> tuple[DeviceConfig, ...]:
         port = int(item.get("port", item.get("service_port", 0)))
         if not 1 <= port <= 65535:
             raise ValueError(f"Node {node_id} has an invalid service port")
+        raw_training_port = item.get("training_port")
+        training_port = int(raw_training_port) if raw_training_port is not None else None
+        if training_port is not None and not 1 <= training_port <= 65535:
+            raise ValueError(f"Node {node_id} has an invalid training service port")
         devices.append(
             DeviceConfig(
                 node_id=node_id,
@@ -150,10 +196,13 @@ def _load_devices(registry: dict[str, Any]) -> tuple[DeviceConfig, ...]:
                 role=role,
                 port=port,
                 token=token,
+                training_port=training_port,
             )
         )
-    if len(devices) != 4:
-        raise ValueError(f"Expected one master and three workers, found {len(devices)} devices")
+    worker_ids = sorted(device.node_id for device in devices if device.role == "worker")
+    expected_worker_ids = [f"worker{index}" for index in range(1, len(worker_ids) + 1)]
+    if len(worker_ids) < 3 or worker_ids != expected_worker_ids:
+        raise ValueError("Device registry must define at least three sequentially numbered workers")
     return tuple(devices)
 
 

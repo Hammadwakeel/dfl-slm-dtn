@@ -1,0 +1,24 @@
+[Unit]
+Description=DFL-SLM restricted worker maintenance helper
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/dfl-slm-memory-cleanup.env
+ExecStart=/usr/bin/python3 /opt/dfl-slm-dtn/worker/memory_cleanup_helper.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=false
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

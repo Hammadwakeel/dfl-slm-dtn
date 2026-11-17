@@ -4,6 +4,7 @@ set -euo pipefail
 node_id="${1:?node ID is required}"
 role="${2:?node role is required}"
 port="${3:?service port is required}"
+service_user="${4:-${DFL_SERVICE_USER:-hammad}}"
 stage_dir="$(dirname "$(readlink -f "$0")")"
 app_dir="/opt/dfl-slm-dtn"
 service_name="dfl-slm-status.service"
@@ -20,8 +21,8 @@ if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
   printf 'Invalid service port: %s\n' "$port" >&2
   exit 2
 fi
-if ! getent passwd hammad >/dev/null; then
-  printf 'Required service account hammad was not found\n' >&2
+if [[ ! "$service_user" =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || ! getent passwd "$service_user" >/dev/null; then
+  printf 'Required service account was not found or is invalid: %s\n' "$service_user" >&2
   exit 1
 fi
 if [[ ! -f "$stage_dir/node.env" || ! -d "$stage_dir/common" || ! -f "$stage_dir/dfl-slm-status.service" ]]; then
@@ -47,6 +48,7 @@ if [[ "${#token_line}" -lt 46 ]]; then
   exit 1
 fi
 
+hostnamectl set-hostname "dfl-$node_id"
 install -d -o root -g root -m 0755 "$app_dir"
 install -d -o root -g root -m 0755 "$app_dir/common"
 cp -a "$stage_dir/common/." "$app_dir/common/"
@@ -54,8 +56,11 @@ find "$app_dir/common" -type d -name __pycache__ -prune -exec rm -rf -- {} +
 chown -R root:root "$app_dir"
 find "$app_dir" -type d -exec chmod 0755 {} +
 find "$app_dir" -type f -exec chmod 0644 {} +
-install -o hammad -g hammad -m 0600 "$stage_dir/node.env" /etc/dfl-slm-node.env
+install -o "$service_user" -g "$service_user" -m 0600 "$stage_dir/node.env" /etc/dfl-slm-node.env
 install -o root -g root -m 0644 "$stage_dir/$service_name" "/etc/systemd/system/$service_name"
+install -d -o root -g root -m 0755 "/etc/systemd/system/${service_name}.d"
+printf '[Service]\nUser=%s\nGroup=%s\n' "$service_user" "$service_user" \
+  | install -o root -g root -m 0644 /dev/stdin "/etc/systemd/system/${service_name}.d/10-service-user.conf"
 systemctl daemon-reload
 systemctl enable --now "$service_name"
 systemctl restart "$service_name"

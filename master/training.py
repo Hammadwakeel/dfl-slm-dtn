@@ -1,4 +1,4 @@
-"""Master-side orchestration for direct-peer CIFAR-10 distributed training."""
+"""Master-side orchestration for direct-peer distributed dataset training."""
 
 from __future__ import annotations
 
@@ -7,24 +7,44 @@ import base64
 import json
 import logging
 import os
+import re
+import sqlite3
 import subprocess
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from common.dataset_nas import (
+    CIFAR_INITIAL_POPULATION_SIZE,
+    FINAL_EPOCHS,
+    FINAL_POPULATION_SIZE,
+    INITIAL_EPOCHS,
+    INITIAL_POPULATION_SIZE,
+    aggregate_worker_candidates,
+    initial_population,
+    mutate_population,
+    pareto_front,
+    select_best_architecture,
+    select_evolutionary_parents,
+)
 from topology_opt.reward import RewardConfig, calculate_run_reward
 from topology_opt.selector import select_candidate
+from common.model_design import (
+    MAX_MODEL_WEIGHT_BYTES,
+    ModelDesignError,
+    validate_model_design,
+    validate_normalization,
+)
 from common.nas import (
     ARCHITECTURE_SPACE,
     FIXED_ARCHITECTURE,
-    architecture_parameters,
     architecture_spec,
     select_architecture,
 )
@@ -38,8 +58,10 @@ TOPOLOGIES = (
     "star",
 )
 DATASET_SPLITS = {
+    0.1: "dirichlet_a01",
     0.3: "dirichlet_a03",
     0.5: "dirichlet_a05",
+    0.7: "dirichlet_a07",
 }
 
 
@@ -71,6 +93,7 @@ class TrainingConfig:
     epochs: int = 5
     topology: str = "directed_ring"
     peer_timeout_seconds: float = 60.0
+    round_timeout_seconds: float = 7200.0
 
     @classmethod
     def from_env(cls) -> "TrainingConfig":
@@ -89,8 +112,14 @@ class TrainingConfig:
             )
             for item in peers
         )
-        if [worker.node_id for worker in workers] != ["worker1", "worker2", "worker3"]:
-            raise ValueError("DFL_WORKERS_JSON must configure worker1, worker2, and worker3 in order")
+        worker_ids = [worker.node_id for worker in workers]
+        expected_worker_ids = [
+            f"worker{index}" for index in range(1, len(worker_ids) + 1)
+        ]
+        if len(worker_ids) < 3 or worker_ids != expected_worker_ids:
+            raise ValueError(
+                "DFL_WORKERS_JSON must configure at least three sequential workers in order"
+            )
         if any(
             len(worker.token) < 32 or not worker.base_url.startswith("http://")
             for worker in workers
@@ -100,10 +129,15 @@ class TrainingConfig:
         epochs = int(os.environ.get("DFL_LOCAL_EPOCHS", "5"))
         topology = os.environ.get("DFL_TOPOLOGY", "directed_ring")
         peer_timeout = float(os.environ.get("DFL_TRAINING_PEER_TIMEOUT_SECONDS", "60"))
+        round_timeout = float(os.environ.get("DFL_TRAINING_ROUND_TIMEOUT_SECONDS", "7200"))
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Training rounds or epochs are out of range")
-        if topology not in {"ring", *TOPOLOGIES} or peer_timeout <= 0:
-            raise ValueError("Training topology or peer timeout is invalid")
+        if (
+            topology not in {"ring", *TOPOLOGIES}
+            or peer_timeout <= 0
+            or round_timeout <= 0
+        ):
+            raise ValueError("Training topology or timeout is invalid")
         return cls(
             workers=workers,
             evaluator_python=os.environ.get("DFL_EVALUATOR_PYTHON", "/usr/bin/python3"),
@@ -125,12 +159,13 @@ class TrainingConfig:
             ),
             results_path=os.environ.get(
                 "DFL_TRAINING_RESULTS_PATH",
-                "/var/lib/dfl-slm-master/experiments.json",
+                "/var/lib/dfl-slm-master/experiments.sqlite3",
             ),
             rounds=rounds,
             epochs=epochs,
             topology=topology,
             peer_timeout_seconds=peer_timeout,
+            round_timeout_seconds=round_timeout,
         )
 
 
@@ -262,6 +297,7 @@ class TrainingCoordinator:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_group_id: str | None = None
+        self._started_worker_runs: set[str] = set()
         self._settings = {
             "rounds": config.rounds,
             "epochs": config.epochs,
@@ -270,6 +306,114 @@ class TrainingCoordinator:
             "architecture": architecture_spec(FIXED_ARCHITECTURE),
         }
         self._groups: list[dict[str, Any]] = self._load_groups()
+        if self._recover_interrupted_groups():
+            self._persist_locked()
+
+    def configure_workers(self, workers: tuple[TrainingWorker, ...]) -> dict[str, Any]:
+        worker_ids = [worker.node_id for worker in workers]
+        expected_ids = [f"worker{index}" for index in range(1, len(workers) + 1)]
+        if (
+            len(workers) < 3
+            or worker_ids != expected_ids
+            or len(set(worker_ids)) != len(worker_ids)
+            or any(len(worker.token) < 32 or not worker.base_url.startswith("http://") for worker in workers)
+        ):
+            raise ValueError("Workers must have sequential IDs, valid HTTP URLs, and API tokens")
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError("Cannot change workers while a training run is active")
+            previous_workers = self.config.workers
+
+        updated_workers: list[TrainingWorker] = []
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=len(workers)) as pool:
+            futures = {
+                pool.submit(
+                    self._post,
+                    worker,
+                    "/v1/peers",
+                    {
+                        "peers": [
+                            {
+                                "node_id": peer.node_id,
+                                "base_url": peer.base_url,
+                                "token": peer.token,
+                            }
+                            for peer in workers
+                            if peer.node_id != worker.node_id
+                        ]
+                    },
+                ): worker
+                for worker in workers
+            }
+            for future in as_completed(futures):
+                worker = futures[future]
+                try:
+                    future.result()
+                    updated_workers.append(worker)
+                except Exception as error:
+                    failures.append(f"{worker.node_id}: {error}")
+        if failures:
+            old_by_id = {worker.node_id: worker for worker in previous_workers}
+            rollback_errors: list[str] = []
+            for worker in updated_workers:
+                old_worker = old_by_id.get(worker.node_id)
+                if old_worker is None:
+                    continue
+                try:
+                    self._post(
+                        worker,
+                        "/v1/peers",
+                        {
+                            "peers": [
+                                {
+                                    "node_id": peer.node_id,
+                                    "base_url": peer.base_url,
+                                    "token": peer.token,
+                                }
+                                for peer in previous_workers
+                                if peer.node_id != old_worker.node_id
+                            ]
+                        },
+                    )
+                except Exception as error:
+                    rollback_errors.append(f"{worker.node_id}: {error}")
+            detail = "; ".join(failures)
+            if rollback_errors:
+                detail += "; rollback failed: " + "; ".join(rollback_errors)
+            raise TrainingError(f"Could not synchronize worker peer lists: {detail}")
+
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError("A training run started while worker peers were synchronizing")
+            self.config = replace(self.config, workers=workers)
+        return {"configured_workers": worker_ids}
+
+    def _recover_interrupted_groups(self) -> bool:
+        recovered = False
+        for group in self._groups:
+            if group.get("status") != "running":
+                continue
+            message = (
+                "Training was interrupted because the master coordinator restarted "
+                "before this group completed."
+            )
+            group["status"] = "failed"
+            group["completed_at"] = time.time()
+            group["error"] = message
+            for run in group.get("runs", []):
+                if run.get("status") == "running":
+                    run["status"] = "failed"
+                    run["error"] = message
+                run.pop("progress", None)
+            recovered = True
+        return recovered
+
+    def _results_paths(self) -> tuple[Path, Path]:
+        configured_path = Path(self.config.results_path)
+        if configured_path.suffix.lower() == ".json":
+            return configured_path.with_suffix(".sqlite3"), configured_path
+        return configured_path, configured_path.with_suffix(".json")
 
     def configure(
         self,
@@ -309,21 +453,82 @@ class TrainingCoordinator:
         *,
         rounds: int | None = None,
         epochs: int | None = None,
-        seeds: tuple[int, ...] = (17, 42, 2026),
+        seeds: tuple[int, ...] | None = None,
         dataset_split: str | None = None,
+        dataset_name: str | None = None,
         architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
     ) -> dict[str, Any]:
-        if len(seeds) != 3 or any(seed < 0 for seed in seeds):
-            raise ValueError("Exactly three non-negative training seeds are required")
+        if dataset_name is not None and not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", dataset_name
+        ):
+            raise ValueError("A valid dataset_name is required")
+        selected_seeds = (
+            (2026,) if dataset_name is not None else (17, 42, 2026)
+        ) if seeds is None else seeds
+        if not 1 <= len(selected_seeds) <= 3 or any(
+            seed < 0 for seed in selected_seeds
+        ):
+            raise ValueError("Provide between one and three non-negative training seeds")
         with self._lock:
             if self._active_group_id is not None:
                 raise TrainingError(f"Training group {self._active_group_id} is already active")
+            if isinstance(architecture, dict) and architecture.get("model_type") in {
+                "custom",
+                "pretrained_deit",
+            }:
+                if dataset_name is None:
+                    raise ValueError("Custom MNIST architectures require a dataset_name")
+                if architecture.get("dataset_name") != dataset_name:
+                    raise ValueError("Model architecture does not match the selected dataset")
+                raw_shape = architecture.get("input_shape")
+                classes = architecture.get("classes")
+                if (
+                    not isinstance(raw_shape, list)
+                    or len(raw_shape) != 3
+                    or any(isinstance(value, bool) or not isinstance(value, int) for value in raw_shape)
+                    or not isinstance(classes, list)
+                    or len(classes) < 2
+                    or any(not isinstance(value, str) or not value for value in classes)
+                    or len(set(classes)) != len(classes)
+                    or architecture.get("num_classes") != len(classes)
+                ):
+                    raise ValueError("Installed model dataset metadata is invalid")
+                try:
+                    normalized_design, parameter_count = validate_model_design(
+                        architecture,
+                        tuple(raw_shape),
+                        len(classes),
+                    )
+                except ModelDesignError as error:
+                    raise ValueError(str(error)) from error
+                if architecture.get("parameter_count") != parameter_count:
+                    raise ValueError("Installed model parameter count does not match its architecture")
+                if architecture.get("model_type") == "pretrained_deit":
+                    try:
+                        normalized_normalization = validate_normalization(
+                            architecture.get("normalization"),
+                            raw_shape[2],
+                        )
+                    except ModelDesignError as error:
+                        raise ValueError(str(error)) from error
+                    if architecture.get("normalization") != normalized_normalization:
+                        raise ValueError("Installed model normalization metadata is invalid")
+                selected_architecture = {
+                    **architecture,
+                    **normalized_design,
+                    "dataset_name": dataset_name,
+                    "input_shape": raw_shape,
+                    "classes": classes,
+                    "num_classes": len(classes),
+                    "parameter_count": parameter_count,
+                }
+            else:
+                selected_architecture = architecture_spec(architecture)
             settings = self.configure(
                 rounds=rounds,
                 epochs=epochs,
                 dataset_split=dataset_split,
             )
-            selected_architecture = architecture_spec(architecture)
             self._settings["architecture"] = selected_architecture
             settings["architecture"] = selected_architecture
             group_id = f"{settings['topology']}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
@@ -335,13 +540,16 @@ class TrainingCoordinator:
                 "epochs": settings["epochs"],
                 "dataset_split": settings["dataset_split"],
                 "architecture": selected_architecture,
-                "seeds": list(seeds),
+                "nas_enabled": False,
+                "seeds": list(selected_seeds),
                 "status": "running",
                 "started_at": time.time(),
                 "completed_at": None,
                 "error": None,
                 "runs": [],
             }
+            if dataset_name is not None:
+                group["dataset_name"] = dataset_name
             self._groups.append(group)
             self._active_group_id = group_id
             self._stop.clear()
@@ -353,7 +561,13 @@ class TrainingCoordinator:
             )
             self._thread.start()
             self._persist_locked()
-        return {"accepted": True, "group_id": group_id, **settings, "seeds": list(seeds)}
+        return {
+            "accepted": True,
+            "group_id": group_id,
+            **settings,
+            "seeds": list(selected_seeds),
+            "dataset_name": dataset_name,
+        }
 
     def start_nas_experiment(
         self,
@@ -419,18 +633,84 @@ class TrainingCoordinator:
             "max_candidate_parameters": 12_000,
         }
 
+    def start_dataset_nas(
+        self,
+        *,
+        dataset_name: str,
+        search_time_limit_seconds: int = 600,
+        seed: int = 2026,
+        smoke_test: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(dataset_name, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", dataset_name
+        ):
+            raise ValueError("A valid dataset_name is required for NAS")
+        if not 90 <= search_time_limit_seconds <= 600:
+            raise ValueError("Dataset NAS search time limit must be between 90 and 600 seconds")
+        if not isinstance(smoke_test, bool):
+            raise ValueError("NAS smoke_test must be a boolean")
+        if not 0 <= seed <= 2**32 - 1:
+            raise ValueError("NAS seed is out of range")
+        with self._lock:
+            if self._active_group_id is not None:
+                raise TrainingError(f"Training group {self._active_group_id} is already active")
+            group_id = f"dataset-nas-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+            group = {
+                "group_id": group_id,
+                "kind": "dataset_architecture_search",
+                "dataset_name": dataset_name,
+                "topology": self._settings["topology"],
+                "seed": seed,
+                "search_time_limit_seconds": search_time_limit_seconds,
+                "smoke_test": smoke_test,
+                "search_method": (
+                    "single_candidate_smoke_test"
+                    if smoke_test
+                    else "pareto_constrained_single_stage"
+                    if dataset_name == "cifar10"
+                    else "pareto_evolutionary_multifidelity"
+                ),
+                "nas_generations": [],
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+                "worker_search": [],
+                "worker_search_progress": {},
+                "runs": [],
+            }
+            self._groups.append(group)
+            self._active_group_id = group_id
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run_dataset_nas_group,
+                args=(group_id,),
+                name=f"dataset-nas-group-{group_id}",
+                daemon=True,
+            )
+            self._thread.start()
+            self._persist_locked()
+        return {
+            "accepted": True,
+            "group_id": group_id,
+            "dataset_name": dataset_name,
+            "search_time_limit_seconds": search_time_limit_seconds,
+            "seed": seed,
+            "smoke_test": smoke_test,
+        }
+
     def start_optimization(
         self,
         *,
         rounds: int = 10,
         epochs: int = 5,
         seeds: tuple[int, ...] = (17, 42, 2026),
-        alphas: tuple[float, ...] = (0.3, 0.5),
+        alphas: tuple[float, ...] = (0.3,),
     ) -> dict[str, Any]:
         if not 1 <= len(seeds) <= 3 or any(seed < 0 for seed in seeds):
             raise ValueError("Provide between one and three non-negative seeds")
-        if not alphas or any(alpha not in DATASET_SPLITS for alpha in alphas):
-            raise ValueError("Dirichlet alphas must be selected from 0.3 and 0.5")
+        if alphas != (0.3,):
+            raise ValueError("Topology optimization currently supports only Dirichlet alpha 0.3")
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("rounds must be 1-100 and epochs must be 1-50")
         with self._lock:
@@ -440,6 +720,8 @@ class TrainingCoordinator:
             group = {
                 "group_id": group_id,
                 "kind": "topology_optimization",
+                "dataset_name": "mnist",
+                "reward_metric_source": "validation_accuracy",
                 "topology": "candidate_sweep",
                 "rounds": rounds,
                 "epochs": epochs,
@@ -534,27 +816,54 @@ class TrainingCoordinator:
 
     def results(self) -> dict[str, Any]:
         with self._lock:
+            worker_ids = [worker.node_id for worker in self.config.workers]
+            ring = worker_ids + worker_ids[:1]
+            bidirectional_ring = [
+                [worker_ids[index], worker_ids[(index + 1) % len(worker_ids)]]
+                for index in range(len(worker_ids))
+            ]
+            mesh = [
+                [worker_ids[first], worker_ids[second]]
+                for first in range(len(worker_ids))
+                for second in range(first + 1, len(worker_ids))
+            ]
+            chain = [
+                [worker_ids[index], worker_ids[index + 1]]
+                for index in range(len(worker_ids) - 1)
+            ]
+            hub = worker_ids[0]
             return {
                 "configuration": dict(self._settings),
                 "active_group_id": self._active_group_id,
                 "topologies": {
-                    "ring": ["worker1", "worker2", "worker3", "worker1"],
-                    "directed_ring": ["worker1", "worker2", "worker3", "worker1"],
-                    "bidirectional_ring": [
-                        ["worker1", "worker2"],
-                        ["worker2", "worker3"],
-                        ["worker3", "worker1"],
-                    ],
-                    "mesh": [
-                        ["worker1", "worker2"],
-                        ["worker1", "worker3"],
-                        ["worker2", "worker3"],
-                    ],
-                    "chain": [["worker1", "worker2"], ["worker2", "worker3"]],
-                    "star": [["worker1", "worker2"], ["worker1", "worker3"]],
+                    "ring": ring,
+                    "directed_ring": ring,
+                    "bidirectional_ring": bidirectional_ring,
+                    "mesh": mesh,
+                    "chain": chain,
+                    "star": [[hub, worker_id] for worker_id in worker_ids[1:]],
                 },
                 "groups": json.loads(json.dumps(self._groups[-20:])),
             }
+
+    def delete_group(self, group_id: str) -> dict[str, Any]:
+        with self._lock:
+            group = next(
+                (item for item in self._groups if item["group_id"] == group_id),
+                None,
+            )
+            if group is None:
+                raise TrainingError(f"Experiment group {group_id} was not found")
+            if group_id == self._active_group_id or group.get("status") == "running":
+                raise TrainingError("An active experiment group cannot be deleted")
+            database_path, _ = self._results_paths()
+            with sqlite3.connect(database_path, timeout=30) as connection:
+                connection.execute(
+                    "DELETE FROM experiment_groups WHERE group_id = ?",
+                    (group_id,),
+                )
+            self._groups.remove(group)
+            return {"deleted": True, "group_id": group_id}
 
     def _get_group(self, group_id: str) -> dict[str, Any]:
         with self._lock:
@@ -574,6 +883,7 @@ class TrainingCoordinator:
             group = next(item for item in self._groups if item["group_id"] == group_id)
             current_run = next(item for item in group["runs"] if item["run_id"] == run["run_id"])
             current_run["rounds"].append(row)
+            current_run.pop("progress", None)
             self._persist_locked()
 
     def _run_group(self, group_id: str) -> None:
@@ -635,6 +945,32 @@ class TrainingCoordinator:
         group: dict[str, Any],
         run: dict[str, Any],
     ) -> None:
+        try:
+            self._run_distributed_seed_impl(group_id, group, run)
+        except Exception:
+            with self._lock:
+                workers_started = run["run_id"] in self._started_worker_runs
+                self._started_worker_runs.discard(run["run_id"])
+            if workers_started:
+                cancel_errors = self._cancel_workers()
+                if cancel_errors:
+                    LOGGER.error(
+                        "Could not cancel all workers after run %s failed: %s",
+                        run["run_id"],
+                        cancel_errors,
+                    )
+            raise
+        finally:
+            with self._lock:
+                self._started_worker_runs.discard(run["run_id"])
+            self._cleanup_worker_run(group_id, run)
+
+    def _run_distributed_seed_impl(
+        self,
+        group_id: str,
+        group: dict[str, Any],
+        run: dict[str, Any],
+    ) -> None:
         configuration = {
             "rounds": group["rounds"],
             "epochs": group["epochs"],
@@ -642,6 +978,8 @@ class TrainingCoordinator:
             "dataset_split": group.get("dataset_split", "stratified"),
             "architecture": group.get("architecture", FIXED_ARCHITECTURE),
         }
+        if group.get("dataset_name") is not None:
+            configuration["dataset_name"] = group["dataset_name"]
         self._parallel_workers(
             lambda worker: self._post(worker, "/v1/config", configuration)
         )
@@ -661,6 +999,8 @@ class TrainingCoordinator:
 
             for node_id, _ in self._parallel_workers(start):
                 started.add(node_id)
+            with self._lock:
+                self._started_worker_runs.add(run["run_id"])
         except Exception:
             self._cancel_workers(started or None)
             raise
@@ -670,10 +1010,7 @@ class TrainingCoordinator:
             summaries = self._parallel_workers(
                 lambda worker: (
                     worker.node_id,
-                    self._get_json(
-                        worker,
-                        "/v1/results?" + urlencode({"run_id": run["run_id"]}),
-                    ),
+                    self._get_run_results(worker, run["run_id"]),
                 )
             )
             local_rows = {
@@ -691,38 +1028,90 @@ class TrainingCoordinator:
                     ),
                 )
             )
-            scores = self.evaluator.evaluate(
-                dict(binary_weights),
-                group.get("architecture", FIXED_ARCHITECTURE),
+            scores = (
+                {}
+                if group.get("dataset_name") is not None
+                else self.evaluator.evaluate(
+                    dict(binary_weights),
+                    group.get("architecture", FIXED_ARCHITECTURE),
+                )
             )
+            worker_metrics = {}
+            for node_id in local_rows:
+                metrics = {
+                    **local_rows[node_id],
+                    **scores.get(node_id, {}),
+                }
+                for legacy_name, validation_name in (
+                    ("accuracy", "validation_accuracy"),
+                    ("macro_f1", "validation_macro_f1"),
+                ):
+                    if legacy_name not in metrics and validation_name in metrics:
+                        metrics[legacy_name] = metrics[validation_name]
+                worker_metrics[node_id] = metrics
             row = {
                 "round": round_index + 1,
                 "topology": group["topology"],
                 "completed_at": time.time(),
-                "workers": {
-                    node_id: {
-                        **local_rows[node_id],
-                        **scores[node_id],
-                    }
-                    for node_id in local_rows
-                },
+                "workers": worker_metrics,
             }
             self._append_run_row(group_id, run, row)
 
+    def _cleanup_worker_run(
+        self,
+        group_id: str,
+        run: dict[str, Any],
+    ) -> None:
+        run_id = run["run_id"]
+
+        def cleanup(worker: TrainingWorker) -> tuple[str, dict[str, Any]]:
+            try:
+                self._delete(
+                    worker,
+                    f"/v1/runs/{run_id}",
+                    timeout=self.config.peer_timeout_seconds,
+                )
+            except TrainingError as error:
+                LOGGER.error(
+                    "Could not clean run %s memory on %s: %s",
+                    run_id,
+                    worker.node_id,
+                    error,
+                )
+                return worker.node_id, {"status": "failed", "error": str(error)}
+            return worker.node_id, {"status": "cleaned"}
+
+        cleanup_results = self._parallel_workers(cleanup)
+        cleanup_status = {
+            worker_id: result
+            for worker_id, result in cleanup_results
+        }
+        run["worker_cleanup"] = {
+            "status": (
+                "completed"
+                if all(result["status"] == "cleaned" for result in cleanup_status.values())
+                and len(cleanup_status) == len(self.config.workers)
+                else "incomplete"
+            ),
+            "workers": cleanup_status,
+        }
+        with self._lock:
+            self._get_group(group_id)
+            self._persist_locked()
+
     def _wait_for_worker_rounds(self, run_id: str, round_index: int, group_id: str) -> None:
-        deadline = time.monotonic() + self.config.peer_timeout_seconds * 6
+        deadline = time.monotonic() + self.config.round_timeout_seconds
         while time.monotonic() < deadline:
             if self._stop.is_set():
                 raise TrainingCancelled("Training was cancelled")
             snapshots = self._parallel_workers(
                 lambda worker: (
                     worker.node_id,
-                    self._get_json(
-                        worker,
-                        "/v1/results?" + urlencode({"run_id": run_id}),
-                    ),
+                    self._get_run_results(worker, run_id),
                 )
             )
+            worker_progress: dict[str, dict[str, Any]] = {}
+            round_complete = True
             for node_id, payload in snapshots:
                 if run_id in payload.get("errors", {}):
                     raise TrainingError(
@@ -730,8 +1119,24 @@ class TrainingCoordinator:
                     )
                 rows = payload.get("runs", {}).get(run_id, [])
                 if len(rows) <= round_index:
-                    break
-            else:
+                    round_complete = False
+                progress = payload.get("progress")
+                if (
+                    isinstance(progress, dict)
+                    and progress.get("run_id") == run_id
+                    and progress.get("round") == round_index + 1
+                ):
+                    worker_progress[node_id] = {
+                        "epoch": progress.get("epoch"),
+                        "epochs": progress.get("epochs"),
+                        "phase": progress.get("phase"),
+                    }
+            self._update_run_progress(
+                group_id,
+                run_id,
+                {"round": round_index + 1, "workers": worker_progress},
+            )
+            if round_complete:
                 return
             time.sleep(1)
         raise TrainingError(
@@ -739,10 +1144,81 @@ class TrainingCoordinator:
             f"for group {group_id}"
         )
 
+    def _update_run_progress(
+        self,
+        group_id: str,
+        run_id: str,
+        progress: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            group = self._get_group(group_id)
+            run = next(
+                (item for item in group["runs"] if item["run_id"] == run_id),
+                None,
+            )
+            if run is None or run.get("progress") == progress:
+                return
+            run["progress"] = progress
+            self._persist_locked()
+
+    def _summarize_topology_candidates(
+        self,
+        group: dict[str, Any],
+        candidate_specs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        summaries = []
+        for candidate in candidate_specs:
+            matching_runs = [
+                run
+                for run in group["runs"]
+                if run["topology"] == candidate["topology"]
+                and run["alpha"] == candidate["alpha"]
+                and run["status"] == "completed"
+            ]
+            per_run = [
+                calculate_run_reward(run["rounds"], self.reward_config)
+                for run in matching_runs
+            ]
+            summary: dict[str, Any] = {
+                "topology": candidate["topology"],
+                "alpha": candidate["alpha"],
+                "completed_runs": len(per_run),
+            }
+            if per_run:
+                summary.update(
+                    {
+                        "mean_reward": round(
+                            sum(value["reward"] for value in per_run) / len(per_run),
+                            6,
+                        ),
+                        "mean_final_accuracy": round(
+                            sum(value["metrics"]["final_accuracy"] for value in per_run)
+                            / len(per_run),
+                            6,
+                        ),
+                        "mean_accuracy_gain_available": all(
+                            value["metrics"]["accuracy_gain_available"]
+                            for value in per_run
+                        ),
+                        "mean_components": {
+                            name: round(
+                                sum(value["components"][name] for value in per_run)
+                                / len(per_run),
+                                6,
+                            )
+                            for name in self.reward_config.weights
+                        },
+                        "per_run_rewards": per_run,
+                    }
+                )
+            summaries.append(summary)
+        return summaries
+
     def _run_optimization_group(self, group_id: str) -> None:
         group = self._get_group(group_id)
+        candidate_specs = [dict(candidate) for candidate in group["candidates"]]
         try:
-            for candidate in group["candidates"]:
+            for candidate in candidate_specs:
                 for seed in group["seeds"]:
                     if self._stop.is_set():
                         raise TrainingCancelled("Topology optimization was cancelled")
@@ -771,58 +1247,32 @@ class TrainingCoordinator:
                     self._run_distributed_seed(group_id, candidate_group, run)
                     run["status"] = "completed"
                     with self._lock:
+                        current_group = self._get_group(group_id)
+                        current_group["candidates"] = self._summarize_topology_candidates(
+                            current_group,
+                            candidate_specs,
+                        )
                         self._persist_locked()
 
-            candidates = []
-            for candidate in group["candidates"]:
-                matching_runs = [
-                    run
-                    for run in group["runs"]
-                    if run["topology"] == candidate["topology"]
-                    and run["alpha"] == candidate["alpha"]
-                    and run["status"] == "completed"
-                ]
-                per_run = [
-                    calculate_run_reward(run["rounds"], self.reward_config)
-                    for run in matching_runs
-                ]
-                if not per_run:
-                    continue
-                candidates.append(
-                    {
-                        "topology": candidate["topology"],
-                        "alpha": candidate["alpha"],
-                        "completed_runs": len(per_run),
-                        "mean_reward": round(
-                            sum(value["reward"] for value in per_run) / len(per_run),
-                            6,
-                        ),
-                        "mean_final_accuracy": round(
-                            sum(value["metrics"]["final_accuracy"] for value in per_run)
-                            / len(per_run),
-                            6,
-                        ),
-                        "mean_components": {
-                            name: round(
-                                sum(value["components"][name] for value in per_run)
-                                / len(per_run),
-                                6,
-                            )
-                            for name in self.reward_config.weights
-                        },
-                        "per_run_rewards": per_run,
-                    }
-                )
-            if not candidates:
+            candidate_summaries = self._summarize_topology_candidates(
+                group,
+                candidate_specs,
+            )
+            measured_candidates = [
+                candidate
+                for candidate in candidate_summaries
+                if candidate["completed_runs"] > 0
+            ]
+            if not measured_candidates:
                 raise TrainingError("No topology candidates completed successfully")
-            selection = select_candidate(candidates)
+            selection = select_candidate(measured_candidates)
             chosen = selection["selected_candidate"]
             with self._lock:
                 self._settings["topology"] = chosen["topology"]
                 self._settings["dataset_split"] = DATASET_SPLITS[chosen["alpha"]]
             self._update_group(
                 group_id,
-                candidates=candidates,
+                candidates=candidate_summaries,
                 selection=selection,
                 selected_configuration={
                     "topology": chosen["topology"],
@@ -1010,6 +1460,312 @@ class TrainingCoordinator:
                     self._active_group_id = None
                 self._persist_locked()
 
+    def _run_dataset_nas_group(self, group_id: str) -> None:
+        group = self._get_group(group_id)
+        try:
+            if self._stop.is_set():
+                raise TrainingCancelled("Dataset NAS was cancelled")
+
+            started_at = time.time()
+            search_started = time.monotonic()
+            search_deadline = search_started + group["search_time_limit_seconds"]
+            smoke_test = group.get("smoke_test") is True
+            initial_stage_limit = (
+                min(300, group["search_time_limit_seconds"])
+                if smoke_test
+                else min(300, max(30, int(group["search_time_limit_seconds"] * 0.5)))
+            )
+            input_shape: tuple[int, int, int] | None = None
+            class_names: list[str] | None = None
+            population: list[dict[str, Any]] | None = None
+            final_candidates: list[dict[str, Any]] = []
+            final_searches: list[dict[str, Any]] = []
+            fidelities = (
+                (1,)
+                if smoke_test
+                else (
+                    (INITIAL_EPOCHS,)
+                    if group["dataset_name"] == "cifar10"
+                    else (INITIAL_EPOCHS, FINAL_EPOCHS)
+                )
+            )
+            with self._lock:
+                group["worker_search"] = []
+                group["worker_search_progress"] = {
+                    worker.node_id: {
+                        "status": "searching",
+                        "started_at": started_at,
+                        "generation": 1,
+                        "fidelity_epochs": fidelities[0],
+                    }
+                    for worker in self.config.workers
+                }
+                self._persist_locked()
+
+            for generation, fidelity_epochs in enumerate(fidelities, start=1):
+                if self._stop.is_set():
+                    raise TrainingCancelled("Dataset NAS was cancelled")
+                remaining_seconds = int(search_deadline - time.monotonic())
+                if remaining_seconds < 30:
+                    raise TimeoutError(
+                        "Dataset NAS needs at least 30 seconds remaining for the next "
+                        "worker evaluation stage"
+                    )
+                if generation == 2:
+                    if input_shape is None or class_names is None or population is None:
+                        raise TrainingError("NAS evolution is missing first-generation results")
+                    parents = [
+                        candidate["architecture"]
+                        for candidate in select_evolutionary_parents(
+                            final_candidates,
+                            count=min(2, INITIAL_POPULATION_SIZE),
+                        )
+                    ]
+                    population = mutate_population(
+                        parents,
+                        seed=group["seed"] + generation,
+                        input_shape=input_shape,
+                        num_classes=len(class_names),
+                        size=FINAL_POPULATION_SIZE - 2,
+                        memory_constrained=group["dataset_name"] == "cifar10",
+                    )
+
+                with self._lock:
+                    group["worker_search_progress"] = {
+                        worker.node_id: {
+                            "status": "searching",
+                            "started_at": started_at,
+                            "generation": generation,
+                            "fidelity_epochs": fidelity_epochs,
+                            "candidate_count": (
+                                len(population)
+                                if population
+                                else 1
+                                if smoke_test
+                                else CIFAR_INITIAL_POPULATION_SIZE
+                                if group["dataset_name"] == "cifar10"
+                                else INITIAL_POPULATION_SIZE
+                            ),
+                        }
+                        for worker in self.config.workers
+                    }
+                    self._persist_locked()
+
+                def record_worker_search(result: dict[str, Any]) -> None:
+                    with self._lock:
+                        current = {
+                            row["node_id"]: row for row in group.get("worker_search", [])
+                        }
+                        current[result["node_id"]] = result
+                        group["worker_search"] = sorted(current.values(), key=lambda row: row["node_id"])
+                        group["worker_search_progress"][result["node_id"]] = {
+                            "status": "completed",
+                            "started_at": started_at,
+                            "completed_at": time.time(),
+                            "generation": generation,
+                            "fidelity_epochs": fidelity_epochs,
+                            "candidate_count": len(result.get("candidates", [])),
+                            "elapsed_seconds": result.get("elapsed_seconds"),
+                        }
+                        self._persist_locked()
+
+                payload: dict[str, Any] = {
+                    "dataset_name": group["dataset_name"],
+                    "seed": group["seed"],
+                    "time_limit_seconds": min(
+                        remaining_seconds,
+                        initial_stage_limit if generation == 1 else 300,
+                    ),
+                    "epochs": fidelity_epochs,
+                }
+                if smoke_test:
+                    payload["smoke_test"] = True
+                if population is not None:
+                    payload["architectures"] = population
+                searches = self._parallel_workers(
+                    lambda worker: self._post(
+                        worker,
+                        "/v1/nas/search",
+                        payload,
+                        timeout=min(remaining_seconds, 300) + 30,
+                    ),
+                    on_result=record_worker_search,
+                )
+                searches = sorted(searches, key=lambda row: row["node_id"])
+                class_sets = {
+                    tuple(result.get("dataset_classes", [])) for result in searches
+                }
+                dataset_names = {result.get("dataset_name") for result in searches}
+                image_shapes = {
+                    tuple(result.get("dataset_image_shape", [])) for result in searches
+                }
+                if (
+                    len(class_sets) != 1
+                    or dataset_names != {group["dataset_name"]}
+                    or len(image_shapes) != 1
+                    or any(
+                        result.get("fidelity_epochs") != fidelity_epochs
+                        for result in searches
+                    )
+                ):
+                    raise TrainingError(
+                        "Workers searched inconsistent dataset shards or fidelity settings"
+                    )
+                resolved_shape = next(iter(image_shapes))
+                if len(resolved_shape) != 3 or resolved_shape[-1] not in {1, 3}:
+                    raise TrainingError("Workers reported an unsupported dataset image shape")
+                resolved_classes = list(next(iter(class_sets)))
+                if input_shape is not None and (
+                    input_shape != resolved_shape or class_names != resolved_classes
+                ):
+                    raise TrainingError("Workers searched inconsistent dataset shards between NAS stages")
+                input_shape = resolved_shape
+                class_names = resolved_classes
+                if generation == 1 and population is None:
+                    if smoke_test:
+                        candidate_rows = searches[0].get("candidates")
+                        if not isinstance(candidate_rows, list) or not candidate_rows:
+                            raise TrainingError("NAS smoke test returned no candidate architecture")
+                        population = [
+                            row["architecture"]
+                            for row in candidate_rows
+                            if isinstance(row, dict)
+                            and isinstance(row.get("architecture"), dict)
+                        ]
+                        if len(population) != 1:
+                            raise TrainingError(
+                                "NAS smoke test must evaluate exactly one lightweight candidate"
+                            )
+                    else:
+                        population = initial_population(
+                            seed=group["seed"],
+                            input_shape=input_shape,
+                            num_classes=len(class_names),
+                            size=(
+                                CIFAR_INITIAL_POPULATION_SIZE
+                                if group["dataset_name"] == "cifar10"
+                                else INITIAL_POPULATION_SIZE
+                            ),
+                            memory_constrained=group["dataset_name"] == "cifar10",
+                        )
+                measured = aggregate_worker_candidates(
+                    searches,
+                    worker_count=len(self.config.workers),
+                )
+                expected_ids = {candidate["id"] for candidate in population or []}
+                if {row["architecture"]["id"] for row in measured} != expected_ids:
+                    raise TrainingError(
+                        "NAS workers did not evaluate the same architecture population"
+                    )
+                for candidate in measured:
+                    candidate["generation"] = generation
+                    candidate["fidelity_epochs"] = fidelity_epochs
+                    candidate["is_pareto_optimal"] = False
+                front_ids = {
+                    item["architecture"]["id"] for item in pareto_front(measured)
+                }
+                for candidate in measured:
+                    candidate["is_pareto_optimal"] = candidate["architecture"]["id"] in front_ids
+                with self._lock:
+                    group.setdefault("nas_generations", []).append(
+                        {
+                            "generation": generation,
+                            "fidelity_epochs": fidelity_epochs,
+                            "candidates": measured,
+                        }
+                    )
+                    group["nas_candidates"] = measured
+                    group["dataset_classes"] = class_names
+                    group["dataset_image_shape"] = list(input_shape)
+                    group["search_method"] = (
+                        "single_candidate_smoke_test"
+                        if smoke_test
+                        else "pareto_constrained_single_stage"
+                        if group["dataset_name"] == "cifar10"
+                        else "pareto_evolutionary_multifidelity"
+                    )
+                    self._persist_locked()
+                final_candidates = measured
+                final_searches = searches
+
+            selected = select_best_architecture(final_candidates)
+            pareto_ids = {
+                item["architecture"]["id"] for item in pareto_front(final_candidates)
+            }
+            selection = {
+                "method": (
+                    "single_candidate_smoke_test"
+                    if smoke_test
+                    else "pareto_constrained_single_stage"
+                    if group["dataset_name"] == "cifar10"
+                    else "pareto_evolutionary_multifidelity"
+                ),
+                "fidelity_epochs": fidelities[-1],
+                "selected_candidate": selected,
+                "pareto_front": [
+                    candidate
+                    for candidate in final_candidates
+                    if candidate["architecture"]["id"] in pareto_ids
+                ],
+            }
+            selected_architecture = {
+                **selected["architecture"],
+                "dataset_name": group["dataset_name"],
+                "input_shape": list(input_shape),
+                "classes": class_names,
+                "num_classes": len(class_names),
+            }
+            selection["selected_candidate"] = {
+                **selected,
+                "architecture": selected_architecture,
+            }
+            group["worker_search"] = final_searches
+            group["selected_architecture"] = selected_architecture
+            group["selected_parameter_count"] = selected["parameter_count"]
+            group["search_elapsed_seconds"] = round(
+                time.monotonic() - search_started,
+                3,
+            )
+            group["search_peak_rss_mb"] = max(
+                float(result["peak_rss_mb"]) for result in final_searches
+            )
+            self._update_group(
+                group_id,
+                status="completed",
+                completed_at=time.time(),
+                selection=selection,
+            )
+        except TrainingCancelled as error:
+            with self._lock:
+                for progress in group.get("worker_search_progress", {}).values():
+                    if progress["status"] == "searching":
+                        progress.update(status="stopped", error=str(error))
+                self._persist_locked()
+            self._update_group(
+                group_id,
+                status="stopped",
+                completed_at=time.time(),
+                error=str(error),
+            )
+        except Exception as error:
+            LOGGER.exception("Dataset NAS group %s failed", group_id)
+            with self._lock:
+                for progress in group.get("worker_search_progress", {}).values():
+                    if progress["status"] == "searching":
+                        progress.update(status="failed", error=str(error))
+                self._persist_locked()
+            self._update_group(
+                group_id,
+                status="failed",
+                completed_at=time.time(),
+                error=f"{type(error).__name__}: {error}",
+            )
+        finally:
+            with self._lock:
+                if self._active_group_id == group_id:
+                    self._active_group_id = None
+                self._persist_locked()
+
     @staticmethod
     def _summarize_nas_runs(
         runs: list[dict[str, Any]],
@@ -1019,6 +1775,23 @@ class TrainingCoordinator:
     ) -> dict[str, Any]:
         if not runs:
             raise TrainingError("NAS comparison is missing completed experiment runs")
+
+        def worker_metric(
+            metrics: dict[str, Any],
+            *,
+            primary: str,
+            fallback: str,
+        ) -> float:
+            value = metrics.get(primary)
+            if value is None:
+                value = metrics.get(fallback)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TrainingError(
+                    f"NAS comparison worker metrics are missing {primary} "
+                    f"(or legacy {fallback})"
+                )
+            return float(value)
+
         accuracies = []
         macro_f1_values = []
         runtime_values = []
@@ -1027,11 +1800,25 @@ class TrainingCoordinator:
         for run in runs:
             final_workers = run["rounds"][-1]["workers"]
             accuracies.append(
-                sum(float(row["accuracy"]) for row in final_workers.values())
+                sum(
+                    worker_metric(
+                        row,
+                        primary="validation_accuracy",
+                        fallback="accuracy",
+                    )
+                    for row in final_workers.values()
+                )
                 / len(final_workers)
             )
             macro_f1_values.append(
-                sum(float(row["macro_f1"]) for row in final_workers.values())
+                sum(
+                    worker_metric(
+                        row,
+                        primary="validation_macro_f1",
+                        fallback="macro_f1",
+                    )
+                    for row in final_workers.values()
+                )
                 / len(final_workers)
             )
             runtime_values.append(
@@ -1131,18 +1918,31 @@ class TrainingCoordinator:
                 node_id = futures[future]
                 try:
                     future.result()
-                except TrainingError as error:
+                except Exception as error:
                     errors[node_id] = str(error)
+                    LOGGER.warning(
+                        "Could not cancel training on %s: %s",
+                        node_id,
+                        error,
+                    )
         return errors
 
-    def _parallel_workers(self, operation: Any) -> list[Any]:
+    def _parallel_workers(
+        self,
+        operation: Any,
+        *,
+        on_result: Callable[[Any], None] | None = None,
+    ) -> list[Any]:
         with ThreadPoolExecutor(max_workers=len(self.config.workers)) as pool:
             futures = {pool.submit(operation, worker): worker.node_id for worker in self.config.workers}
             results = []
             errors = []
             for future in as_completed(futures):
                 try:
-                    results.append(future.result())
+                    result = future.result()
+                    results.append(result)
+                    if on_result is not None:
+                        on_result(result)
                 except Exception as error:
                     errors.append(f"{futures[future]}: {error}")
             if errors:
@@ -1156,6 +1956,7 @@ class TrainingCoordinator:
         *,
         payload: dict[str, Any] | None = None,
         timeout: float = 30.0,
+        method: str | None = None,
     ) -> tuple[bytes, dict[str, str]]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = Request(
@@ -1165,7 +1966,7 @@ class TrainingCoordinator:
                 "Authorization": f"Bearer {worker.token}",
                 **({"Content-Type": "application/json"} if body is not None else {}),
             },
-            method="POST" if body is not None else "GET",
+            method=method or ("POST" if body is not None else "GET"),
         )
         try:
             with urlopen(request, timeout=timeout) as response:
@@ -1177,6 +1978,24 @@ class TrainingCoordinator:
             ) from error
         except (URLError, TimeoutError, OSError) as error:
             raise TrainingError(f"Could not reach {worker.node_id} for {path}: {error}") from error
+
+    def _delete(
+        self,
+        worker: TrainingWorker,
+        path: str,
+        *,
+        timeout: float = 30,
+    ) -> dict[str, Any]:
+        body, _ = self._request(worker, path, timeout=timeout, method="DELETE")
+        try:
+            response = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise TrainingError(
+                f"{worker.node_id} returned an invalid cleanup response"
+            ) from error
+        if not isinstance(response, dict) or response.get("cleaned") is not True:
+            raise TrainingError(f"{worker.node_id} did not confirm run memory cleanup")
+        return response
 
     def _post(
         self,
@@ -1192,31 +2011,125 @@ class TrainingCoordinator:
             raise TrainingError(f"{worker.node_id} returned a non-object response")
         return response
 
-    def _get_json(self, worker: TrainingWorker, path: str) -> dict[str, Any]:
-        body, _ = self._request(worker, path, timeout=10)
+    def _get_json(
+        self,
+        worker: TrainingWorker,
+        path: str,
+        *,
+        timeout: float = 10,
+    ) -> dict[str, Any]:
+        body, _ = self._request(worker, path, timeout=timeout)
         response = json.loads(body.decode("utf-8"))
         if not isinstance(response, dict):
             raise TrainingError(f"{worker.node_id} returned a non-object response")
         return response
 
+    def _get_run_results(self, worker: TrainingWorker, run_id: str) -> dict[str, Any]:
+        path = "/v1/results?" + urlencode({"run_id": run_id})
+        retryable_errors = (
+            "timed out",
+            "no route to host",
+            "network is unreachable",
+            "connection refused",
+            "connection reset",
+            "remote end closed connection",
+        )
+        for attempt in range(3):
+            try:
+                return self._get_json(
+                    worker,
+                    path,
+                    timeout=self.config.peer_timeout_seconds,
+                )
+            except TrainingError as error:
+                message = str(error).lower()
+                if attempt == 2 or not any(
+                    retryable_error in message
+                    for retryable_error in retryable_errors
+                ):
+                    raise
+                delay = (1, 3)[attempt]
+                LOGGER.warning(
+                    "Transient error reading run %s results from %s; retry %s/2 in %s seconds: %s",
+                    run_id,
+                    worker.node_id,
+                    attempt + 1,
+                    delay,
+                    error,
+                )
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
     def _get_bytes(self, worker: TrainingWorker, path: str) -> bytes:
         body, headers = self._request(worker, path, timeout=20)
-        if not body or len(body) > 16 * 1024 * 1024 or "X-Sample-Count" not in headers:
+        if not body or len(body) > MAX_MODEL_WEIGHT_BYTES or "X-Sample-Count" not in headers:
             raise TrainingError(f"{worker.node_id} returned invalid model weights")
         return body
 
     def _load_groups(self) -> list[dict[str, Any]]:
-        path = Path(self.config.results_path)
-        if not path.exists():
-            return []
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, list):
-            raise ValueError(f"Training results file must contain a JSON array: {path}")
-        return payload
+        database_path, legacy_path = self._results_paths()
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(database_path, timeout=30) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS experiment_groups (
+                    group_id TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            rows = connection.execute(
+                "SELECT payload_json FROM experiment_groups ORDER BY rowid"
+            ).fetchall()
+            if rows:
+                groups = [json.loads(row[0]) for row in rows]
+                if any(not isinstance(group, dict) for group in groups):
+                    raise ValueError(f"Training database contains an invalid group: {database_path}")
+                return groups
+
+            if not legacy_path.exists():
+                return []
+            payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, list) or any(
+                not isinstance(group, dict) or not isinstance(group.get("group_id"), str)
+                for group in payload
+            ):
+                raise ValueError(f"Training results file must contain valid groups: {legacy_path}")
+            connection.executemany(
+                "INSERT INTO experiment_groups (group_id, payload_json) VALUES (?, ?)",
+                [
+                    (
+                        group["group_id"],
+                        json.dumps(group, allow_nan=False, separators=(",", ":")),
+                    )
+                    for group in payload
+                ],
+            )
+            return payload
 
     def _persist_locked(self) -> None:
-        path = Path(self.config.results_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(self._groups, allow_nan=False) + "\n", encoding="utf-8")
-        temporary.replace(path)
+        database_path, _ = self._results_paths()
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(database_path, timeout=30) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS experiment_groups (
+                    group_id TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.executemany(
+                """
+                INSERT INTO experiment_groups (group_id, payload_json)
+                VALUES (?, ?)
+                ON CONFLICT(group_id) DO UPDATE SET payload_json = excluded.payload_json
+                """,
+                [
+                    (
+                        group["group_id"],
+                        json.dumps(group, allow_nan=False, separators=(",", ":")),
+                    )
+                    for group in self._groups
+                ],
+            )

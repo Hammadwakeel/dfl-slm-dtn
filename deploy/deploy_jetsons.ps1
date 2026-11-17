@@ -7,12 +7,14 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $repoRoot '.env'
-$requiredTokens = @('MASTER_API_TOKEN', 'WORKER1_API_TOKEN', 'WORKER2_API_TOKEN', 'WORKER3_API_TOKEN')
+$requiredTokens = @('MASTER_API_TOKEN', 'WORKER1_API_TOKEN', 'WORKER2_API_TOKEN', 'WORKER3_API_TOKEN', 'WORKER4_API_TOKEN', 'WORKER5_API_TOKEN')
 $nodes = @(
-    @{ Id = 'master'; Role = 'master'; Ip = '192.168.11.15'; Port = 5002; TokenName = 'MASTER_API_TOKEN' },
-    @{ Id = 'worker1'; Role = 'worker'; Ip = '192.168.11.123'; Port = 5001; TokenName = 'WORKER1_API_TOKEN' },
-    @{ Id = 'worker2'; Role = 'worker'; Ip = '192.168.11.14'; Port = 5001; TokenName = 'WORKER2_API_TOKEN' },
-    @{ Id = 'worker3'; Role = 'worker'; Ip = '192.168.11.13'; Port = 5001; TokenName = 'WORKER3_API_TOKEN' }
+    @{ Id = 'master'; Role = 'master'; Ip = '192.168.11.15'; User = 'hammad'; Port = 5002; TokenName = 'MASTER_API_TOKEN' },
+    @{ Id = 'worker1'; Role = 'worker'; Ip = '192.168.11.123'; User = 'hammad'; Port = 5001; TokenName = 'WORKER1_API_TOKEN' },
+    @{ Id = 'worker2'; Role = 'worker'; Ip = '192.168.11.14'; User = 'hammad'; Port = 5001; TokenName = 'WORKER2_API_TOKEN' },
+    @{ Id = 'worker3'; Role = 'worker'; Ip = '192.168.11.13'; User = 'hammad'; Port = 5001; TokenName = 'WORKER3_API_TOKEN' },
+    @{ Id = 'worker4'; Role = 'worker'; Ip = '192.168.11.75'; User = 'jetson5'; Port = 5001; TokenName = 'WORKER4_API_TOKEN' },
+    @{ Id = 'worker5'; Role = 'worker'; Ip = '192.168.11.76'; User = 'hammad'; Port = 5001; TokenName = 'WORKER5_API_TOKEN' }
 )
 
 if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
@@ -111,8 +113,8 @@ try {
         )
 
         $stageName = "dfl-slm-stage-$($node.Id)"
-        $destination = "hammad@$($node.Ip):$stageName"
-        $sshArgs = @('-F', $sshConfigPath, "hammad@$($node.Ip)")
+        $destination = "$($node.User)@$($node.Ip):$stageName"
+        $sshArgs = @('-F', $sshConfigPath, "$($node.User)@$($node.Ip)")
         $stageCommand = "mkdir -p '$stageName' && chmod 700 '$stageName'"
         & ssh @sshArgs $stageCommand
         if ($LASTEXITCODE -ne 0) {
@@ -132,7 +134,7 @@ try {
             throw "Could not stage protected node configuration on $($node.Ip)"
         }
 
-        $installCommand = "sudo -n bash '$stageName/install_jetson.sh' '$($node.Id)' '$($node.Role)' '$($node.Port)'"
+        $installCommand = "sudo -n env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_jetson.sh' '$($node.Id)' '$($node.Role)' '$($node.Port)' '$($node.User)'"
         & ssh @sshArgs $installCommand
         if ($LASTEXITCODE -ne 0) {
             throw "Service installation failed on $($node.Ip); staging files remain at ~/$stageName for diagnosis"
@@ -151,5 +153,5 @@ finally {
     }
 }
 
-Write-Output 'Status services were installed on the master and all three workers.'
+Write-Output 'Status services were installed on the master and all five workers.'
 Write-Output "Local API tokens are stored in the ignored file: $envPath"

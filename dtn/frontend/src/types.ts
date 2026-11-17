@@ -19,6 +19,10 @@ export interface Device {
   hostname: string;
   ip: string;
   port: number;
+  training_port?: number | null;
+  is_managed?: boolean;
+  training_ready?: boolean;
+  training_error?: string | null;
   online: boolean;
   last_seen: string | null;
   last_error: string | null;

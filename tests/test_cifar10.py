@@ -25,7 +25,7 @@ def test_dirichlet_split_is_deterministic_and_disjoint():
     assert sorted(np.concatenate(first).tolist()) == list(range(len(labels)))
 
 
-def test_classification_metrics_report_accuracy_loss_and_macro_f1():
+def test_classification_metrics_report_classification_scores_and_confusion_matrix():
     labels = np.array([0, 1, 2, 3])
     logits = np.full((4, 10), -4.0)
     logits[np.arange(4), labels] = 4.0
@@ -33,5 +33,9 @@ def test_classification_metrics_report_accuracy_loss_and_macro_f1():
     metrics = classification_metrics(labels, logits)
 
     assert metrics["accuracy"] == 1.0
+    assert metrics["macro_precision"] == 0.4
+    assert metrics["macro_recall"] == 0.4
     assert metrics["macro_f1"] == 0.4
+    assert metrics["confusion_matrix_counts"][0][0] == 1
+    assert metrics["confusion_matrix_row_normalized_percent"][0][0] == 100.0
     assert metrics["loss"] < 0.01

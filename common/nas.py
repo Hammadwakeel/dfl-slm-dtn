@@ -62,6 +62,110 @@ def architecture_parameters_unchecked(spec: dict[str, Any]) -> int:
     return total + side * side * channels * 10 + 10
 
 
+def dataset_architecture_parameters(
+    architecture: str | dict[str, Any],
+    num_classes: int,
+    *,
+    input_channels: int = 3,
+) -> int:
+    if not 2 <= num_classes:
+        raise ValueError("Dataset NAS requires at least two classes")
+    if input_channels not in {1, 3}:
+        raise ValueError("Dataset NAS supports one-channel grayscale or three-channel RGB")
+    spec = architecture_spec(architecture)
+    channels = spec["channels"]
+    kernel_size = spec["kernel_size"]
+    previous_channels = input_channels
+    total = 0
+    for _ in range(spec["blocks"]):
+        total += kernel_size * kernel_size * previous_channels * channels + channels
+        previous_channels = channels
+    return total + channels * num_classes + num_classes
+
+
+def select_dataset_architecture(
+    candidate_results: list[dict[str, Any]],
+    *,
+    num_classes: int,
+    worker_count: int = 3,
+    input_channels: int = 3,
+) -> dict[str, Any]:
+    expected_ids = {
+        spec["id"]
+        for spec in ARCHITECTURE_SPACE
+        if dataset_architecture_parameters(
+            spec, num_classes, input_channels=input_channels
+        ) <= MAX_PARAMETERS
+    }
+    if not expected_ids:
+        raise ValueError("No NAS candidate fits the 12,000-parameter cap for this dataset")
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    seen_workers: set[str] = set()
+    for result in candidate_results:
+        spec = architecture_spec(result["architecture"])
+        candidate_id = spec["id"]
+        worker_id = str(result["node_id"])
+        accuracy = float(result["validation_accuracy"])
+        if (
+            candidate_id not in expected_ids
+            or not worker_id
+            or not 0 <= accuracy <= 1
+            or int(result["parameter_count"])
+            != dataset_architecture_parameters(
+                spec, num_classes, input_channels=input_channels
+            )
+        ):
+            raise ValueError("Dataset NAS candidate result is invalid")
+        by_id.setdefault(candidate_id, []).append(result)
+        seen_workers.add(worker_id)
+    if len(seen_workers) != worker_count or set(by_id) != expected_ids:
+        raise ValueError("Dataset NAS results must cover every eligible candidate and worker")
+    if any(
+        len(rows) != worker_count
+        or len({str(row["node_id"]) for row in rows}) != worker_count
+        for rows in by_id.values()
+    ):
+        raise ValueError("Dataset NAS requires exactly one result per worker and candidate")
+    selected_id = min(
+        expected_ids,
+        key=lambda candidate_id: (
+            -sum(float(row["validation_accuracy"]) for row in by_id[candidate_id])
+            / worker_count,
+            dataset_architecture_parameters(
+                candidate_id, num_classes, input_channels=input_channels
+            ),
+            candidate_id,
+        ),
+    )
+    return {
+        "architecture": architecture_spec(selected_id),
+        "parameter_count": dataset_architecture_parameters(
+            selected_id, num_classes, input_channels=input_channels
+        ),
+        "mean_validation_accuracy": sum(
+            float(row["validation_accuracy"]) for row in by_id[selected_id]
+        )
+        / worker_count,
+        "candidate_means": [
+            {
+                "architecture": architecture_spec(candidate_id),
+                "parameter_count": dataset_architecture_parameters(
+                    candidate_id, num_classes, input_channels=input_channels
+                ),
+                "mean_validation_accuracy": sum(
+                    float(row["validation_accuracy"]) for row in by_id[candidate_id]
+                )
+                / worker_count,
+                "worker_accuracies": [
+                    float(row["validation_accuracy"])
+                    for row in sorted(by_id[candidate_id], key=lambda row: row["node_id"])
+                ],
+            }
+            for candidate_id in sorted(expected_ids)
+        ],
+    }
+
+
 def select_architecture(candidate_results: list[dict[str, Any]]) -> dict[str, Any]:
     expected_ids = {item["id"] for item in ARCHITECTURE_SPACE}
     by_id: dict[str, list[float]] = {}

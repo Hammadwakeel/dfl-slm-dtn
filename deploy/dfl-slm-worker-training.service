@@ -10,7 +10,7 @@ Group=hammad
 WorkingDirectory=/opt/dfl-slm-dtn
 EnvironmentFile=/etc/dfl-slm-worker-training.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/python3 -m worker.training_service
+ExecStart=/opt/dfl-slm-dtn/worker/venv/bin/python -m worker.training_service
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30

@@ -57,23 +57,45 @@ def model_size_bytes(model: Any) -> int:
     return int(sum(np.asarray(weight).nbytes for weight in model.get_weights()))
 
 
-def classification_metrics(labels: np.ndarray, logits: np.ndarray) -> dict[str, float]:
+def classification_metrics(labels: np.ndarray, logits: np.ndarray) -> dict[str, Any]:
     truth = np.asarray(labels, dtype=np.int64).reshape(-1)
     predictions = np.asarray(logits)
     if predictions.ndim != 2 or predictions.shape[0] != truth.shape[0]:
         raise ValueError("logits must have shape (number of labels, number of classes)")
     if truth.size == 0 or predictions.shape[1] != 10:
         raise ValueError("CIFAR-10 metrics require non-empty data with ten classes")
+    if truth.min() < 0 or truth.max() >= predictions.shape[1]:
+        raise ValueError("labels must be within the model's class range")
     predicted = predictions.argmax(axis=1)
     confusion = np.zeros((10, 10), dtype=np.int64)
     np.add.at(confusion, (truth, predicted), 1)
     true_positive = np.diag(confusion).astype(np.float64)
-    denominator = confusion.sum(axis=0) + confusion.sum(axis=1)
+    predicted_count = confusion.sum(axis=0)
+    actual_count = confusion.sum(axis=1)
+    per_class_precision = np.divide(
+        true_positive,
+        predicted_count,
+        out=np.zeros_like(true_positive),
+        where=predicted_count > 0,
+    )
+    per_class_recall = np.divide(
+        true_positive,
+        actual_count,
+        out=np.zeros_like(true_positive),
+        where=actual_count > 0,
+    )
+    denominator = predicted_count + actual_count
     per_class_f1 = np.divide(
         2.0 * true_positive,
         denominator,
         out=np.zeros_like(true_positive),
         where=denominator > 0,
+    )
+    row_normalized = np.divide(
+        confusion * 100.0,
+        actual_count[:, np.newaxis],
+        out=np.zeros_like(confusion, dtype=np.float64),
+        where=actual_count[:, np.newaxis] > 0,
     )
     shifted = predictions - predictions.max(axis=1, keepdims=True)
     log_partition = np.log(np.exp(shifted).sum(axis=1))
@@ -81,5 +103,12 @@ def classification_metrics(labels: np.ndarray, logits: np.ndarray) -> dict[str, 
     return {
         "accuracy": float(np.mean(predicted == truth)),
         "loss": float(np.mean(cross_entropy)),
+        "macro_precision": float(np.mean(per_class_precision)),
+        "macro_recall": float(np.mean(per_class_recall)),
         "macro_f1": float(np.mean(per_class_f1)),
+        "per_class_precision": per_class_precision.tolist(),
+        "per_class_recall": per_class_recall.tolist(),
+        "per_class_f1": per_class_f1.tolist(),
+        "confusion_matrix_counts": confusion.tolist(),
+        "confusion_matrix_row_normalized_percent": row_normalized.tolist(),
     }

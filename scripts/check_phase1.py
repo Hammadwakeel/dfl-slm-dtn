@@ -14,6 +14,8 @@ NODES = (
     ("worker1", "192.168.11.123", 5001, "WORKER1_API_TOKEN", "worker"),
     ("worker2", "192.168.11.14", 5001, "WORKER2_API_TOKEN", "worker"),
     ("worker3", "192.168.11.13", 5001, "WORKER3_API_TOKEN", "worker"),
+    ("worker4", "192.168.11.75", 5001, "WORKER4_API_TOKEN", "worker"),
+    ("worker5", "192.168.11.76", 5001, "WORKER5_API_TOKEN", "worker"),
 )
 
 
@@ -107,7 +109,7 @@ def main() -> int:
     except (ApiClientError, AssertionError, FileNotFoundError, OSError, ValueError) as error:
         print(f"Phase 1 integration check failed: {error}", file=sys.stderr)
         return 1
-    print("Phase 1 authentication and status checks passed for all four Jetsons.")
+    print("Phase 1 authentication and status checks passed for the master and all five workers.")
     return 0
 
 

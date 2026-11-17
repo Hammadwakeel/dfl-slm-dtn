@@ -41,7 +41,40 @@ class DevicePoller:
             self._task = None
 
     async def poll_once(self) -> None:
-        await asyncio.gather(*(self._poll_device(device) for device in self._settings.nodes))
+        devices = (*self._settings.nodes, *self._registered_devices())
+        await asyncio.gather(*(self.poll_device(device.node_id) for device in devices))
+
+    async def poll_device(self, node_id: str) -> None:
+        config = next(
+            (device for device in self._settings.nodes if device.node_id == node_id),
+            None,
+        )
+        if config is None:
+            config = next(
+                (device for device in self._registered_devices() if device.node_id == node_id),
+                None,
+            )
+        if config is not None:
+            await self._poll_device(config)
+
+    def _registered_devices(self) -> tuple[DeviceConfig, ...]:
+        with self._sessions() as session:
+            devices = session.scalars(
+                select(Device).where(Device.is_managed.is_(True))
+            ).all()
+            return tuple(
+                DeviceConfig(
+                    node_id=device.node_id,
+                    hostname=device.hostname,
+                    ip=device.ip,
+                    role=device.role,
+                    port=device.port,
+                    token=device.api_token or "",
+                    training_port=device.training_port,
+                    is_managed=True,
+                )
+                for device in devices
+            )
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -91,7 +124,15 @@ class DevicePoller:
 
         now = datetime.now(timezone.utc)
         normalized_payload = status.model_dump(mode="json")
-        await asyncio.to_thread(self._store_status, config, status, normalized_payload, now)
+        stored = await asyncio.to_thread(
+            self._store_status,
+            config,
+            status,
+            normalized_payload,
+            now,
+        )
+        if not stored:
+            return
         await self._events.broadcast(
             {
                 "type": "device_status",
@@ -110,6 +151,7 @@ class DevicePoller:
                         hostname=config.hostname,
                         ip=config.ip,
                         port=config.port,
+                        training_port=config.training_port,
                         online=False,
                     )
                     session.add(device)
@@ -118,6 +160,7 @@ class DevicePoller:
                     device.hostname = config.hostname
                     device.ip = config.ip
                     device.port = config.port
+                    device.training_port = config.training_port
             session.commit()
 
     def _store_status(
@@ -126,11 +169,11 @@ class DevicePoller:
         status: StatusPayload,
         payload: dict[str, Any],
         now: datetime,
-    ) -> None:
+    ) -> bool:
         with self._sessions() as session:
             device = session.get(Device, config.node_id)
             if device is None:
-                raise RuntimeError(f"Device registry entry disappeared: {config.node_id}")
+                return False
             device.online = True
             device.last_seen = now
             device.last_error = None
@@ -148,6 +191,7 @@ class DevicePoller:
             )
             self._trim_history(session, config.node_id)
             session.commit()
+        return True
 
     def _mark_offline(
         self,
@@ -192,6 +236,7 @@ class DevicePoller:
             "hostname": config.hostname,
             "ip": config.ip,
             "port": config.port,
+            "is_managed": config.is_managed,
             "online": online,
             "last_seen": last_seen.isoformat() if last_seen else None,
             "last_error": error,

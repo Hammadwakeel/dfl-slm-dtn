@@ -55,14 +55,16 @@ The optimizer is a transparent reward-based selector over measured device runs, 
 
 For a run, each component is normalized to `[0,1]`:
 
-- **Accuracy gain**: `clip((final mean held-out accuracy - first-round mean held-out accuracy) / 0.25, 0, 1)`.
-- **Convergence speed**: first round whose mean held-out accuracy reaches the configured target (currently 0.50); score is `(total rounds - convergence round + 1) / total rounds`, or zero if the target was not reached.
-- **Communication efficiency**: average of the capped byte-efficiency score (1 MB per worker-round scale) and exchange-time-efficiency score (5 seconds per worker-round scale).
-- **Runtime efficiency**: one minus capped wall round runtime divided by the configured 30-second-per-round scale.
+- **Accuracy gain**: `clip((final mean validation accuracy - initial mean validation accuracy) / 0.25, 0, 1)`. Workers measure the initial accuracy before local training in round one, so one-round smoke tests can report a real gain. Older one-round runs without that baseline show accuracy gain as unavailable instead of implying a measured zero.
+- **Convergence speed**: first round whose mean validation accuracy reaches the configured target (currently 0.50); score is `(total rounds - convergence round + 1) / total rounds`, or zero if the target was not reached.
+- **Communication efficiency**: average of the capped byte-efficiency score (50 MB per worker-round scale) and exchange-time-efficiency score (30 seconds per worker-round scale).
+- **Peer-wait efficiency**: one minus total measured worker peer-wait seconds divided by the configured 30-second-per-worker-round scale. Runtime is still recorded and shown for comparison, but is no longer part of the selection reward.
 
-The weighted reward is `0.50 × accuracy_gain + 0.20 × convergence_speed + 0.15 × communication_efficiency + 0.15 × runtime_efficiency`. Candidate scores average the per-run rewards. The optimizer selector is compared with two deliberately simple baselines: a reproducible random candidate (Python seed 2026) and the best-observed candidate by mean final held-out accuracy. The selected topology and dataset split become the master's active configuration. All runs and reward components are persisted in the master results store.
+The communication and peer-wait scales are normalization caps, not pass/fail limits. A component reaches zero when its measured cost meets or exceeds its cap. New sweeps use the current scales; already saved sweeps retain the reward and configuration recorded when they ran.
 
-The new authenticated SLM action `optimize_topology` accepts bounded rounds/epochs, one to three seeds, and only α values 0.3 and 0.5; omitted values select the standard 10 rounds, 5 epochs, three seeds, and both alphas. `set_topology` supports all five candidates. The Topology page displays the active graph, measured reward components, optimizer choice, random baseline, and best-observed baseline.
+The weighted reward is `0.50 × accuracy_gain + 0.20 × convergence_speed + 0.15 × communication_efficiency + 0.15 × peer_wait_efficiency`. Candidate scores average the per-run rewards. The optimizer selector is compared with two deliberately simple baselines: a reproducible random candidate (Python seed 2026) and the best-observed candidate by mean final validation accuracy. The selected topology and dataset split become the master's active configuration. All runs and reward components are persisted in the master results store.
+
+The authenticated SLM action `optimize_topology` accepts bounded rounds/epochs and one to three seeds. The current Topology page sweep uses α=0.3 only, for five topologies and three seeds (15 runs); the older full experiment matrix below records the earlier two-alpha configuration. `set_topology` supports all five candidates. The Topology page displays the active graph, measured reward components, optimizer choice, random baseline, and best-observed baseline.
 
 ## One-round pilot and run-time estimate
 

@@ -1,0 +1,109 @@
+{
+  "status": "completed",
+  "task": "natural-language reply style only; structured action handling unchanged",
+  "base_model": "/home/hammad/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B-Instruct/snapshots/9213176726f574b556790deb65791e0c5aa438b6",
+  "max_length": 384,
+  "rank": 8,
+  "epochs": 3,
+  "local_files_only": true,
+  "gpu": "Orin",
+  "cuda_memory_before_mib": 4825.8,
+  "split_rows": {
+    "train": 980,
+    "validation": 209,
+    "test": 211
+  },
+  "token_lengths": {
+    "train": {
+      "rows": 980,
+      "min": 184,
+      "mean": 230.06,
+      "max": 301
+    },
+    "validation": {
+      "rows": 209,
+      "min": 185,
+      "mean": 229.95,
+      "max": 299
+    },
+    "test": {
+      "rows": 211,
+      "min": 185,
+      "mean": 229.78,
+      "max": 299
+    }
+  },
+  "target_modules": [
+    "down_proj",
+    "gate_proj",
+    "k_proj",
+    "o_proj",
+    "q_proj",
+    "up_proj",
+    "v_proj"
+  ],
+  "trainable_parameters": 5636096,
+  "base_validation_metrics": {
+    "base_validation_loss": 3.871750593185425,
+    "base_validation_model_preparation_time": 0.0423,
+    "base_validation_runtime": 51.4716,
+    "base_validation_samples_per_second": 4.06,
+    "base_validation_steps_per_second": 4.06
+  },
+  "base_test_metrics": {
+    "base_test_loss": 3.873911142349243,
+    "base_test_model_preparation_time": 0.0423,
+    "base_test_runtime": 45.6082,
+    "base_test_samples_per_second": 4.626,
+    "base_test_steps_per_second": 4.626
+  },
+  "validation_metrics": {
+    "validation_loss": 0.0001134788544732146,
+    "validation_model_preparation_time": 0.0423,
+    "validation_runtime": 46.0998,
+    "validation_samples_per_second": 4.534,
+    "validation_steps_per_second": 4.534,
+    "epoch": 2.987755102040816
+  },
+  "test_metrics": {
+    "test_loss": 0.0001148911687778309,
+    "test_model_preparation_time": 0.0423,
+    "test_runtime": 46.8194,
+    "test_samples_per_second": 4.507,
+    "test_steps_per_second": 4.507,
+    "epoch": 2.987755102040816
+  },
+  "generation_probe": {
+    "rows": 12,
+    "empty_responses": 0,
+    "json_responses": 0,
+    "mean_characters": 292.8
+  },
+  "generation_probe_note": "12 held-out prompts; greedy generation with explicit attention masks and synced_gpus=False.",
+  "train_seconds": 2262.1361,
+  "steps": 366,
+  "seconds_per_step": 6.181,
+  "train_samples_per_second": 1.3,
+  "train_steps_per_second": 0.162,
+  "train_loss": 0.10969548671992363,
+  "adapter_size_bytes": 39849906,
+  "adapter_weights_bytes": 22573704,
+  "training_metrics_source": "Transformers Trainer completion output; generation probe was rerun separately after a Jetson distributed-library compatibility error.",
+  "train_metrics": {
+    "train_runtime": 2262.1361,
+    "train_samples_per_second": 1.3,
+    "train_steps_per_second": 0.162,
+    "train_loss": 0.10969548671992363,
+    "epoch": 2.987755102040816
+  },
+  "evaluation_type": "causal_language_model_next_token_prediction",
+  "classification_metrics": "not_applicable_to_this_generation_task",
+  "base_perplexity_metrics": {
+    "validation": 48.02638719962609,
+    "test": 48.13026274403442
+  },
+  "perplexity_metrics": {
+    "validation": 1.000113485293442,
+    "test": 1.0001148977690208
+  }
+}

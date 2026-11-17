@@ -3,11 +3,11 @@
     "accuracy_gain": 0.5,
     "convergence_speed": 0.2,
     "communication_efficiency": 0.15,
-    "runtime_efficiency": 0.15
+    "peer_wait_efficiency": 0.15
   },
   "target_accuracy": 0.5,
   "accuracy_gain_scale": 0.25,
-  "max_bytes_per_worker_round": 1000000,
-  "max_exchange_seconds_per_worker_round": 5.0,
-  "max_runtime_seconds_per_round": 30.0
+  "max_bytes_per_worker_round": 50000000,
+  "max_exchange_seconds_per_worker_round": 30.0,
+  "max_peer_wait_seconds_per_worker_round": 30.0
 }

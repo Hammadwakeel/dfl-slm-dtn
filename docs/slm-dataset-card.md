@@ -4,6 +4,8 @@
 
 Synthetic instruction data for the DFL-SLM action interface. Generated 2026-10-25 with `openai/gpt-oss-120b`. Fine-tuning has **not** been started.
 
+The figures below describe the retired historical dataset, not the current generation workflow. The current workflow is English-only, has no `mixed_language` category, and makes no Groq calls.
+
 ## Splits and balance
 
 - Retained examples: 3000
@@ -16,13 +18,13 @@ Synthetic instruction data for the DFL-SLM action interface. Generated 2026-10-2
 
 Splitting is performed by `template_family`, never by individual utterance. All paraphrases in a family remain in one split. Legacy test prompts are kept in a separate file and exact normalized matches are excluded from generated data.
 
-## Reproduction
+## Current validation workflow
 
-Install the dataset-generation dependencies with `python -m pip install -r requirements-slm-dataset.txt`, then run `python -m scripts.slm_dataset`. The command resumes from `data/slm/raw/dataset.jsonl`, validates the saved rows, creates family-separated split files, writes the legacy test file, and prints a review sample. Use `python -m scripts.slm_dataset --prepare-only` to rebuild the splits without contacting Groq.
+Install dependencies with `python -m pip install -r requirements-slm-dataset.txt`. Place `batch01.jsonl`, `batch02.jsonl`, and subsequent batches in `data/chatgpt/`, then run `python scripts/validate_chatgpt_batch.py`. Validated rows are written to `data/chatgpt/clean/`; rejected rows and reasons are written to `data/chatgpt/rejected/`. Cross-batch near-duplicates are compared only against earlier-numbered batches. No API is called.
 
 ## Generation and labels
 
-The generator samples actions and parameters from `common/slm_action_schema.json`; it builds the target JSON label, reply, and one-sentence reason in code. Groq is used only to produce synthetic natural-language utterances for that fixed target. Structured JSON output is validated locally. API keys are read from the ignored repository-root `.env`; values are not written to logs or dataset records.
+The validator checks labels against `common/slm_action_schema.json`, verifies parameter values against the user text, and reports category/action counts, diversity, wording statistics, repeated values, missing domain parameters, and cross-batch near-duplicates. English is the only permitted language. Unsafe examples are supplied in ChatGPT batches rather than generated through Groq.
 
 Label output format:
 
@@ -42,7 +44,7 @@ Label output format:
 - API requests: 173 (172 successful completions)
 - Token usage: 41303 prompt; 62828 completion; 104131 total
 - Generation runtime: 754.5s active across resumes; 1838.5s from first to final API batch
-- Observed rate limits: 1000 requests/minute; 8000 tokens/minute. Daily quota limits were not exposed.
+- Saved response headers: 1000 requests/day (RPD); 8000 tokens/minute (TPM). Groq's published base limit for `openai/gpt-oss-120b` is 200K tokens/day; the account's exact limit may differ.
 - Errors: 1; retries: 0
 - The single failed request was an initial strict-JSON batch-size rejection; the output constraint was corrected and generation resumed. No rate-limit retries were needed.
 
@@ -54,3 +56,9 @@ Label output format:
 - The refusal and clarification categories are generated from bounded templates and do not constitute a comprehensive safety evaluation.
 - Secret and personal-data screening uses local pattern checks rather than a full identity/entity-recognition system; review the sample before fine-tuning.
 - Legacy prompts come from the Phase 3 report; they are evaluation-only and are not included in training or validation.
+
+## Retired generation artifacts
+
+The old 182-row pilot and prior frame-bank/unsafe-frame experiments are retired and kept only as historical artifacts. They are not inputs to the ChatGPT batch validator. Prior samples may contain mixed-language text; the current validator rejects Roman Urdu markers in user text and replies.
+
+APPROVED_BY: Hammad

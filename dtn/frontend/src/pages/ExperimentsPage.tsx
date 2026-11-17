@@ -1,36 +1,268 @@
 import { useState } from "react";
 
-import {
-  sendSlmCommand,
-  startCentralizedBaseline,
-} from "../api/client";
-import type { ExperimentGroup, ExperimentResults, WorkerRoundMetrics } from "../api/client";
-import type { TrainingTopology } from "../api/client";
+import { deleteExperimentGroup } from "../api/client";
+import type { ExperimentGroup, ExperimentResults, TrainingTopology, WorkerRoundMetrics } from "../api/client";
 
 interface Props {
-  token: string;
   results: ExperimentResults | null;
   error: string;
+  token: string;
   onRefresh: () => void;
+  onOpenModelStudio: () => void;
 }
 
 function averageFinalAccuracy(group: ExperimentGroup): number | null {
   const values = group.runs.flatMap((run) => {
     const finalRound = run.rounds[run.rounds.length - 1];
     if (!finalRound) return [];
-    const workerMetrics = Object.values(finalRound.workers);
-    if (workerMetrics.length === 0) return [];
-    return [workerMetrics.reduce((sum, metrics) => sum + metrics.accuracy, 0) / workerMetrics.length];
+    const accuracies = Object.values(finalRound.workers)
+      .map((metrics) => metrics.validation_accuracy ?? metrics.accuracy)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    if (accuracies.length === 0) return [];
+    return [accuracies.reduce((sum, accuracy) => sum + accuracy, 0) / accuracies.length];
   });
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
 
 function formatPercent(value: number | undefined): string {
-  return value === undefined ? "—" : `${(value * 100).toFixed(2)}%`;
+  return value === undefined || !Number.isFinite(value) ? "—" : `${(value * 100).toFixed(2)}%`;
+}
+
+function formatFixed(value: number | undefined, digits: number): string {
+  return value === undefined || !Number.isFinite(value) ? "—" : value.toFixed(digits);
 }
 
 function runtime(metrics: WorkerRoundMetrics): number | undefined {
   return metrics.round_seconds ?? metrics.runtime_seconds ?? metrics.training_seconds;
+}
+
+function AccuracyChart({ run }: { run: ExperimentGroup["runs"][number] }) {
+  const workerIds = [...new Set(run.rounds.flatMap((round) => Object.keys(round.workers)))];
+  const series = workerIds.map((workerId, seriesIndex) => ({
+    workerId,
+    color: ["#79ddb0", "#78b7ef", "#f0bf72"][seriesIndex % 3],
+    path: run.rounds.flatMap((round, roundIndex) => {
+        const score = round.workers[workerId]?.accuracy ?? round.workers[workerId]?.validation_accuracy;
+        if (score === undefined || !Number.isFinite(score)) return null;
+        const x = 56 + (roundIndex / Math.max(run.rounds.length - 1, 1)) * 520;
+        const y = 176 - score * 144;
+        return [{ x, y }];
+      })
+      .filter((point): point is { x: number; y: number } => point !== null)
+      .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+      .join(" "),
+  })).filter((item) => item.path);
+  if (series.length === 0) return null;
+
+  const downloadableSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="220" viewBox="0 0 640 220">',
+    '<rect width="100%" height="100%" fill="#ffffff"/>',
+    '<g stroke="#cbd5e1"><line x1="56" y1="32" x2="56" y2="176"/><line x1="56" y1="176" x2="576" y2="176"/></g>',
+    '<g fill="#64748b" font-family="sans-serif" font-size="11"><text x="8" y="38">100%</text><text x="20" y="180">0%</text><text x="56" y="202">Round 1</text><text x="520" y="202">Round ' + run.rounds.length + "</text></g>",
+    ...series.map((item) => `<path d="${item.path}" fill="none" stroke="${item.color}" stroke-width="3"/>`),
+    "</svg>",
+  ].join("");
+
+  return (
+    <div className="experiment-chart">
+      <div className="experiment-chart__header">
+        <h4>Validation accuracy by round</h4>
+        <a
+          download={`${run.run_id}-accuracy.svg`}
+          href={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(downloadableSvg)}`}
+        >
+          Download graph
+        </a>
+      </div>
+      <svg aria-label="Validation accuracy by round" role="img" viewBox="0 0 640 220">
+        <line x1="56" y1="32" x2="56" y2="176" />
+        <line x1="56" y1="176" x2="576" y2="176" />
+        {series.map((item) => <path d={item.path} key={item.workerId} stroke={item.color} />)}
+        <text x="8" y="38">100%</text>
+        <text x="20" y="180">0%</text>
+        <text x="56" y="202">Round 1</text>
+        <text x="520" y="202">Round {run.rounds.length}</text>
+      </svg>
+      <div className="experiment-chart__legend">
+        {series.map((item) => (
+          <span key={item.workerId}><i style={{ backgroundColor: item.color }} />{item.workerId}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ValidationConfusionMatrices({ run }: { run: ExperimentGroup["runs"][number] }) {
+  const finalRound = run.rounds[run.rounds.length - 1];
+  if (!finalRound) return null;
+  const workers = Object.entries(finalRound.workers);
+  const validMatrices = workers.flatMap(([, metrics]) => {
+    const matrix = metrics.validation_confusion_matrix_counts;
+    if (
+      !matrix?.length ||
+      matrix.some((row) => row.length !== matrix.length || row.some((value) => !Number.isFinite(value)))
+    ) return [];
+    return [{ matrix }];
+  });
+  const matrixSize = validMatrices[0]?.matrix.length ?? 0;
+  const compatibleMatrices = validMatrices.filter(({ matrix }) => matrix.length === matrixSize);
+  const combinedMatrix = Array.from({ length: matrixSize }, (_, row) =>
+    Array.from({ length: matrixSize }, (_, column) =>
+      compatibleMatrices.reduce((sum, item) => sum + item.matrix[row][column], 0),
+    ),
+  );
+  const rowTotals = combinedMatrix.map((row) => row.reduce((sum, value) => sum + value, 0));
+  const columnTotals = Array.from({ length: matrixSize }, (_, column) =>
+    combinedMatrix.reduce((sum, row) => sum + row[column], 0),
+  );
+  const totalSamples = rowTotals.reduce((sum, count) => sum + count, 0);
+  const correctPredictions = combinedMatrix.reduce(
+    (sum, row, index) => sum + (row[index] ?? 0),
+    0,
+  );
+  const perClassRows = combinedMatrix.map((row, classIndex) => {
+    const truePositives = row[classIndex] ?? 0;
+    const precision = columnTotals[classIndex] ? truePositives / columnTotals[classIndex] : 0;
+    const recall = rowTotals[classIndex] ? truePositives / rowTotals[classIndex] : 0;
+    return {
+      classIndex,
+      precision,
+      recall,
+      f1: precision + recall ? (2 * precision * recall) / (precision + recall) : 0,
+    };
+  });
+  const macroAverage = (key: "precision" | "recall" | "f1") =>
+    perClassRows.length
+      ? perClassRows.reduce((sum, row) => sum + row[key], 0) / perClassRows.length
+      : undefined;
+  const normalizedMatrix = combinedMatrix.map((row, index) =>
+    row.map((count) => rowTotals[index] ? (count / rowTotals[index]) * 100 : 0),
+  );
+  return (
+    <div className="confusion-matrices">
+      {compatibleMatrices.length > 0 && (
+        <section className="combined-validation" aria-label="Combined final validation results">
+          <div className="combined-validation__heading">
+            <h4>Final validation results · all workers together</h4>
+            <span>
+              Combined from {compatibleMatrices.length} worker confusion matrices
+              {compatibleMatrices.length !== validMatrices.length ? ` · ${validMatrices.length - compatibleMatrices.length} incompatible matrix excluded` : ""}
+            </span>
+          </div>
+          <p className="combined-validation__method">
+            Summed worker validation matrices · each sample counted once.
+          </p>
+          <div className="final-worker-metrics">
+            <div><span>Overall accuracy</span><strong>{formatPercent(totalSamples ? correctPredictions / totalSamples : undefined)}</strong></div>
+            <div><span>Macro precision</span><strong>{formatPercent(macroAverage("precision"))}</strong></div>
+            <div><span>Macro recall</span><strong>{formatPercent(macroAverage("recall"))}</strong></div>
+            <div><span>Macro F1</span><strong>{formatPercent(macroAverage("f1"))}</strong></div>
+            <div><span>Combined validation samples</span><strong>{totalSamples.toLocaleString()}</strong></div>
+          </div>
+          <div className="table-scroll">
+            <table className="metrics-table confusion-matrix">
+              <caption>Combined final-round validation confusion matrix · counts</caption>
+              <thead>
+                <tr><th>Actual / Predicted</th>{combinedMatrix.map((_, index) => <th key={index}>{index}</th>)}</tr>
+              </thead>
+              <tbody>
+                {combinedMatrix.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    <th>{rowIndex}</th>
+                    {row.map((count, columnIndex) => <td key={columnIndex}>{count}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <details className="normalized-confusion">
+            <summary>Combined row-normalized confusion matrix (%)</summary>
+            <div className="table-scroll">
+              <table className="metrics-table confusion-matrix">
+                <thead>
+                  <tr><th>Actual / Predicted</th>{normalizedMatrix.map((_, index) => <th key={index}>{index}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {normalizedMatrix.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      <th>{rowIndex}</th>
+                      {row.map((value, columnIndex) => <td key={columnIndex}>{value.toFixed(1)}%</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+          <div className="table-scroll">
+            <table className="metrics-table per-class-metrics">
+              <caption>Combined per-class validation metrics</caption>
+              <thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th></tr></thead>
+              <tbody>
+                {perClassRows.map((row) => (
+                  <tr key={row.classIndex}>
+                    <th>{row.classIndex}</th>
+                    <td>{formatPercent(row.precision)}</td>
+                    <td>{formatPercent(row.recall)}</td>
+                    <td>{formatPercent(row.f1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      <div className="table-scroll">
+        <table className="metrics-table worker-validation-comparison">
+          <caption>Final-round worker metrics · individual breakdown</caption>
+          <thead>
+            <tr>
+              <th>Worker</th><th>Accuracy</th><th>Macro precision</th><th>Macro recall</th>
+              <th>Macro F1</th><th>Samples</th><th>Training loss</th><th>Eval time</th><th>Peak RAM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {workers.map(([workerId, metrics]) => (
+              <tr key={workerId}>
+                <th>{workerId}</th>
+                <td>{formatPercent(metrics.validation_accuracy ?? metrics.accuracy)}</td>
+                <td>{formatPercent(metrics.validation_macro_precision ?? metrics.macro_precision)}</td>
+                <td>{formatPercent(metrics.validation_macro_recall ?? metrics.macro_recall)}</td>
+                <td>{formatPercent(metrics.validation_macro_f1 ?? metrics.macro_f1)}</td>
+                <td>{metrics.validation_sample_count?.toLocaleString() ?? "—"}</td>
+                <td>{formatFixed(metrics.loss ?? metrics.training_loss, 4)}</td>
+                <td>{metrics.evaluation_seconds === undefined ? "—" : `${metrics.evaluation_seconds.toFixed(2)} s`}</td>
+                <td>{metrics.peak_process_rss_mb === undefined ? "—" : `${metrics.peak_process_rss_mb.toFixed(1)} MB`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {compatibleMatrices.length === 0 && (
+        <p className="combined-validation__method">
+          No compatible worker confusion matrices.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function groupDetails(group: ExperimentGroup): string {
+  const details: string[] = [];
+  if (typeof group.rounds === "number") {
+    details.push(`${group.rounds} ${group.rounds === 1 ? "round" : "rounds"}`);
+  }
+  if (typeof group.epochs === "number") {
+    details.push(`${group.epochs} local ${group.epochs === 1 ? "epoch" : "epochs"}`);
+  }
+  const seeds = group.seeds ?? (typeof group.seed === "number" ? [group.seed] : []);
+  if (seeds.length > 0) {
+    details.push(`${seeds.length === 1 ? "seed" : "seeds"} ${seeds.join(", ")}`);
+  }
+  return details.join(" · ");
+}
+
+function groupDatasetName(group: ExperimentGroup): string {
+  return group.dataset_name ?? group.architecture?.dataset_name ?? "Dataset not reported";
 }
 
 function TrainingTopology({ topology }: { topology: TrainingTopology | "centralized" }) {
@@ -56,174 +288,137 @@ function TrainingTopology({ topology }: { topology: TrainingTopology | "centrali
   );
 }
 
-export default function ExperimentsPage({ token, results, error, onRefresh }: Props) {
-  const [topology, setTopology] = useState<TrainingTopology>(
-    results?.configuration.topology ?? "directed_ring",
+export default function ExperimentsPage({ token, results, error, onRefresh, onOpenModelStudio }: Props) {
+  const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
+  const [deletingSelectedGroups, setDeletingSelectedGroups] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
+  const allGroups = results?.groups ?? [];
+  const mnistGroups = allGroups.filter((group) =>
+    group.dataset_name === "mnist" || group.architecture?.dataset_name === "mnist",
   );
-  const [datasetSplit, setDatasetSplit] = useState("dirichlet_a03");
-  const [rounds, setRounds] = useState(10);
-  const [epochs, setEpochs] = useState(5);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [commandError, setCommandError] = useState("");
-  const groups = [...(results?.groups ?? [])].reverse();
-  const active = Boolean(results?.active_group_id);
+  const groups = [...(mnistGroups.length > 0 ? mnistGroups : allGroups)].reverse();
+  const deletableGroups = groups.filter((group) =>
+    group.status !== "running" && results?.active_group_id !== group.group_id,
+  );
+  const selectedGroups = groups.filter((group) => selectedGroupIds.has(group.group_id));
+  const selectedGroup = groups.find((group) => group.group_id === selectedGroupId) ?? null;
+  const bestGroup = groups
+    .filter((group) => group.status === "completed" && averageFinalAccuracy(group) !== null)
+    .reduce<ExperimentGroup | null>((best, group) => {
+      if (best === null || (averageFinalAccuracy(group) ?? -Infinity) > (averageFinalAccuracy(best) ?? -Infinity)) {
+        return group;
+      }
+      return best;
+    }, null);
   const baseline = groups.find((group) => group.kind === "centralized_baseline");
   const decentralized = groups.find((group) => group.kind === "decentralized" && group.status === "completed");
 
-  async function command(action: string, parameters: Record<string, unknown>) {
-    const response = await sendSlmCommand(token, { action, parameters });
-    if (!response.result.available) {
-      throw new Error(response.result.message ?? `${action} is not available.`);
-    }
-    return response;
-  }
-
-  async function startDistributed(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    setCommandError("");
+  async function deleteGroup(group: ExperimentGroup) {
+    if (!window.confirm(`Permanently delete experiment ${group.group_id} and all its saved results?`)) return;
+    setDeletingGroupId(group.group_id);
+    setDeleteError("");
     try {
-      await command("set_topology", { topology });
-      await command("set_rounds", { rounds });
-      await command("set_epochs", { epochs });
-      const response = await command("start_training", { rounds, epochs, dataset_split: datasetSplit });
-      setMessage(`Distributed ${topology} run accepted. It will execute three seeds on ${datasetSplit}.`);
-      if (response.result.data?.group_id) setMessage(`Run group ${String(response.result.data.group_id)} accepted.`);
+      await deleteExperimentGroup(token, group.group_id);
+      setSelectedGroupId(null);
       onRefresh();
     } catch (cause) {
-      setCommandError(cause instanceof Error ? cause.message : "Could not start distributed training.");
+      setDeleteError(cause instanceof Error ? cause.message : "Could not delete the experiment.");
     } finally {
-      setBusy(false);
+      setDeletingGroupId(null);
     }
   }
 
-  async function startBaseline() {
-    setBusy(true);
-    setMessage("");
-    setCommandError("");
+  async function deleteSelectedGroups() {
+    if (selectedGroups.length === 0 || deletingSelectedGroups) return;
+    if (!window.confirm(`Permanently delete ${selectedGroups.length} selected experiment${selectedGroups.length === 1 ? "" : "s"} and all their saved results?`)) return;
+    setDeletingSelectedGroups(true);
+    setDeleteError("");
     try {
-      await startCentralizedBaseline(token, rounds, epochs);
-      setMessage("Centralized baseline accepted on dfl-master using all 50,000 training images.");
-      onRefresh();
-    } catch (cause) {
-      setCommandError(cause instanceof Error ? cause.message : "Could not start the baseline.");
+      const outcomes = await Promise.allSettled(
+        selectedGroups.map((group) => deleteExperimentGroup(token, group.group_id)),
+      );
+      const deletedIds = selectedGroups
+        .filter((_group, index) => outcomes[index].status === "fulfilled")
+        .map((group) => group.group_id);
+      const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => (
+        outcome.status === "rejected"
+      ));
+      setSelectedGroupIds((current) => new Set(
+        [...current].filter((groupId) => !deletedIds.includes(groupId)),
+      ));
+      if (deletedIds.length > 0) onRefresh();
+      if (failures.length > 0) {
+        const messages = failures
+          .map(({ reason }) => reason instanceof Error ? reason.message : String(reason))
+          .filter(Boolean);
+        setDeleteError(
+          `${deletedIds.length} experiment${deletedIds.length === 1 ? "" : "s"} deleted; ${failures.length} could not be deleted.${messages.length > 0 ? ` ${messages.join(" ")}` : ""}`,
+        );
+      }
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function stopTraining() {
-    setBusy(true);
-    setCommandError("");
-    try {
-      const response = await command("stop_training", {});
-      setMessage(response.result.message ?? "Stop requested for the active training group.");
-      onRefresh();
-    } catch (cause) {
-      setCommandError(cause instanceof Error ? cause.message : "Could not stop training.");
-    } finally {
-      setBusy(false);
+      setDeletingSelectedGroups(false);
     }
   }
 
   return (
     <section className="content experiments-page">
       <div className="page-heading">
-        <div>
-          <span className="eyebrow">CIFAR-10 · REAL DEVICE TRAINING</span>
-          <h1>Experiments</h1>
-          <p>Per-worker held-out test metrics, peer exchange, and centralized comparison.</p>
-        </div>
+        <h1>Experiments</h1>
         <button className="quiet-button" onClick={onRefresh} type="button">Refresh</button>
       </div>
-
-      <div className="experiment-controls panel-card">
-        <div>
-          <h2>Start experiment</h2>
-          <p>Distributed runs use three fixed seeds: 17, 42, and 2026.</p>
-        </div>
-        <form onSubmit={(event) => void startDistributed(event)}>
-          <label>
-            Topology
-            <select value={topology} onChange={(event) => setTopology(event.target.value as TrainingTopology)}>
-              <option value="directed_ring">Directed ring</option>
-              <option value="bidirectional_ring">Bidirectional ring</option>
-              <option value="mesh">Mesh</option>
-              <option value="chain">Line / chain</option>
-              <option value="star">Star (worker1 hub)</option>
-            </select>
-          </label>
-          <label>
-            Training split
-            <select value={datasetSplit} onChange={(event) => setDatasetSplit(event.target.value)}>
-              <option value="dirichlet_a03">Dirichlet α=0.3</option>
-              <option value="dirichlet_a05">Dirichlet α=0.5</option>
-              <option value="stratified">Stratified IID</option>
-            </select>
-          </label>
-          <label>
-            Rounds
-            <input min={1} max={100} onChange={(event) => setRounds(Number(event.target.value))} type="number" value={rounds} />
-          </label>
-          <label>
-            Local epochs
-            <input min={1} max={50} onChange={(event) => setEpochs(Number(event.target.value))} type="number" value={epochs} />
-          </label>
-          <button className="primary-button" disabled={busy || active} type="submit">
-            {busy ? "Working…" : "Start distributed"}
-          </button>
-          <button className="quiet-button" disabled={busy || active} onClick={() => void startBaseline()} type="button">
-            Start centralized baseline
-          </button>
-          {active && (
-            <button className="danger-button" disabled={busy} onClick={() => void stopTraining()} type="button">
-              Stop active run
-            </button>
-          )}
-        </form>
-        {message && <div className="success-note" role="status">{message}</div>}
-        {commandError && <div className="alert inline-alert" role="alert">{commandError}</div>}
-        {error && <div className="alert inline-alert" role="alert">{error}</div>}
-      </div>
-
-      {baseline && decentralized && (
-        <div className="comparison-grid">
-          <article className="summary-card">
-            <div className="summary-card__top"><span>{decentralized.topology} · final test accuracy</span></div>
-            <strong>{formatPercent(averageFinalAccuracy(decentralized) ?? undefined)}</strong>
-            <small>Mean of final per-worker scores across completed seeds</small>
-          </article>
-          <article className="summary-card">
-            <div className="summary-card__top"><span>Centralized · final test accuracy</span></div>
-            <strong>{formatPercent(averageFinalAccuracy(baseline) ?? undefined)}</strong>
-            <small>Single dfl-master model trained on all 50,000 training images</small>
-          </article>
-        </div>
-      )}
 
       {groups.length === 0 ? (
         <div className="panel-card empty-experiments">
           <h2>No experiment results yet</h2>
-          <p>Start a Ring or Mesh run to collect live metrics from the workers.</p>
         </div>
-      ) : (
-        groups.map((group) => (
-          <article className="experiment-group panel-card" key={group.group_id}>
+      ) : selectedGroup ? (
+        <>
+          <div className="experiment-detail-actions">
+            <button className="quiet-button" onClick={() => setSelectedGroupId(null)} type="button">Back to experiments</button>
+            <button className="primary-button" onClick={onOpenModelStudio} type="button">Open Model Studio</button>
+          </div>
+          {error && <div className="alert inline-alert" role="alert">{error}</div>}
+          {deleteError && <div className="alert inline-alert" role="alert">{deleteError}</div>}
+          {baseline && decentralized && (
+            <div className="comparison-grid">
+              <article className="summary-card">
+                <div className="summary-card__top"><span>{decentralized.topology} · mean final accuracy · workers/seeds</span></div>
+                <strong>{formatPercent(averageFinalAccuracy(decentralized) ?? undefined)}</strong>
+              </article>
+              <article className="summary-card">
+                <div className="summary-card__top"><span>Centralized · final accuracy · 50,000 training images</span></div>
+                <strong>{formatPercent(averageFinalAccuracy(baseline) ?? undefined)}</strong>
+              </article>
+            </div>
+          )}
+          <article className="experiment-group panel-card" key={selectedGroup.group_id}>
             <header className="experiment-group__header">
               <div>
-                <span className="eyebrow">{group.kind.replace(/_/g, " ")}</span>
-                <h2>{group.group_id}</h2>
-                <p>{group.rounds} rounds · {group.epochs} local epochs · seeds {group.seeds.join(", ")}</p>
+                <span className="eyebrow">{selectedGroup.kind.replace(/_/g, " ")}</span>
+                <h2>{selectedGroup.group_id}</h2>
+                <p>{groupDatasetName(selectedGroup)} · {groupDetails(selectedGroup) || "Experiment configuration unavailable"}</p>
               </div>
-              <span className={`run-status ${group.status}`}>{group.status}</span>
+              <span className={`run-status ${selectedGroup.status}`}>{selectedGroup.status}</span>
             </header>
-            <TrainingTopology topology={group.topology === "candidate_sweep" ? group.selected_configuration?.topology ?? "directed_ring" : group.topology} />
-            {group.error && <div className="alert inline-alert" role="alert">{group.error}</div>}
-            {group.runs.map((run) => (
+            <div className="experiment-group__actions">
+              <button
+                className="remove-device-button"
+                disabled={selectedGroup.status === "running" || results?.active_group_id === selectedGroup.group_id || deletingGroupId !== null}
+                onClick={() => void deleteGroup(selectedGroup)}
+                type="button"
+              >
+                {deletingGroupId === selectedGroup.group_id ? "Deleting…" : "Delete experiment"}
+              </button>
+            </div>
+            <TrainingTopology topology={selectedGroup.topology === "candidate_sweep" ? selectedGroup.selected_configuration?.topology ?? "directed_ring" : selectedGroup.topology} />
+            {selectedGroup.error && <div className="alert inline-alert" role="alert">{selectedGroup.error}</div>}
+            {selectedGroup.runs.map((run) => (
               <section className="experiment-run" key={run.run_id}>
                 <h3>Seed {run.seed} · {run.run_id}</h3>
+                <AccuracyChart run={run} />
+                <ValidationConfusionMatrices run={run} />
                 {run.rounds.map((round) => (
                   <div className="round-block" key={`${run.run_id}-${round.round}`}>
                     <h4>Round {round.round}</h4>
@@ -231,21 +426,25 @@ export default function ExperimentsPage({ token, results, error, onRefresh }: Pr
                       <table className="metrics-table">
                         <thead>
                           <tr>
-                            <th>Node</th><th>Test accuracy</th><th>Test loss</th><th>Macro F1</th>
-                            <th>Runtime</th><th>Peak RAM</th><th>Bytes exchanged</th><th>Exchange</th>
+                            <th>Node</th><th>Accuracy</th><th>Precision</th><th>Recall</th>
+                            <th>Loss</th><th>Macro F1</th><th>Runtime</th><th>Peak RAM</th>
+                            <th>Bytes exchanged</th><th>Exchange</th><th>Peer wait</th>
                           </tr>
                         </thead>
                         <tbody>
                           {Object.entries(round.workers).map(([nodeId, metrics]) => (
                             <tr key={nodeId}>
                               <td>{nodeId}</td>
-                              <td>{formatPercent(metrics.accuracy)}</td>
-                              <td>{metrics.loss.toFixed(4)}</td>
-                              <td>{formatPercent(metrics.macro_f1)}</td>
-                              <td>{(runtime(metrics) ?? 0).toFixed(2)} s</td>
-                              <td>{metrics.peak_process_rss_mb.toFixed(1)} MB</td>
+                              <td>{formatPercent(metrics.accuracy ?? metrics.validation_accuracy)}</td>
+                              <td>{formatPercent(metrics.macro_precision ?? metrics.validation_macro_precision)}</td>
+                              <td>{formatPercent(metrics.macro_recall ?? metrics.validation_macro_recall)}</td>
+                              <td>{formatFixed(metrics.loss ?? metrics.training_loss, 4)}</td>
+                              <td>{formatPercent(metrics.macro_f1 ?? metrics.validation_macro_f1)}</td>
+                              <td>{runtime(metrics) === undefined ? "—" : `${runtime(metrics)?.toFixed(2)} s`}</td>
+                              <td>{metrics.peak_process_rss_mb === undefined ? "—" : `${metrics.peak_process_rss_mb.toFixed(1)} MB`}</td>
                               <td>{(metrics.bytes_sent ?? 0) + (metrics.bytes_received ?? 0)}</td>
                               <td>{metrics.exchange_seconds === undefined ? "—" : `${metrics.exchange_seconds.toFixed(3)} s`}</td>
+                              <td>{metrics.peer_wait_seconds === undefined ? "—" : `${metrics.peer_wait_seconds.toFixed(3)} s`}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -256,9 +455,75 @@ export default function ExperimentsPage({ token, results, error, onRefresh }: Pr
               </section>
             ))}
           </article>
-        ))
+          <div className="data-note"><span>i</span> MNIST scores shown here use each worker&apos;s local validation split. Peer transfers contain model weights, not image examples.</div>
+        </>
+      ) : (
+        <div aria-label="Saved experiments" className="experiment-list">
+          <div className="experiment-bulk-actions">
+            <label>
+              <input
+                aria-label="Select all experiments"
+                checked={deletableGroups.length > 0 && deletableGroups.every((group) => selectedGroupIds.has(group.group_id))}
+                disabled={deletableGroups.length === 0 || deletingSelectedGroups || deletingGroupId !== null}
+                onChange={(event) => {
+                  setSelectedGroupIds((current) => {
+                    const next = new Set(current);
+                    for (const group of deletableGroups) {
+                      if (event.target.checked) next.add(group.group_id);
+                      else next.delete(group.group_id);
+                    }
+                    return next;
+                  });
+                }}
+                type="checkbox"
+              />
+              Select all
+            </label>
+            <span>{selectedGroups.length} selected</span>
+            <button
+              className="remove-device-button"
+              disabled={selectedGroups.length === 0 || deletingSelectedGroups || deletingGroupId !== null}
+              onClick={() => void deleteSelectedGroups()}
+              type="button"
+            >
+              {deletingSelectedGroups ? "Deleting…" : "Delete selected"}
+            </button>
+          </div>
+          {groups.map((group) => (
+            <div
+              className="experiment-list__entry"
+              key={group.group_id}
+            >
+              <input
+                aria-label={`Select experiment ${group.group_id}`}
+                checked={selectedGroupIds.has(group.group_id)}
+                disabled={group.status === "running" || results?.active_group_id === group.group_id || deletingSelectedGroups || deletingGroupId !== null}
+                onChange={(event) => setSelectedGroupIds((current) => {
+                  const next = new Set(current);
+                  if (event.target.checked) next.add(group.group_id);
+                  else next.delete(group.group_id);
+                  return next;
+                })}
+                type="checkbox"
+              />
+              <button
+                aria-label={`View experiment details for ${group.group_id}`}
+                className="experiment-list__item"
+                onClick={() => {
+                  setSelectedGroupId(group.group_id);
+                  setDeleteError("");
+                }}
+                type="button"
+              >
+                <span>{group.group_id}</span>
+                {bestGroup?.group_id === group.group_id && <span className="best-result-badge">Best experiment</span>}
+              </button>
+            </div>
+          ))}
+          {error && <div className="alert inline-alert" role="alert">{error}</div>}
+          {deleteError && <div className="alert inline-alert" role="alert">{deleteError}</div>}
+        </div>
       )}
-      <div className="data-note"><span>i</span> Held-out test data remains on the master evaluator; workers receive only their disjoint training shard.</div>
     </section>
   );
 }

@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 .venv/
+.venv-tf/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -40,3 +41,9 @@ results/
 *.log
 *.tmp
 *.bak
+
+# Generated experiment outputs (kept on disk, not versioned)
+results_apg/
+results_export/
+results_export.zip
+.mplconfig/

@@ -15,7 +15,7 @@ class RewardConfig:
     accuracy_gain_scale: float
     max_bytes_per_worker_round: float
     max_exchange_seconds_per_worker_round: float
-    max_runtime_seconds_per_round: float
+    max_peer_wait_seconds_per_worker_round: float
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "RewardConfig":
@@ -26,7 +26,7 @@ class RewardConfig:
             "accuracy_gain",
             "convergence_speed",
             "communication_efficiency",
-            "runtime_efficiency",
+            "peer_wait_efficiency",
         }
         if set(weights) != expected or any(item < 0 for item in weights.values()):
             raise ValueError("Reward weights must define the four non-negative reward components")
@@ -40,7 +40,9 @@ class RewardConfig:
             max_exchange_seconds_per_worker_round=float(
                 value["max_exchange_seconds_per_worker_round"]
             ),
-            max_runtime_seconds_per_round=float(value["max_runtime_seconds_per_round"]),
+            max_peer_wait_seconds_per_worker_round=float(
+                value["max_peer_wait_seconds_per_worker_round"]
+            ),
         )
         if not 0 < config.target_accuracy <= 1 or any(
             item <= 0
@@ -48,7 +50,7 @@ class RewardConfig:
                 config.accuracy_gain_scale,
                 config.max_bytes_per_worker_round,
                 config.max_exchange_seconds_per_worker_round,
-                config.max_runtime_seconds_per_round,
+                config.max_peer_wait_seconds_per_worker_round,
             )
         ):
             raise ValueError("Reward targets and normalization scales must be positive")
@@ -61,7 +63,7 @@ class RewardConfig:
             "accuracy_gain_scale": self.accuracy_gain_scale,
             "max_bytes_per_worker_round": self.max_bytes_per_worker_round,
             "max_exchange_seconds_per_worker_round": self.max_exchange_seconds_per_worker_round,
-            "max_runtime_seconds_per_round": self.max_runtime_seconds_per_round,
+            "max_peer_wait_seconds_per_worker_round": self.max_peer_wait_seconds_per_worker_round,
         }
 
 
@@ -72,14 +74,29 @@ def calculate_run_reward(
     if not rounds:
         raise ValueError("A completed run must contain at least one measured round")
     accuracies = [
-        sum(float(metrics["accuracy"]) for metrics in row["workers"].values())
+        sum(
+            float(metrics.get("validation_accuracy", metrics.get("accuracy")))
+            for metrics in row["workers"].values()
+        )
         / len(row["workers"])
         for row in rounds
         if row.get("workers")
     ]
     if len(accuracies) != len(rounds):
         raise ValueError("Every round must contain worker accuracy metrics")
-    initial_accuracy, final_accuracy = accuracies[0], accuracies[-1]
+    first_round_workers = rounds[0]["workers"]
+    initial_validation_available = all(
+        metrics.get("initial_validation_accuracy") is not None
+        for metrics in first_round_workers.values()
+    )
+    initial_accuracy = (
+        sum(float(metrics["initial_validation_accuracy"]) for metrics in first_round_workers.values())
+        / len(first_round_workers)
+        if initial_validation_available
+        else accuracies[0]
+    )
+    final_accuracy = accuracies[-1]
+    accuracy_gain_available = len(rounds) > 1 or initial_validation_available
     accuracy_gain = min(max((final_accuracy - initial_accuracy) / config.accuracy_gain_scale, 0), 1)
     convergence_round = next(
         (index + 1 for index, accuracy in enumerate(accuracies) if accuracy >= config.target_accuracy),
@@ -105,6 +122,11 @@ def calculate_run_reward(
         )
         for row in rounds
     )
+    peer_wait_seconds = sum(
+        float(metrics.get("peer_wait_seconds", 0))
+        for row in rounds
+        for metrics in row["workers"].values()
+    )
     communication_efficiency = 1 - min(
         bytes_sent
         / (config.max_bytes_per_worker_round * len(rounds) * worker_count),
@@ -120,16 +142,20 @@ def calculate_run_reward(
         1,
     )
     communication_efficiency = (communication_efficiency + exchange_efficiency) / 2
-    runtime_efficiency = 1 - min(
-        runtime_seconds
-        / (config.max_runtime_seconds_per_round * len(rounds)),
+    peer_wait_efficiency = 1 - min(
+        peer_wait_seconds
+        / (
+            config.max_peer_wait_seconds_per_worker_round
+            * len(rounds)
+            * worker_count
+        ),
         1,
     )
     components = {
         "accuracy_gain": accuracy_gain,
         "convergence_speed": convergence_speed,
         "communication_efficiency": communication_efficiency,
-        "runtime_efficiency": runtime_efficiency,
+        "peer_wait_efficiency": peer_wait_efficiency,
     }
     reward = sum(config.weights[name] * value for name, value in components.items())
     return {
@@ -139,11 +165,13 @@ def calculate_run_reward(
             "initial_accuracy": round(initial_accuracy, 6),
             "final_accuracy": round(final_accuracy, 6),
             "accuracy_gain": round(final_accuracy - initial_accuracy, 6),
+            "accuracy_gain_available": accuracy_gain_available,
             "target_accuracy": config.target_accuracy,
             "convergence_round": convergence_round,
             "bytes_sent": bytes_sent,
             "exchange_seconds": round(exchange_seconds, 3),
             "runtime_seconds": round(runtime_seconds, 3),
+            "peer_wait_seconds": round(peer_wait_seconds, 3),
         },
         "weights": dict(config.weights),
     }

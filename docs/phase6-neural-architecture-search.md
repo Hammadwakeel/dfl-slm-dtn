@@ -1,5 +1,24 @@
 # Phase 6: neural architecture search
 
+## Current MNIST dataset search
+
+The MNIST dataset search uses a bounded evolutionary, multi-fidelity workflow. All three workers receive the same candidate set in each generation so their scores can be compared even when their data shards are non-IID:
+
+1. Generate eight reproducible custom CNNs, including matched CNN and attention candidates, and evaluate each for three epochs.
+2. Aggregate validation accuracy, macro-precision/recall/F1, parameter count, runtime, and peak process RSS across workers.
+3. Keep diverse candidates from the Pareto front, mutate the selected parents, and evaluate four finalists for ten epochs.
+4. Choose the highest-accuracy final Pareto candidate (then macro-F1, lower parameter count, runtime, and memory as tie-breakers). The selected custom layer specification can be sent to Model Studio.
+
+The search covers two to four convolution blocks, per-block channel widths from 16 to 256, standard or separable convolutions, 3×3/5×5/7×7 kernels, optional dense heads, dropout, and optional patch embedding with a four-head transformer encoder. Evolutionary mutation can add or remove attention. Architectures are capped at 1,000,000 parameters. A search budget is 90–600 seconds total; the coordinator reserves time for both stages, and each worker process is capped at 3,072 MiB RSS while preserving at least 1,024 MiB of available system memory. These safeguards are not removed by the larger search cap.
+
+The NAS page offers a smoke-test button with the minimum accepted 90-second budget, alongside the normal search. The smoke test explicitly evaluates one lightweight, two-block CNN for one epoch on each worker, then aggregates and persists the candidate results. It exercises dataset loading, isolated worker training, and result collection; it does not search the architecture space or choose a production model. It retains the normal 1,024 MiB worker available-memory reserve. The full dataset workflow search uses three-epoch first-stage and ten-epoch finalist evaluations; the one-epoch fidelity is reserved for smoke tests only.
+
+Only each worker's training shard and its deterministic, stratified validation split are used for architecture search. The held-out test split is reserved for final evaluation. Candidate results persist the worker-generated Keras `model.summary()` output and a summed validation confusion matrix alongside accuracy, macro-precision, macro-recall, macro-F1, runtime, and peak RSS. The model-details page reads these saved results and distinguishes validation metrics from any completed held-out training comparison. This is a practical evolutionary search, not a reproduction of any specific paper or a claim that one NAS method is universally best. Multi-fidelity evaluation limits expensive training of weak candidates, while Pareto selection retains accuracy/quality versus cost trade-offs.
+
+## Historical CIFAR-10 implementation and results
+
+The implementation and measurements below describe the earlier CIFAR-10 fixed-grid search. They are retained as historical evidence and do not describe the current MNIST evolutionary search.
+
 ## Design
 
 DFL weight averaging requires identical tensor layouts at every worker. Each worker therefore evaluates the same fixed candidate list independently using only its own stratified CIFAR-10 training shard. It reserves a deterministic, class-stratified 20% validation split from that shard, trains each candidate for one epoch, and reports candidate ID, validation accuracy, parameter count, elapsed time, peak resident memory, and validation sample count. No held-out CIFAR-10 test data is sent to a worker or used by the search.
@@ -23,7 +42,7 @@ The eight candidates vary block count, channels, and kernel size. Each block is 
 | `b2_c16_k3` | 2 | 16 | 3×3 | 5,338 |
 | `b2_c16_k5` | 2 | 16 | 5×5 | 10,202 |
 
-The search space has a hard 12,000-parameter ceiling. Each worker search has a 300-second wall-clock budget and a 2,048 MiB process-RSS ceiling. Search executes in a separate worker-local Python process so its memory measurement and ceiling do not inherit memory retained by the long-lived training service. It checks elapsed time and RSS at each training batch and after validation inference, aborting if either bound is exceeded. RSS is process memory, not a separate GPU-memory allocation limit; Jetson uses unified system memory. Peak RSS is measured during candidate evaluation.
+The search space has a hard 12,000-parameter ceiling. Each worker search has a 300-second wall-clock budget, a 2,048 MiB process-RSS ceiling, and a 1,024 MiB minimum available-system-memory reserve. Search executes in a separate worker-local Python process, enables TensorFlow GPU memory growth, and reads dataset metadata without loading a second shard copy into the long-lived worker service. It checks elapsed time, process RSS, and available system memory during candidate evaluation. Each successful candidate clears its Keras session and collects Python garbage; the isolated process exit releases all remaining CPU and GPU allocations on both success and failure. RSS is process memory, not a separate GPU-memory allocation limit; Jetson uses unified system memory.
 
 ## SLM and dashboard integration
 
@@ -102,6 +121,28 @@ After deploying the isolated-search change, an authenticated search-only verific
 | worker1 | `/physical_device:GPU:0` | 8 | 34.187 s | 1,690.5 MiB | `b1_c16_k5` |
 | worker2 | `/physical_device:GPU:0` | 8 | 34.519 s | 1,556.9 MiB | `b1_c16_k5` |
 | worker3 | `/physical_device:GPU:0` | 8 | 34.675 s | 1,553.2 MiB | `b1_c16_k5` |
+
+## M8 centralized NAS-architecture baseline
+
+This PC-only baseline uses the selected Phase 6 NAS architecture `b1_c16_k5` (11,466 parameters), rather than the older centralized fixed reference architecture `b1_c8_k3`. It trains on the official CIFAR-10 50,000-image training split and evaluates the same 10,000-image test split used in Phase 6. The test file is opened only after all three training seeds finish; Phase 6 validation data was used for NAS tuning, while this test split was not used for training or tuning.
+
+Phase 6 settings were retained: Adam with its default 0.001 learning rate, batch size 128, `RandomFlip(mode='horizontal')` in the model with no other augmentation, 10 rounds x 5 epochs, and seeds 17, 42, and 2026. DFL used stratified worker shards of 16,670 / 16,670 / 16,660 rows; NAS search reserved 3,330 validation rows per worker and trained candidates on 13,330-13,340 rows. The centralized run used the full 50,000-row union for 50 epochs, matching 2,500,000 training-example presentations per seed. The worker shard partition seed is not recorded in the Phase 6 report; the centralized run uses the same full official training split, so it does not depend on shard assignment.
+
+| Method | Architecture | Mean test accuracy | Mean test macro-F1 |
+|---|---|---:|---:|
+| Phase 6 DFL NAS (reported mean) | `b1_c16_k5` | **61.63%** | **0.6136** |
+| M8 centralized NAS baseline (3 seeds; sample SD, ddof=1) | `b1_c16_k5` | **63.78% +/- 0.41 pp** | **0.6357 +/- 0.0038** |
+| Phase 6 centralized fixed reference (reported mean) | `b1_c8_k3` | 56.93% | 0.5653 |
+
+M8 per-seed test metrics:
+
+| Seed | Centralized accuracy | Centralized macro-F1 |
+|---:|---:|---:|
+| 17 | 63.62% | 0.6338 |
+| 42 | 63.48% | 0.6332 |
+| 2026 | 64.25% | 0.6400 |
+
+The M8 mean accuracy was 2.15 percentage points above Phase 6 DFL NAS and 6.85 points above the older centralized fixed reference. Only M8 reports a standard deviation here; the Phase 6 table values are reported means. The training script and seed-level artifact are `scripts/m8_centralized_nas_baseline.py` and `data/m8_centralized_nas_baseline.json`. No cluster endpoints were used for M8.
 
 ## Validation
 

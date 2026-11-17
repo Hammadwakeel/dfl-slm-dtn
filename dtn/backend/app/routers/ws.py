@@ -49,6 +49,7 @@ async def device_events(websocket: WebSocket) -> None:
                             "hostname": device.hostname,
                             "ip": device.ip,
                             "port": device.port,
+                            "is_managed": device.is_managed,
                             "online": device.online,
                             "last_seen": (
                                 (

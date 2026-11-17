@@ -7,10 +7,208 @@
       "additionalProperties": false
     },
     "datasetName": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 64,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      "enum": ["mnist", "cifar10"]
+    },
+    "agentInitialModelParameters": {
+      "type": "object",
+      "properties": {
+        "model_name": {"$ref": "#/$defs/datasetName"}
+      },
+      "required": ["model_name"],
+      "additionalProperties": false
+    },
+    "preprocessableDatasetName": {
+      "enum": ["mnist", "cifar10"]
+    },
+    "cnnArchitecture": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "b1_c8_k3",
+            "b1_c8_k5",
+            "b1_c16_k3",
+            "b1_c16_k5",
+            "b2_c8_k3",
+            "b2_c8_k5",
+            "b2_c16_k3",
+            "b2_c16_k5"
+          ]
+        },
+        "blocks": {"enum": [1, 2]},
+        "channels": {"enum": [8, 16]},
+        "kernel_size": {"enum": [3, 5]}
+      },
+      "required": ["id", "blocks", "channels", "kernel_size"],
+      "additionalProperties": false
+    },
+    "modelTraining": {
+      "type": "object",
+      "properties": {
+        "optimizer": {"enum": ["adam", "adamw", "sgd", "rmsprop"]},
+        "learning_rate": {"type": "number", "minimum": 0.000001, "maximum": 0.1},
+        "batch_size": {"type": "integer", "minimum": 8, "maximum": 256}
+      },
+      "additionalProperties": false
+    },
+    "modelLayer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {"enum": ["conv2d", "separable_conv2d"]},
+            "filters": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "kernel_size": {"type": "integer", "minimum": 1, "maximum": 15},
+            "strides": {"type": "integer", "minimum": 1, "maximum": 8},
+            "padding": {"enum": ["same", "valid"]},
+            "activation": {"enum": ["relu", "gelu", "silu", "tanh", "sigmoid", "linear", "softmax", "elu", "leaky_relu"]}
+          },
+          "required": ["type", "filters", "kernel_size"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"enum": ["max_pooling2d", "average_pooling2d"]},
+            "pool_size": {"type": "integer", "minimum": 2, "maximum": 8}
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"enum": ["batch_normalization", "flatten", "global_average_pooling2d", "global_average_pooling1d"]}
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "dropout"},
+            "rate": {"type": "number", "minimum": 0, "exclusiveMaximum": 1}
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "dense"},
+            "units": {"type": "integer", "minimum": 1, "maximum": 8192},
+            "activation": {"enum": ["relu", "gelu", "silu", "tanh", "sigmoid", "linear", "softmax", "elu", "leaky_relu"]}
+          },
+          "required": ["type", "units"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "patch_embedding"},
+            "patch_size": {"type": "integer", "minimum": 1, "maximum": 14},
+            "embed_dim": {"type": "integer", "minimum": 8, "maximum": 1024}
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {"const": "transformer_encoder"},
+            "embed_dim": {"type": "integer", "minimum": 8, "maximum": 1024},
+            "num_heads": {"type": "integer", "minimum": 1, "maximum": 32},
+            "ff_dim": {"type": "integer", "minimum": 8, "maximum": 4096},
+            "dropout": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
+            "activation": {"enum": ["relu", "gelu", "silu", "tanh", "sigmoid", "linear", "softmax", "elu", "leaky_relu"]}
+          },
+          "required": ["type", "num_heads", "ff_dim"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "customArchitecture": {
+      "type": "object",
+      "properties": {
+        "model_type": {"const": "custom"},
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "blocks": {"type": "integer", "minimum": 1, "maximum": 32},
+        "channels": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "channel_schedule": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"type": "integer", "minimum": 1, "maximum": 1024}
+        },
+        "block_type": {"enum": ["conv2d", "separable_conv2d"]},
+        "kernel_size": {"type": "integer", "minimum": 1, "maximum": 15},
+        "head_units": {"type": "integer", "minimum": 0, "maximum": 8192},
+        "dropout": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
+        "attention": {"type": "boolean"},
+        "layers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/modelLayer"}
+        },
+        "training": {"$ref": "#/$defs/modelTraining"},
+        "dataset_name": {"$ref": "#/$defs/datasetName"},
+        "input_shape": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1, "maximum": 2048},
+            {"type": "integer", "minimum": 1, "maximum": 2048},
+            {"type": "integer", "enum": [1, 3]}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "classes": {"type": "array", "minItems": 2, "maxItems": 1000, "items": {"type": "string", "minLength": 1}},
+        "num_classes": {"type": "integer", "minimum": 2, "maximum": 1000},
+        "parameter_count": {"type": "integer", "minimum": 1, "maximum": 20000000},
+        "initialization_seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "normalization": {"type": "object"}
+      },
+      "required": ["model_type", "layers"],
+      "additionalProperties": false
+    },
+    "pretrainedDeiT": {
+      "type": "object",
+      "properties": {
+        "model_type": {"const": "pretrained_deit"},
+        "model_id": {"const": "facebook/deit-tiny-patch16-224"},
+        "training": {"$ref": "#/$defs/modelTraining"},
+        "dataset_name": {"$ref": "#/$defs/datasetName"},
+        "input_shape": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1, "maximum": 2048},
+            {"type": "integer", "minimum": 1, "maximum": 2048},
+            {"type": "integer", "enum": [1, 3]}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "classes": {"type": "array", "minItems": 2, "maxItems": 1000, "items": {"type": "string", "minLength": 1}},
+        "num_classes": {"type": "integer", "minimum": 2, "maximum": 1000},
+        "parameter_count": {"type": "integer", "minimum": 1, "maximum": 20000000},
+        "initialization_seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "normalization": {"type": "object"}
+      },
+      "required": ["model_type", "model_id"],
+      "additionalProperties": false
+    },
+    "modelArchitecture": {
+      "oneOf": [
+        {"$ref": "#/$defs/cnnArchitecture"},
+        {"$ref": "#/$defs/customArchitecture"},
+        {"$ref": "#/$defs/pretrainedDeiT"}
+      ]
     },
     "runIds": {
       "type": "array",
@@ -29,26 +227,30 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "upload_dataset"},
-            "parameters": {
-              "type": "object",
-              "properties": {"dataset_name": {"$ref": "#/$defs/datasetName"}},
-              "required": ["dataset_name"],
-              "additionalProperties": false
-            }
-          },
-          "required": ["action", "parameters"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "action": {"const": "preprocess_dataset"},
+            "action": {
+              "const": "preprocess_dataset",
+              "description": "Preprocess a supported dataset and distribute verified worker shards.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {
-                "dataset_name": {"$ref": "#/$defs/datasetName"},
-                "normalization": {"enum": ["standard", "minmax", "none"]}
+                "dataset_name": {"$ref": "#/$defs/preprocessableDatasetName"},
+                "normalization": {"enum": ["standard", "minmax", "none"]},
+                "target_size": {
+                  "type": "object",
+                  "properties": {
+                    "height": {"type": "integer", "minimum": 1, "maximum": 2048},
+                    "width": {"type": "integer", "minimum": 1, "maximum": 2048}
+                  },
+                  "required": ["height", "width"],
+                  "additionalProperties": false
+                },
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+                "replace_existing": {"type": "boolean"},
+                "dataset_split": {
+                  "enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]
+                }
               },
               "required": ["dataset_name"],
               "additionalProperties": false
@@ -60,10 +262,24 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "create_initial_model"},
+            "action": {
+              "const": "create_initial_model",
+              "description": "Build an initial model for a dataset and distribute it to the workers. Omit architecture or pass an empty object to use the standard small CNN default.",
+              "x-agent-tool": true,
+              "x-agent-parameters": {"$ref": "#/$defs/agentInitialModelParameters"}
+            },
             "parameters": {
               "type": "object",
-              "properties": {"model_name": {"$ref": "#/$defs/datasetName"}},
+              "properties": {
+                "model_name": {"$ref": "#/$defs/datasetName"},
+                "architecture": {
+                  "anyOf": [
+                    {"$ref": "#/$defs/modelArchitecture"},
+                    {"type": "object", "maxProperties": 0, "additionalProperties": false}
+                  ]
+                },
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+              },
               "required": ["model_name"],
               "additionalProperties": false
             }
@@ -74,16 +290,21 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "start_training"},
+            "action": {
+              "const": "start_training",
+              "description": "Start distributed training with the supplied dataset and run parameters. Omit architecture to use the currently installed model; do not pass an empty architecture object.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {
                 "rounds": {"type": "integer", "minimum": 1, "maximum": 100},
                 "epochs": {"type": "integer", "minimum": 1, "maximum": 50},
                 "dataset_name": {"$ref": "#/$defs/datasetName"},
-                "dataset_split": {"enum": ["stratified", "dirichlet_a03", "dirichlet_a05"]}
+                "architecture": {"$ref": "#/$defs/modelArchitecture"},
+                "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]}
               },
-              "required": ["rounds", "epochs"],
+              "required": ["rounds", "epochs", "dataset_name"],
               "additionalProperties": false
             }
           },
@@ -93,7 +314,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "stop_training"},
+            "action": {
+              "const": "stop_training",
+              "description": "Stop the currently active training, topology optimization, or NAS run.",
+              "x-agent-tool": true
+            },
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -102,7 +327,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "set_topology"},
+            "action": {
+              "const": "set_topology",
+              "description": "Change the active worker communication topology.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {
@@ -127,7 +356,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "optimize_topology"},
+            "action": {
+              "const": "optimize_topology",
+              "description": "Start a measured sweep that selects a worker communication topology.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {
@@ -143,9 +376,9 @@
                 "alphas": {
                   "type": "array",
                   "minItems": 1,
-                  "maxItems": 2,
+                  "maxItems": 1,
                   "uniqueItems": true,
-                  "items": {"type": "number", "enum": [0.3, 0.5]}
+                  "items": {"type": "number", "enum": [0.3]}
                 }
               },
               "additionalProperties": false
@@ -157,7 +390,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "set_rounds"},
+            "action": {
+              "const": "set_rounds",
+              "description": "Set the distributed training round count.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {"rounds": {"type": "integer", "minimum": 1, "maximum": 100}},
@@ -171,7 +408,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "set_epochs"},
+            "action": {
+              "const": "set_epochs",
+              "description": "Set the local training epoch count.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {"epochs": {"type": "integer", "minimum": 1, "maximum": 50}},
@@ -185,11 +426,16 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "enable_nas"},
+            "action": {
+              "const": "enable_nas",
+              "description": "Start or configure neural architecture search on the worker dataset shards.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {
                 "enabled": {"type": "boolean"},
+                "dataset_name": {"$ref": "#/$defs/datasetName"},
                 "rounds": {"type": "integer", "minimum": 1, "maximum": 100},
                 "epochs": {"type": "integer", "minimum": 1, "maximum": 50},
                 "seeds": {
@@ -201,9 +447,10 @@
                 },
                 "search_time_limit_seconds": {
                   "type": "integer",
-                  "minimum": 30,
-                  "maximum": 300
-                }
+                  "minimum": 90,
+                  "maximum": 600
+                },
+                "smoke_test": {"type": "boolean"}
               },
               "required": ["enabled"],
               "additionalProperties": false
@@ -215,7 +462,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "get_status"},
+            "action": {
+              "const": "get_status",
+              "description": "Read the current master and distributed-training status.",
+              "x-agent-tool": true
+            },
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -224,7 +475,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "get_logs"},
+            "action": {
+              "const": "get_logs",
+              "description": "Read recent master service logs.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
@@ -237,7 +492,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "get_results"},
+            "action": {
+              "const": "get_results",
+              "description": "Read saved and active experiment results, including progress and metrics.",
+              "x-agent-tool": true
+            },
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -246,7 +505,11 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "compare_runs"},
+            "action": {
+              "const": "compare_runs",
+              "description": "Compare the supplied completed experiment run identifiers.",
+              "x-agent-tool": true
+            },
             "parameters": {
               "type": "object",
               "properties": {"run_ids": {"$ref": "#/$defs/runIds"}},
@@ -260,7 +523,7 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "clarify"},
+            "action": {"const": "clarify", "x-agent-tool": false},
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -269,7 +532,7 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "refuse"},
+            "action": {"const": "refuse", "x-agent-tool": false},
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -278,7 +541,7 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "redirect"},
+            "action": {"const": "redirect", "x-agent-tool": false},
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],
@@ -287,7 +550,7 @@
         {
           "type": "object",
           "properties": {
-            "action": {"const": "suggest_next_action"},
+            "action": {"const": "suggest_next_action", "x-agent-tool": false},
             "parameters": {"$ref": "#/$defs/empty"}
           },
           "required": ["action", "parameters"],

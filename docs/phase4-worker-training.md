@@ -52,6 +52,10 @@ The three workers run `dfl-slm-worker-training.service` on TCP/5004. Their statu
 
 Each worker trains a small CIFAR-10 CNN (5,354 parameters; 21,416 bytes of float32 weights) on its own shard. Ring uses a directed cycle and averages a worker's weights with its predecessor's; Mesh exchanges with both peers and uses sample-count-weighted averaging. Workers transfer compressed weights directly to peer addresses on TCP/5004. The master separately retrieves each worker's post-aggregation weights for evaluation against the held-out test split; training images and labels stay on the workers. The dashboard polls persisted, real per-round accuracy, cross-entropy loss, macro-F1, training/round runtime, process peak RSS, exchange time, and peer byte/message counters.
 
+After each distributed run, once the coordinator has persisted worker metrics and retrieved the final weights, it asks every worker to discard that run's model, weights, cached results, and error state. Workers wait until training is idle, clear the Keras session, collect Python garbage, and request a Linux heap trim. Cleanup acknowledgements or per-worker failures are recorded on the run as `worker_cleanup`; the coordinator's persisted metrics remain available independently.
+
+The Dashboard also offers an all-worker memory cleanup action. It first verifies that every configured worker is reachable and idle; if any worker is training, scheduled, or unreachable, it starts no cleanup. Each worker clears only in-memory experiment/model state and drops Linux filesystem caches, preserving its dataset shards and coordinator-side experiment history. Page-cache access is provided by the separate `dfl-slm-memory-cleanup.service`, which listens only on loopback, requires a dedicated token, and exposes only the fixed cache-drop operation. Deployment verifies the helper's authenticated health endpoint before restarting the training API. If cleanup reports HTTP 401 or connection refused for a worker, redeploy just the helper and its token without reinstalling training dependencies: `.\deploy\deploy_worker_memory_cleanup.ps1 -WorkerIds worker4,worker5`. Installation allocates an SSH terminal so `sudo` can prompt for the worker account's password without storing it; a failed installation removes its staged credential files when possible. The UI displays per-worker before/after available memory and process RSS, including partial failures. Dropping filesystem caches can temporarily slow file access and does not terminate worker processes.
+
 Both complete distributed matrices were run through the deployed master coordinator using seeds `17`, `42`, and `2026`, 10 rounds, and 5 local epochs per round. Each score below is the mean final held-out test metric across the three worker models for that seed.
 
 | Topology | Seed | Final test accuracy | Final test loss | Final macro-F1 |
@@ -70,6 +74,8 @@ The workers' JSON event logs independently confirm direct peer transfers. Across
 ## Failure injection
 
 During a live 10-round/5-epoch Ring run, `dfl-worker3`'s training service was stopped. The coordinator marked the group failed when worker3's `/v1/results` connection was refused, canceled the remaining workers, and preserved the error in the experiment results. The service was restarted and its authenticated status endpoint returned successfully. No worker was left stopped.
+
+The coordinator retries transient network failures (including timeouts and unreachable-worker errors) up to twice for read-only `/v1/results` requests before failing the group. Persistent failures and non-network errors still fail explicitly; state-changing worker requests are not retried.
 
 ## Centralized baseline
 

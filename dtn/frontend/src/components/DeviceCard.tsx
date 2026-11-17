@@ -9,12 +9,14 @@ function percentage(value: number | null | undefined): string {
 }
 
 function memory(device: Device): string {
+  if (!device.online) return "--";
   const status = device.latest_status?.memory;
   if (!status || status.total_bytes <= 0) return "--";
   return `${Math.round((status.used_bytes / status.total_bytes) * 100)}%`;
 }
 
 function temperature(device: Device): string {
+  if (!device.online) return "--";
   const readings = Object.values(device.latest_status?.temperatures_celsius ?? {});
   return readings.length ? `${Math.round(Math.max(...readings))}°C` : "--";
 }
@@ -28,7 +30,7 @@ function relativeTime(value: string | null): string {
 }
 
 export default function DeviceCard({ device }: DeviceCardProps) {
-  const status = device.latest_status;
+  const status = device.online ? device.latest_status : null;
   return (
     <article className={`device-card ${device.online ? "is-online" : "is-offline"}`}>
       <header className="device-card__header">

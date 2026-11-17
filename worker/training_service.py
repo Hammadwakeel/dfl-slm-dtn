@@ -5,14 +5,24 @@ from __future__ import annotations
 import hmac
 import io
 import base64
+import gc
+import hashlib
 import json
+import math
 import logging
 import logging.handlers
 import os
 import re
+import stat
+import shutil
+import sys
+import subprocess
 import threading
+import tempfile
 import time
-from dataclasses import dataclass, field
+import zipfile
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,12 +35,33 @@ import numpy as np
 
 from common.auth import is_authorized
 from common.cifar_model import build_cifar10_model, compile_cifar10_model, model_size_bytes
+from common.dataset_nas import smoke_test_architecture
+from common.model_design import (
+    MAX_MODEL_PARAMETERS,
+    MAX_MODEL_WEIGHT_BYTES,
+    ModelDesignError,
+    validate_model_design,
+    validate_normalization,
+)
 from common.nas import FIXED_ARCHITECTURE, architecture_spec
-from worker.nas_search import MAX_SEARCH_SECONDS, search_cifar10_architectures_isolated
+from worker.model_factory import build_dataset_model
+from worker.nas_search import (
+    MAX_SEARCH_SECONDS,
+    load_dataset_shard,
+    search_dataset_architectures,
+    search_dataset_architectures_isolated,
+)
 
 LOGGER = logging.getLogger("dfl_slm.worker_training")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-MAX_WEIGHT_BYTES = 16 * 1024 * 1024
+MAX_WEIGHT_BYTES = MAX_MODEL_WEIGHT_BYTES
+MAX_DATASET_SHARD_BYTES = 256 * 1024 * 1024
+MAX_DATASET_SHARD_EXPANDED_BYTES = 512 * 1024 * 1024
+MAX_INITIAL_MODEL_PARAMETERS = MAX_MODEL_PARAMETERS
+DATASET_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+DEFAULT_DATASET_ROOT = "/var/lib/dfl-slm-dtn/datasets"
+DEFAULT_DATASET_LEARNING_RATE = 0.01
+DEFAULT_DATASET_BATCH_SIZE = 32
 
 
 @dataclass(frozen=True)
@@ -49,8 +80,12 @@ class WorkerConfig:
     peers: tuple[Peer, ...]
     log_path: str
     shard_paths: dict[str, str] = field(default_factory=dict)
+    dataset_root: str = DEFAULT_DATASET_ROOT
     bind_host: str = "0.0.0.0"
-    peer_timeout_seconds: float = 60.0
+    peer_timeout_seconds: float = 600.0
+    dataset_learning_rate: float = DEFAULT_DATASET_LEARNING_RATE
+    dataset_batch_size: int = DEFAULT_DATASET_BATCH_SIZE
+
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -64,8 +99,8 @@ class WorkerConfig:
             if shards_encoded
             else {}
         )
-        if node_id not in {"worker1", "worker2", "worker3"}:
-            raise ValueError("DFL_NODE_ID must identify worker1, worker2, or worker3")
+        if re.fullmatch(r"worker[1-9][0-9]*", node_id) is None:
+            raise ValueError("DFL_NODE_ID must identify a numbered worker")
         if len(token) < 32:
             raise ValueError("DFL_API_TOKEN must contain at least 32 characters")
         peers = tuple(
@@ -76,13 +111,35 @@ class WorkerConfig:
             )
             for item in peers_value
         )
-        if len(peers) != 2 or len({peer.node_id for peer in peers}) != 2:
-            raise ValueError("Each worker must be configured with the other two worker peers")
+        peer_ids = [peer.node_id for peer in peers]
+        worker_ids = sorted((node_id, *peer_ids))
+        expected_worker_ids = [f"worker{index}" for index in range(1, len(worker_ids) + 1)]
+        if (
+            len(peers) < 2
+            or len(set(peer_ids)) != len(peer_ids)
+            or node_id in peer_ids
+            or worker_ids != expected_worker_ids
+        ):
+            raise ValueError(
+                "Each worker must be configured with every other worker peer"
+            )
         if any(len(peer.token) < 32 or not peer.base_url.startswith("http://") for peer in peers):
             raise ValueError("Peer URLs and tokens must be configured")
         port = int(os.environ.get("DFL_TRAINING_PORT", "5004"))
-        timeout = float(os.environ.get("DFL_PEER_TIMEOUT_SECONDS", "60"))
-        if not 1 <= port <= 65535 or timeout <= 0:
+        timeout = float(os.environ.get("DFL_PEER_TIMEOUT_SECONDS", "600"))
+        dataset_learning_rate = float(
+            os.environ.get("DFL_DATASET_LEARNING_RATE", str(DEFAULT_DATASET_LEARNING_RATE))
+        )
+        dataset_batch_size = int(
+            os.environ.get("DFL_DATASET_BATCH_SIZE", str(DEFAULT_DATASET_BATCH_SIZE))
+        )
+        if (
+            not 1 <= port <= 65535
+            or timeout <= 0
+            or not math.isfinite(dataset_learning_rate)
+            or dataset_learning_rate <= 0
+            or not 1 <= dataset_batch_size <= 4096
+        ):
             raise ValueError("Training port and peer timeout are out of range")
         return cls(
             node_id=node_id,
@@ -98,14 +155,24 @@ class WorkerConfig:
                 "/var/log/dfl-slm-worker-training/events.jsonl",
             ),
             shard_paths={str(key): str(value) for key, value in shard_paths.items()},
+            dataset_root=os.environ.get(
+                "DFL_TRAINING_DATASET_ROOT",
+                DEFAULT_DATASET_ROOT,
+            ),
             bind_host=os.environ.get("DFL_BIND_HOST", "0.0.0.0"),
             peer_timeout_seconds=timeout,
+            dataset_learning_rate=dataset_learning_rate,
+            dataset_batch_size=dataset_batch_size,
         )
+
+
+class WorkerMemoryBusyError(RuntimeError):
+    pass
 
 
 def ring_neighbours(node_id: str, worker_ids: tuple[str, ...]) -> tuple[str, ...]:
     if node_id not in worker_ids or len(worker_ids) < 3:
-        raise ValueError("Ring topology requires a configured member of a 3-node worker ring")
+        raise ValueError("Ring topology requires a configured member of a worker ring")
     index = worker_ids.index(node_id)
     return (worker_ids[(index + 1) % len(worker_ids)],)
 
@@ -121,14 +188,25 @@ def topology_neighbours(
     worker_ids: tuple[str, ...],
     topology: str,
 ) -> tuple[str, ...]:
-    if node_id not in worker_ids or len(worker_ids) != 3:
-        raise ValueError("Supported topologies require exactly three configured workers")
+    if (
+        node_id not in worker_ids
+        or len(worker_ids) < 3
+        or len(set(worker_ids)) != len(worker_ids)
+    ):
+        raise ValueError("Supported topologies require at least three unique configured workers")
     ordered = tuple(sorted(worker_ids))
     index = ordered.index(node_id)
     if topology in {"ring", "directed_ring"}:
         return (ordered[(index + 1) % len(ordered)],)
     if topology == "bidirectional_ring":
-        return tuple(sorted({ordered[(index - 1) % 3], ordered[(index + 1) % 3]}))
+        return tuple(
+            sorted(
+                {
+                    ordered[(index - 1) % len(ordered)],
+                    ordered[(index + 1) % len(ordered)],
+                }
+            )
+        )
     if topology == "mesh":
         return mesh_neighbours(node_id, ordered)
     if topology == "chain":
@@ -152,6 +230,289 @@ def topology_senders(
         ordered = tuple(sorted(worker_ids))
         return (ordered[(ordered.index(node_id) - 1) % len(ordered)],)
     return topology_neighbours(node_id, worker_ids, topology)
+
+
+def install_dataset_shard(
+    config: WorkerConfig,
+    dataset_name: str,
+    payload: bytes,
+    *,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
+    if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
+        raise ValueError("Invalid dataset name")
+    if not payload or len(payload) > MAX_DATASET_SHARD_BYTES:
+        raise ValueError("Dataset shard payload size is out of range")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as error:
+        raise ValueError("Dataset shard is not a valid NPZ archive") from error
+    with archive:
+        names = [entry.filename for entry in archive.infolist()]
+        if set(names) != {"images.npy", "labels.npy", "class_names.npy"} or len(names) != 3:
+            raise ValueError("Dataset shard must contain images, labels, and class_names arrays")
+        if any(stat.S_ISLNK(entry.external_attr >> 16) for entry in archive.infolist()):
+            raise ValueError("Dataset shard cannot contain symbolic links")
+        if sum(entry.file_size for entry in archive.infolist()) > MAX_DATASET_SHARD_EXPANDED_BYTES:
+            raise ValueError("Dataset shard exceeds the expanded size limit")
+    try:
+        with np.load(io.BytesIO(payload), allow_pickle=False) as shard:
+            images = np.asarray(shard["images"])
+            labels = np.asarray(shard["labels"])
+            class_values = np.asarray(shard["class_names"])
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+        raise ValueError("Dataset shard contains invalid NumPy arrays") from error
+    if (
+        images.ndim != 4
+        or images.shape[0] == 0
+        or images.shape[1] < 1
+        or images.shape[1] > 2048
+        or images.shape[2] < 1
+        or images.shape[2] > 2048
+        or images.shape[3] not in {1, 3}
+        or images.dtype.kind not in {"u", "i", "f"}
+    ):
+        raise ValueError("Dataset images must have shape (N, H, W, C), with C=1 or C=3")
+    if images.dtype.kind == "f" and not np.isfinite(images).all():
+        raise ValueError("Dataset images contain non-finite values")
+    if labels.ndim != 1 or labels.size != images.shape[0] or labels.dtype.kind not in {"u", "i"}:
+        raise ValueError("Dataset labels must be an integer vector matching the image count")
+    if class_values.ndim != 1 or class_values.size < 2 or class_values.dtype.kind not in {"U", "S"}:
+        raise ValueError("Dataset class names must be a string vector with at least two classes")
+    class_names = [str(value) for value in class_values.tolist()]
+    if class_values.dtype.kind == "S":
+        class_names = [value.decode("utf-8") for value in class_values.tolist()]
+    if len(set(class_names)) != len(class_names) or min(labels) < 0 or max(labels) >= len(class_names):
+        raise ValueError("Dataset labels do not match the declared class names")
+    class_counts = {
+        class_names[int(label)]: int(count)
+        for label, count in zip(*np.unique(labels, return_counts=True))
+    }
+
+    root = Path(config.dataset_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / dataset_name
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise ValueError("Dataset path is not a safe directory")
+    if target.exists():
+        if target.resolve().parent != root:
+            raise ValueError("Dataset path escapes the configured root")
+        if any((target / name).is_symlink() for name in ("train.npz", "metadata.json")):
+            raise ValueError("Dataset shard files cannot be symbolic links")
+        existing_metadata_path = target / "metadata.json"
+        if existing_metadata_path.is_file():
+            existing = json.loads(existing_metadata_path.read_text(encoding="utf-8"))
+            if existing.get("shard_sha256") == hashlib.sha256(payload).hexdigest():
+                return existing
+        if not replace_existing:
+            raise FileExistsError(f"Dataset shard already exists with different contents: {dataset_name}")
+
+    with tempfile.TemporaryDirectory(prefix=f".{dataset_name}-", dir=root) as temporary:
+        staging = Path(temporary) / "stage"
+        staging.mkdir()
+        shard_path = staging / "train.npz"
+        shard_path.write_bytes(payload)
+        metadata = {
+            "node_id": config.node_id,
+            "dataset_name": dataset_name,
+            "rows": int(labels.size),
+            "shape": list(images.shape),
+            "image_size": [int(images.shape[1]), int(images.shape[2])],
+            "channels": int(images.shape[3]),
+            "dtype": str(images.dtype),
+            "class_names": class_names,
+            "class_counts": class_counts,
+            "shard_bytes": len(payload),
+            "shard_sha256": hashlib.sha256(payload).hexdigest(),
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        staged_metadata = staging / "metadata.json"
+        staged_metadata.write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        if target.exists() and replace_existing:
+            backup = Path(temporary) / "backup"
+            backup.mkdir()
+            existing_files = tuple(
+                name
+                for name in ("train.npz", "metadata.json")
+                if (target / name).exists()
+            )
+            try:
+                for name in existing_files:
+                    os.replace(target / name, backup / name)
+                os.replace(shard_path, target / "train.npz")
+                os.replace(staged_metadata, target / "metadata.json")
+            except OSError:
+                for name in ("train.npz", "metadata.json"):
+                    (target / name).unlink(missing_ok=True)
+                for name in existing_files:
+                    if (backup / name).exists():
+                        os.replace(backup / name, target / name)
+                raise
+        else:
+            try:
+                os.rename(staging, target)
+            except FileExistsError as error:
+                raise FileExistsError(
+                    f"Dataset shard already exists with different contents: {dataset_name}"
+                ) from error
+    return metadata
+
+
+def install_initial_model(
+    config: WorkerConfig,
+    dataset_name: str,
+    payload: bytes,
+) -> dict[str, Any]:
+    if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
+        raise ValueError("Invalid dataset name")
+    if not payload or len(payload) > MAX_DATASET_SHARD_BYTES:
+        raise ValueError("Initial model payload size is out of range")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as error:
+        raise ValueError("Initial model is not a valid ZIP archive") from error
+    with archive:
+        entries = archive.infolist()
+        entry_names = {entry.filename for entry in entries}
+        if (
+            len(entries) not in {1, 2}
+            or "architecture.json" not in entry_names
+            or entry_names - {"architecture.json", "initial_weights.npz"}
+        ):
+            raise ValueError("Initial model bundle has an unexpected file layout")
+        if any(stat.S_ISLNK(entry.external_attr >> 16) for entry in entries):
+            raise ValueError("Initial model cannot contain symbolic links")
+        if sum(entry.file_size for entry in entries) > MAX_DATASET_SHARD_EXPANDED_BYTES:
+            raise ValueError("Initial model exceeds the expanded size limit")
+        architecture_bytes = archive.read("architecture.json")
+        weights_bytes = archive.read("initial_weights.npz") if "initial_weights.npz" in entry_names else b""
+
+    try:
+        architecture = json.loads(architecture_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Initial model architecture is invalid JSON") from error
+    dataset_path = Path(config.dataset_root).resolve() / dataset_name
+    if not dataset_path.is_dir() or dataset_path.is_symlink():
+        raise FileNotFoundError(f"Dataset shard is not installed for {dataset_name}")
+
+    model_type = architecture.get("model_type") if isinstance(architecture, dict) else None
+    if model_type in {"custom", "pretrained_deit"}:
+        if architecture.get("dataset_name") != dataset_name:
+            raise ValueError("Initial model architecture does not match the dataset")
+        shard_images, _, shard_classes = load_dataset_shard(dataset_path / "train.npz")
+        input_shape = tuple(int(value) for value in shard_images.shape[1:])
+        if (
+            architecture.get("input_shape") != list(input_shape)
+            or architecture.get("classes") != shard_classes
+            or architecture.get("num_classes") != len(shard_classes)
+        ):
+            raise ValueError("Initial model architecture does not match the installed dataset shard")
+        try:
+            normalized_design, estimated_parameters = validate_model_design(
+                architecture,
+                input_shape,
+                len(shard_classes),
+            )
+            if normalized_design["model_type"] == "pretrained_deit":
+                normalized_normalization = validate_normalization(
+                    architecture.get("normalization"),
+                    input_shape[2],
+                )
+                if architecture.get("normalization") != normalized_normalization:
+                    raise ModelDesignError("Initial model normalization metadata is invalid")
+        except ModelDesignError as error:
+            raise ValueError(str(error)) from error
+        if architecture.get("parameter_count") != estimated_parameters:
+            raise ValueError("Initial model parameter count does not match its architecture")
+        model = build_dataset_model(
+            input_shape=input_shape,
+            num_classes=len(shard_classes),
+            architecture=architecture,
+            seed=int(architecture.get("initialization_seed", 0)),
+        )
+        actual_parameters = int(model.count_params())
+        if actual_parameters > MAX_INITIAL_MODEL_PARAMETERS:
+            raise ValueError(
+                f"Initialized model has {actual_parameters:,} parameters; cap is "
+                f"{MAX_INITIAL_MODEL_PARAMETERS:,}"
+            )
+        if model_type == "custom" and actual_parameters != estimated_parameters:
+            raise ValueError("Model layer parameter count differs from its validated estimate")
+        weights = [np.asarray(value) for value in model.get_weights()]
+        weights_bytes = serialize_weights(weights)
+        parameter_count = actual_parameters
+        weight_shapes: dict[str, Any] | None = None
+    else:
+        if model_type != "small_cnn" or architecture.get("dataset_name") != dataset_name:
+            raise ValueError("Initial model architecture does not match the dataset")
+        classes = architecture.get("classes")
+        weight_shapes = architecture.get("weight_shapes")
+        parameter_count = architecture.get("parameter_count")
+        if (
+            not isinstance(classes, list)
+            or len(classes) < 2
+            or any(not isinstance(name, str) or not name for name in classes)
+            or len(set(classes)) != len(classes)
+            or architecture.get("num_classes") != len(classes)
+            or not isinstance(weight_shapes, dict)
+            or not isinstance(parameter_count, int)
+            or not 1 <= parameter_count <= MAX_INITIAL_MODEL_PARAMETERS
+        ):
+            raise ValueError("Initial model architecture fields are invalid")
+        try:
+            with np.load(io.BytesIO(weights_bytes), allow_pickle=False) as archive:
+                weights = {name: np.asarray(archive[name]) for name in archive.files}
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+            raise ValueError("Initial model weights are invalid") from error
+        if set(weights) != set(weight_shapes):
+            raise ValueError("Initial model weight names do not match the architecture")
+        actual_parameters = 0
+        for name, array in weights.items():
+            expected_shape = weight_shapes[name]
+            if (
+                not isinstance(expected_shape, list)
+                or list(array.shape) != expected_shape
+                or array.dtype.kind not in {"f", "i", "u"}
+                or not np.isfinite(array).all()
+            ):
+                raise ValueError(f"Initial model weight {name} has invalid shape or values")
+            actual_parameters += int(array.size)
+        if actual_parameters != parameter_count:
+            raise ValueError("Initial model parameter count does not match its weight arrays")
+
+    model_path = dataset_path / "models" / "initial_model"
+    architecture_sha256 = hashlib.sha256(architecture_bytes).hexdigest()
+    weights_sha256 = hashlib.sha256(weights_bytes).hexdigest()
+    metadata = {
+        "node_id": config.node_id,
+        "dataset_name": dataset_name,
+        "parameter_count": parameter_count,
+        "architecture_sha256": architecture_sha256,
+        "weights_sha256": weights_sha256,
+    }
+    if model_path.exists():
+        existing_metadata = model_path / "metadata.json"
+        if existing_metadata.is_file():
+            existing = json.loads(existing_metadata.read_text(encoding="utf-8"))
+            if all(existing.get(key) == value for key, value in metadata.items() if key != "node_id"):
+                return metadata
+        raise FileExistsError(f"A different initial model is already installed for {dataset_name}")
+
+    with tempfile.TemporaryDirectory(prefix=".initial-model-", dir=dataset_path) as temporary:
+        staging = Path(temporary) / "initial_model"
+        staging.mkdir()
+        (staging / "architecture.json").write_bytes(architecture_bytes)
+        (staging / "initial_weights.npz").write_bytes(weights_bytes)
+        (staging / "metadata.json").write_text(
+            json.dumps(metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(staging, model_path)
+    return metadata
 
 
 def weighted_average_weights(
@@ -181,6 +542,146 @@ def weighted_average_weights(
     ]
 
 
+def _load_installed_dataset_initial_model(
+    config: WorkerConfig,
+    dataset_name: str,
+    *,
+    input_shape: tuple[int, int, int],
+    class_names: list[str],
+) -> tuple[Any, dict[str, Any]] | None:
+    dataset_root = Path(config.dataset_root).resolve()
+    model_path = dataset_root / dataset_name / "models" / "initial_model"
+    if not model_path.exists():
+        return None
+    if model_path.is_symlink() or not model_path.is_dir():
+        raise ValueError("Installed initial-model bundle path is not a regular directory")
+
+    architecture_path = model_path / "architecture.json"
+    weights_path = model_path / "initial_weights.npz"
+    metadata_path = model_path / "metadata.json"
+    if not architecture_path.is_file() or not weights_path.is_file() or not metadata_path.is_file():
+        raise ValueError("Installed initial-model bundle is incomplete")
+    if any(path.is_symlink() for path in (architecture_path, weights_path, metadata_path)):
+        raise ValueError("Installed initial-model bundle cannot contain symbolic links")
+
+    architecture_bytes = architecture_path.read_bytes()
+    weights_bytes = weights_path.read_bytes()
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("Installed initial-model metadata is invalid") from error
+    architecture_hash = hashlib.sha256(architecture_bytes).hexdigest()
+    weights_hash = hashlib.sha256(weights_bytes).hexdigest()
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("dataset_name") != dataset_name
+        or metadata.get("architecture_sha256") != architecture_hash
+        or metadata.get("weights_sha256") != weights_hash
+    ):
+        raise ValueError("Installed initial-model bundle hash mismatch")
+
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+        zipped.writestr("architecture.json", architecture_bytes)
+        zipped.writestr("initial_weights.npz", weights_bytes)
+    try:
+        install_initial_model(config, dataset_name, bundle.getvalue())
+    except (OSError, ValueError, FileExistsError, zipfile.BadZipFile) as error:
+        raise ValueError(f"Installed initial-model bundle is malformed: {error}") from error
+
+    try:
+        architecture = json.loads(architecture_bytes.decode("utf-8"))
+        with np.load(io.BytesIO(weights_bytes), allow_pickle=False) as archive:
+            weights = {name: np.asarray(archive[name]) for name in archive.files}
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError, ValueError, KeyError) as error:
+        raise ValueError("Installed initial-model architecture or weights are unreadable") from error
+    if (
+        architecture.get("input_shape") != list(input_shape)
+        or architecture.get("classes") != class_names
+        or architecture.get("num_classes") != len(class_names)
+    ):
+        raise ValueError("Installed initial-model architecture does not match the dataset shard")
+
+    import tensorflow as tf
+
+    if architecture.get("model_type") in {"custom", "pretrained_deit"}:
+        model = build_dataset_model(
+            input_shape=input_shape,
+            num_classes=len(class_names),
+            architecture=architecture,
+            seed=int(architecture.get("initialization_seed", 0)),
+        )
+        weights = deserialize_weights(weights_bytes)
+        if len(model.get_weights()) != len(weights):
+            raise ValueError("Installed model weight count does not match the architecture")
+        for expected, actual in zip(model.get_weights(), weights):
+            if expected.shape != actual.shape or not np.isfinite(actual).all():
+                raise ValueError("Installed model weights do not match the architecture")
+        model.set_weights(weights)
+        if model.count_params() != architecture.get("parameter_count"):
+            raise ValueError("Installed model parameter count does not match its architecture")
+        return model, architecture
+
+    layer_specs = architecture.get("layers")
+    if not isinstance(layer_specs, list) or not layer_specs:
+        raise ValueError("Installed initial-model architecture has no layers")
+    layers: list[Any] = [tf.keras.layers.Input(shape=input_shape, dtype=tf.float32)]
+    weight_order: list[str] = []
+    convolution_index = 0
+    dense_count = 0
+    for spec in layer_specs:
+        if not isinstance(spec, dict):
+            raise ValueError("Installed initial-model layer specification is malformed")
+        layer_type = spec.get("type")
+        if layer_type == "conv2d":
+            convolution_index += 1
+            kernel_size = spec.get("kernel_size")
+            if (
+                not isinstance(spec.get("filters"), int)
+                or not isinstance(kernel_size, list)
+                or len(kernel_size) != 2
+                or any(not isinstance(value, int) or value < 1 for value in kernel_size)
+                or spec.get("padding") not in {"same", "valid"}
+                or not isinstance(spec.get("activation"), str)
+            ):
+                raise ValueError("Installed initial-model Conv2D layer is malformed")
+            layers.append(
+                tf.keras.layers.Conv2D(
+                    filters=spec["filters"],
+                    kernel_size=tuple(kernel_size),
+                    padding=spec["padding"],
+                    activation=spec["activation"],
+                )
+            )
+            weight_order.extend(
+                [f"conv{convolution_index}_kernel", f"conv{convolution_index}_bias"]
+            )
+        elif layer_type == "global_average_pooling2d":
+            layers.append(tf.keras.layers.GlobalAveragePooling2D())
+        elif layer_type == "dense":
+            dense_count += 1
+            if dense_count != 1 or spec.get("units") != len(class_names):
+                raise ValueError("Installed initial-model Dense layer is unsupported")
+            if not isinstance(spec.get("activation"), str):
+                raise ValueError("Installed initial-model Dense activation is malformed")
+            layers.append(
+                tf.keras.layers.Dense(
+                    units=spec["units"],
+                    activation=spec["activation"],
+                )
+            )
+            weight_order.extend(["classifier_kernel", "classifier_bias"])
+        else:
+            raise ValueError(f"Installed initial-model layer type is unsupported: {layer_type}")
+    if not convolution_index or dense_count != 1 or set(weight_order) != set(weights):
+        raise ValueError("Installed initial-model layer/weight mapping is incomplete")
+
+    model = tf.keras.Sequential(layers, name=f"dataset_{dataset_name}_initial")
+    model(np.zeros((1, *input_shape), dtype=np.float32), training=False)
+    model.set_weights([weights[name] for name in weight_order])
+    return model, architecture
+
+
 def serialize_weights(weights: list[np.ndarray]) -> bytes:
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **{f"weight_{index}": value for index, value in enumerate(weights)})
@@ -198,7 +699,7 @@ def deserialize_weights(payload: bytes) -> list[np.ndarray]:
         if not keys or keys != [f"weight_{index}" for index in range(len(keys))]:
             raise ValueError("Model weight payload has an unexpected structure")
         weights = [np.asarray(archive[key]) for key in keys]
-    if any(array.dtype.kind not in "fiu" or array.nbytes > 4 * 1024 * 1024 for array in weights):
+    if any(array.dtype.kind not in "fiu" or array.nbytes > MAX_WEIGHT_BYTES for array in weights):
         raise ValueError("Model weight payload contains invalid arrays")
     return weights
 
@@ -209,6 +710,50 @@ def _memory_available_kb() -> int:
             if line.startswith("MemAvailable:"):
                 return int(line.split()[1])
     raise RuntimeError("MemAvailable is missing from /proc/meminfo")
+
+
+def _process_snapshot() -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            "/usr/bin/ps",
+            "-eo",
+            "pid=,ppid=,user=,pcpu=,pmem=,rss=,comm=",
+            "--sort=-rss",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={"LC_ALL": "C"},
+        timeout=3,
+    )
+    processes = []
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=6)
+        if len(fields) != 7:
+            raise ValueError("Process table returned a malformed row")
+        pid, ppid, user, cpu, memory, rss_kb, name = fields
+        processes.append(
+            {
+                "pid": int(pid),
+                "ppid": int(ppid),
+                "user": user,
+                "cpu_percent": float(cpu),
+                "memory_percent": float(memory),
+                "rss_mb": round(int(rss_kb) / 1024, 1),
+                "name": name,
+            }
+        )
+    return {
+        "sampled_at": datetime.now(timezone.utc).isoformat(),
+        "processes": processes[:30],
+        "memory_available_mb": _memory_available_mb(),
+    }
+
+
+def _memory_available_mb() -> float:
+    return round(_memory_available_kb() / 1024, 1)
 
 
 def _resident_memory_mb() -> float:
@@ -223,6 +768,21 @@ def _peak_process_rss_mb() -> float:
     import resource
 
     return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+
+
+def _trim_process_heap() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+    except (AttributeError, OSError) as error:
+        LOGGER.warning("Could not release freed training memory to the OS: %s", error)
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    trim(0)
 
 
 def _log_event(event: str, **details: Any) -> None:
@@ -243,22 +803,145 @@ class WorkerTrainer:
         self._condition = threading.Condition(self._lock)
         self._incoming: dict[tuple[str, int], dict[str, tuple[list[np.ndarray], int, int]]] = {}
         self._models: dict[str, Any] = {}
+        self._run_architectures: dict[str, Any] = {}
+        self._run_model_audits: dict[str, dict[str, Any]] = {}
         self._completed_rounds: dict[str, int] = {}
         self._round_weights: dict[tuple[str, int], list[np.ndarray]] = {}
+        self._round_sample_counts: dict[tuple[str, int], int] = {}
         self._results: dict[str, list[dict[str, Any]]] = {}
         self._run_errors: dict[str, str] = {}
         self._active_run: str | None = None
         self._active_round: int | None = None
+        self._active_epoch: int | None = None
+        self._total_epochs: int | None = None
+        self._active_phase: str | None = None
         self._scheduled_run: str | None = None
+        self._reboot_requested = False
         self._run_thread: threading.Thread | None = None
         self._cancel = threading.Event()
         self._peer_map = {peer.node_id: peer for peer in config.peers}
         self.dataset_split = "stratified"
+        self.dataset_name: str | None = None
+        self._dataset_class_names: list[str] | None = None
         self.images, self.labels = self._load_shard(config.data_path)
         self._rounds = 10
         self._epochs = 5
         self._topology = "ring"
         self._architecture = architecture_spec(FIXED_ARCHITECTURE)
+
+    def configure_peers(self, peers: tuple[Peer, ...]) -> dict[str, Any]:
+        peer_ids = [peer.node_id for peer in peers]
+        worker_ids = sorted((self.config.node_id, *peer_ids))
+        expected_ids = [f"worker{index}" for index in range(1, len(worker_ids) + 1)]
+        if (
+            len(peers) < 2
+            or len(set(peer_ids)) != len(peer_ids)
+            or self.config.node_id in peer_ids
+            or worker_ids != expected_ids
+            or any(len(peer.token) < 32 or not peer.base_url.startswith("http://") for peer in peers)
+        ):
+            raise ValueError("Each worker must be configured with every other worker peer")
+        with self._condition:
+            if self._active_run is not None or self._scheduled_run is not None:
+                raise RuntimeError("Cannot change worker peers while training is active")
+            self.config = replace(self.config, peers=peers)
+            self._peer_map = {peer.node_id: peer for peer in peers}
+        return {"configured_peers": peer_ids}
+
+    def cleanup_memory(self, nas_lock: threading.Lock) -> dict[str, Any]:
+        if not nas_lock.acquire(blocking=False):
+            raise WorkerMemoryBusyError("Cannot clean worker memory while NAS search is active")
+        try:
+            with self._condition:
+                if (
+                    self._active_run is not None
+                    or self._scheduled_run is not None
+                    or self._reboot_requested
+                ):
+                    raise WorkerMemoryBusyError(
+                        "Cannot clean worker memory while training is active or reboot is requested"
+                    )
+
+                memory_before_mb = _memory_available_mb()
+                process_rss_before_mb = _resident_memory_mb()
+                cache_drop_error = None
+                try:
+                    self._drop_os_page_cache()
+                except RuntimeError as error:
+                    cache_drop_error = str(error)
+
+                run_ids = (
+                    set(self._models)
+                    | set(self._run_architectures)
+                    | set(self._run_model_audits)
+                    | set(self._completed_rounds)
+                    | set(self._results)
+                    | set(self._run_errors)
+                    | {key[0] for key in self._round_weights}
+                    | {key[0] for key in self._round_sample_counts}
+                    | {key[0] for key in self._incoming}
+                )
+                had_models = bool(self._models)
+                self._models.clear()
+                self._run_architectures.clear()
+                self._run_model_audits.clear()
+                self._completed_rounds.clear()
+                self._round_weights.clear()
+                self._round_sample_counts.clear()
+                self._results.clear()
+                self._run_errors.clear()
+                self._incoming.clear()
+
+                if "tensorflow" in sys.modules:
+                    tensorflow = sys.modules["tensorflow"]
+                    tensorflow.keras.backend.clear_session()
+                elif had_models:
+                    import tensorflow as tf
+
+                    tf.keras.backend.clear_session()
+                gc.collect()
+                _trim_process_heap()
+                result = {
+                    "node_id": self.config.node_id,
+                    "cleaned_runs": len(run_ids),
+                    "memory_available_before_mb": memory_before_mb,
+                    "memory_available_after_mb": _memory_available_mb(),
+                    "process_rss_before_mb": process_rss_before_mb,
+                    "process_rss_after_mb": _resident_memory_mb(),
+                    "process_memory_cleaned": True,
+                    "os_page_cache_dropped": cache_drop_error is None,
+                }
+                if cache_drop_error is not None:
+                    result["error"] = cache_drop_error
+        finally:
+            nas_lock.release()
+
+        _log_event("worker_memory_cleaned", **result)
+        return result
+
+    def _drop_os_page_cache(self) -> None:
+        request = Request(
+            "http://127.0.0.1:5005/drop-caches",
+            data=b"",
+            headers={"Authorization": f"Bearer {self.config.api_token}"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip()[:300]
+            raise RuntimeError(
+                f"Privileged cache cleanup helper returned HTTP {error.code}: {detail}"
+            ) from error
+        except (URLError, TimeoutError, OSError) as error:
+            raise RuntimeError(
+                f"Could not reach the privileged cache cleanup helper: {error}"
+            ) from error
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("Privileged cache cleanup helper returned invalid JSON") from error
+        if not isinstance(payload, dict) or payload.get("status") != "ok":
+            raise RuntimeError("Privileged cache cleanup helper returned an invalid response")
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -266,14 +949,21 @@ class WorkerTrainer:
                 "node_id": self.config.node_id,
                 "sample_count": int(self.labels.size),
                 "dataset_split": self.dataset_split,
+                "dataset_name": self.dataset_name,
                 "active_run_id": self._active_run,
                 "scheduled_run_id": self._scheduled_run,
                 "active_round": self._active_round,
+                "active_epoch": self._active_epoch,
+                "total_epochs": self._total_epochs,
+                "active_phase": self._active_phase,
+                "reboot_requested": self._reboot_requested,
                 "training_config": {
                     "rounds": self._rounds,
                     "epochs": self._epochs,
                     "topology": self._topology,
                     "architecture": self._architecture,
+                    "dataset_learning_rate": self.config.dataset_learning_rate,
+                    "dataset_batch_size": self.config.dataset_batch_size,
                 },
                 "last_error": self._run_errors.get(self._scheduled_run or self._active_run or ""),
                 "runs": {
@@ -284,6 +974,22 @@ class WorkerTrainer:
                     for run_id, rows in self._results.items()
                 },
             }
+
+    def begin_reboot(self) -> bool:
+        with self._condition:
+            if (
+                self._active_run is not None
+                or self._scheduled_run is not None
+                or self._reboot_requested
+            ):
+                return False
+            self._reboot_requested = True
+            return True
+
+    def cancel_reboot(self) -> None:
+        with self._condition:
+            self._reboot_requested = False
+            self._condition.notify_all()
 
     def results(self, run_id: str | None = None) -> dict[str, Any]:
         with self._lock:
@@ -297,7 +1003,70 @@ class WorkerTrainer:
                 for key, value in self._run_errors.items()
                 if run_id is None or key == run_id
             }
-        return {"node_id": self.config.node_id, "runs": selected, "errors": errors}
+            progress = None
+            if self._active_run is not None and (
+                run_id is None or run_id == self._active_run
+            ):
+                progress = {
+                    "run_id": self._active_run,
+                    "round": (self._active_round + 1)
+                    if self._active_round is not None
+                    else None,
+                    "epoch": self._active_epoch,
+                    "epochs": self._total_epochs,
+                    "phase": self._active_phase,
+                }
+        return {
+            "node_id": self.config.node_id,
+            "runs": selected,
+            "errors": errors,
+            "progress": progress,
+        }
+
+    def cleanup_run(self, run_id: str) -> dict[str, Any]:
+        if RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("Invalid run ID")
+        deadline = time.monotonic() + self.config.peer_timeout_seconds
+        with self._condition:
+            while self._active_run is not None or self._scheduled_run is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("Cannot clean worker memory while training is active")
+                self._condition.wait(timeout=remaining)
+
+            had_model = run_id in self._models
+            had_run_data = (
+                had_model
+                or run_id in self._run_architectures
+                or run_id in self._run_model_audits
+                or run_id in self._completed_rounds
+                or run_id in self._results
+                or run_id in self._run_errors
+                or any(key[0] == run_id for key in self._round_weights)
+                or any(key[0] == run_id for key in self._incoming)
+            )
+            self._models.pop(run_id, None)
+            self._run_architectures.pop(run_id, None)
+            self._run_model_audits.pop(run_id, None)
+            self._completed_rounds.pop(run_id, None)
+            self._results.pop(run_id, None)
+            self._run_errors.pop(run_id, None)
+            for key in [key for key in self._round_weights if key[0] == run_id]:
+                self._round_weights.pop(key, None)
+                self._round_sample_counts.pop(key, None)
+            for key in [key for key in self._incoming if key[0] == run_id]:
+                self._incoming.pop(key, None)
+
+            if had_run_data:
+                if had_model:
+                    import tensorflow as tf
+
+                    tf.keras.backend.clear_session()
+                gc.collect()
+                _trim_process_heap()
+
+        _log_event("run_memory_cleaned", run_id=run_id)
+        return {"run_id": run_id, "cleaned": True}
 
     @staticmethod
     def _load_shard(path: str) -> tuple[np.ndarray, np.ndarray]:
@@ -319,6 +1088,7 @@ class WorkerTrainer:
         topology: str,
         dataset_split: str = "stratified",
         architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
+        dataset_name: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Rounds must be 1-100 and local epochs 1-50")
@@ -331,23 +1101,67 @@ class WorkerTrainer:
             "star",
         }:
             raise ValueError("Unsupported training topology")
-        if dataset_split not in {"stratified", "dirichlet_a03", "dirichlet_a05"}:
+        if dataset_split not in {
+            "stratified",
+            "dirichlet_a01",
+            "dirichlet_a03",
+            "dirichlet_a05",
+            "dirichlet_a07",
+        }:
             raise ValueError("Unsupported CIFAR-10 dataset split")
-        selected_architecture = architecture_spec(architecture)
-        shard_path = (
-            self.config.data_path
-            if dataset_split == "stratified"
-            else self.config.shard_paths.get(dataset_split)
-        )
-        if not shard_path:
-            raise ValueError(f"Worker shard for {dataset_split} is not installed")
-        images, labels = self._load_shard(shard_path)
+        if dataset_name is not None:
+            if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
+                raise ValueError("Invalid dataset_name")
+
+
+            shard_path = Path(self.config.dataset_root).resolve() / dataset_name / "train.npz"
+            images, labels, class_names = load_dataset_shard(shard_path)
+            if isinstance(architecture, dict) and architecture.get("model_type") in {
+                "custom",
+                "pretrained_deit",
+            }:
+                try:
+                    selected_architecture, _ = validate_model_design(
+                        architecture,
+                        tuple(int(value) for value in images.shape[1:]),
+                        len(class_names),
+                    )
+                except ModelDesignError as error:
+                    raise ValueError(str(error)) from error
+                selected_architecture = {
+                    **selected_architecture,
+                    **{
+                        key: value
+                        for key, value in architecture.items()
+                        if key not in {"layers", "model_type"}
+                    },
+                    "model_type": architecture["model_type"],
+                }
+                if architecture.get("model_id") is not None:
+                    selected_architecture["model_id"] = architecture["model_id"]
+            else:
+                selected_architecture = architecture_spec(architecture)
+            selected_dataset_split = f"dataset:{dataset_name}"
+        else:
+            selected_architecture = architecture_spec(architecture)
+            shard_path = (
+                self.config.data_path
+                if dataset_split == "stratified"
+                else self.config.shard_paths.get(dataset_split)
+            )
+            if not shard_path:
+                raise ValueError(f"Worker shard for {dataset_split} is not installed")
+            images, labels = self._load_shard(shard_path)
+            class_names = None
+            selected_dataset_split = dataset_split
         with self._lock:
             if self._scheduled_run is not None or self._active_run is not None:
                 raise RuntimeError("Cannot change worker configuration while training is active")
             self.images = images
             self.labels = labels
-            self.dataset_split = dataset_split
+            self.dataset_split = selected_dataset_split
+            self.dataset_name = dataset_name
+            self._dataset_class_names = class_names
             self._rounds = rounds
             self._epochs = epochs
             self._topology = topology
@@ -356,7 +1170,8 @@ class WorkerTrainer:
             "rounds": rounds,
             "epochs": epochs,
             "topology": topology,
-            "dataset_split": dataset_split,
+            "dataset_split": selected_dataset_split,
+            "dataset_name": dataset_name,
             "sample_count": int(labels.size),
             "architecture": selected_architecture,
         }
@@ -374,6 +1189,8 @@ class WorkerTrainer:
         }:
             raise ValueError("Unsupported training topology")
         with self._lock:
+            if self._reboot_requested:
+                raise RuntimeError("The Jetson is preparing to reboot")
             if self._scheduled_run is not None or self._active_run is not None:
                 raise RuntimeError(f"Training is already active for {self._scheduled_run}")
             rounds, epochs = self._rounds, self._epochs
@@ -396,6 +1213,96 @@ class WorkerTrainer:
             topology=topology,
         )
         return {"accepted": True, "run_id": run_id, "rounds": rounds, "epochs": epochs}
+
+    def _create_run_model(self, run_id: str, seed: int) -> Any:
+        initial_model_loaded = False
+        architecture_sha256: str | None = None
+        weights_sha256: str | None = None
+        if self.dataset_name is None:
+            model = build_cifar10_model(seed, self._architecture)
+            compile_cifar10_model(model)
+            model_architecture: Any = self._architecture
+            batch_size = self.config.dataset_batch_size
+        else:
+            if self._dataset_class_names is None:
+                raise RuntimeError("Dataset class metadata is unavailable")
+            model, installed_architecture = _load_installed_dataset_initial_model(
+                self.config,
+                self.dataset_name,
+                input_shape=tuple(int(value) for value in self.images.shape[1:]),
+                class_names=self._dataset_class_names,
+            ) or (None, None)
+            if model is None:
+                if self._architecture.get("model_type") in {"custom", "pretrained_deit"}:
+                    model = build_dataset_model(
+                        input_shape=tuple(int(value) for value in self.images.shape[1:]),
+                        num_classes=len(self._dataset_class_names),
+                        architecture=self._architecture,
+                        seed=seed,
+                    )
+                else:
+                    from worker.nas_search import _build_dataset_candidate
+
+                    model = _build_dataset_candidate(
+                        input_shape=tuple(int(value) for value in self.images.shape[1:]),
+                        num_classes=len(self._dataset_class_names),
+                        architecture=self._architecture,
+                        seed=seed,
+                    )
+                model_architecture = self._architecture
+            else:
+                model_architecture = installed_architecture
+                initial_model_loaded = True
+                metadata_path = (
+                    Path(self.config.dataset_root).resolve()
+                    / self.dataset_name
+                    / "models"
+                    / "initial_model"
+                    / "metadata.json"
+                )
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                architecture_sha256 = metadata["architecture_sha256"]
+                weights_sha256 = metadata["weights_sha256"]
+            import tensorflow as tf
+
+            training_settings = self._architecture.get("training", {})
+            optimizer_name = training_settings.get("optimizer", "adam")
+            learning_rate = float(
+                training_settings.get(
+                    "learning_rate",
+                    self.config.dataset_learning_rate,
+                )
+            )
+            optimizer_types = {
+                "adam": tf.keras.optimizers.Adam,
+                "adamw": tf.keras.optimizers.AdamW,
+                "sgd": tf.keras.optimizers.SGD,
+                "rmsprop": tf.keras.optimizers.RMSprop,
+            }
+            if optimizer_name not in optimizer_types:
+                raise ValueError(f"Unsupported optimizer: {optimizer_name}")
+            model.compile(
+                optimizer=optimizer_types[optimizer_name](learning_rate=learning_rate),
+                loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+                metrics=["accuracy"],
+            )
+            batch_size = int(
+                training_settings.get("batch_size", self.config.dataset_batch_size)
+            )
+        import tensorflow as tf
+
+        self._models[run_id] = model
+        self._run_architectures[run_id] = model_architecture
+        self._results[run_id] = []
+        self._run_model_audits[run_id] = {
+            "learning_rate": float(tf.keras.backend.get_value(model.optimizer.learning_rate)),
+            "batch_size": batch_size,
+            "optimizer": type(model.optimizer).__name__,
+            "initial_model_loaded": initial_model_loaded,
+            "architecture_sha256": architecture_sha256,
+            "weights_sha256": weights_sha256,
+        }
+        return model
 
     def _run_configured_rounds(
         self,
@@ -433,7 +1340,8 @@ class WorkerTrainer:
             weights = self._round_weights.get((run_id, round_index))
             if weights is None:
                 raise KeyError("Requested model is not available")
-        return serialize_weights(weights), int(self.labels.size)
+            sample_count = self._round_sample_counts[(run_id, round_index)]
+        return serialize_weights(weights), sample_count
 
     def accept_peer_weights(
         self,
@@ -478,38 +1386,77 @@ class WorkerTrainer:
         neighbors = topology_neighbours(self.config.node_id, worker_ids, topology)
         expected_senders = topology_senders(self.config.node_id, worker_ids, topology)
         with self._lock:
+            if self._reboot_requested:
+                raise RuntimeError("The Jetson is preparing to reboot")
             if self._active_run is not None:
                 raise RuntimeError(f"Training is already active for {self._active_run}")
             current_round = self._completed_rounds.get(run_id, -1)
             if round_index != current_round + 1:
                 raise ValueError(f"Expected round {current_round + 1}, received {round_index}")
             if run_id not in self._models:
-                model = build_cifar10_model(seed, self._architecture)
-                compile_cifar10_model(model)
-                self._models[run_id] = model
-                self._results[run_id] = []
+                self._create_run_model(run_id, seed)
             model = self._models[run_id]
             self._active_run = run_id
             self._active_round = round_index
+            self._active_epoch = 0
+            self._total_epochs = epochs
+            self._active_phase = "local_training"
         started = time.perf_counter()
         before_available_kb = _memory_available_kb()
         rss_before = _resident_memory_mb()
-        train_started = time.perf_counter()
+        initial_validation_accuracy: float | None = None
         try:
             import tensorflow as tf
 
+            if self.dataset_name is None:
+                training_images = self.images
+                training_labels = self.labels
+                validation_images = None
+                validation_labels = None
+                train_sample_count = int(self.labels.size)
+            else:
+                from worker.nas_search import _split_indices
+
+                training_indices, validation_indices = _split_indices(self.labels, seed)
+                training_images = self.images[training_indices]
+                training_labels = self.labels[training_indices]
+                validation_images = self.images[validation_indices]
+                validation_labels = self.labels[validation_indices]
+                train_sample_count = int(training_labels.size)
+
+            if validation_images is not None and validation_labels is not None:
+                from common.cifar_model import classification_metrics
+
+                if round_index == 0:
+                    initial_logits = model.predict(
+                        validation_images,
+                        batch_size=min(256, int(validation_labels.size)),
+                        verbose=0,
+                    )
+                    initial_validation_accuracy = classification_metrics(
+                        validation_labels,
+                        initial_logits,
+                    )["accuracy"]
+
             cancel_event = self._cancel
+            trainer = self
 
             class StopOnRequest(tf.keras.callbacks.Callback):
+                def on_epoch_begin(self, epoch: int, logs: Any = None) -> None:
+                    with trainer._lock:
+                        if trainer._active_run == run_id:
+                            trainer._active_epoch = epoch + 1
+
                 def on_train_batch_end(self, batch: int, logs: Any = None) -> None:
                     if cancel_event.is_set():
                         self.model.stop_training = True
 
+            train_started = time.perf_counter()
             history = model.fit(
-                self.images,
-                self.labels,
+                training_images,
+                training_labels,
                 epochs=epochs,
-                batch_size=128,
+                batch_size=int(self._run_model_audits[run_id]["batch_size"]),
                 shuffle=True,
                 verbose=0,
                 callbacks=[StopOnRequest()],
@@ -517,6 +1464,8 @@ class WorkerTrainer:
             train_seconds = time.perf_counter() - train_started
             if self._cancel.is_set():
                 raise RuntimeError("Training was cancelled before peer exchange")
+            with self._lock:
+                self._active_phase = "peer_exchange"
             local_weights = [np.asarray(item) for item in model.get_weights()]
             payload = serialize_weights(local_weights)
             sent_bytes = 0
@@ -533,7 +1482,7 @@ class WorkerTrainer:
                         "X-Run-ID": run_id,
                         "X-Round": str(round_index),
                         "X-Sender-Node": self.config.node_id,
-                        "X-Sample-Count": str(self.labels.size),
+                        "X-Sample-Count": str(train_sample_count),
                     },
                     method="POST",
                 )
@@ -553,6 +1502,7 @@ class WorkerTrainer:
                 except (HTTPError, URLError, TimeoutError, OSError) as error:
                     raise RuntimeError(f"Peer exchange with {peer_id} failed: {error}") from error
             deadline = time.monotonic() + self.config.peer_timeout_seconds
+            peer_wait_started = time.perf_counter()
             with self._condition:
                 while not set(expected_senders).issubset(
                     self._incoming.get((run_id, round_index), {})
@@ -568,7 +1518,8 @@ class WorkerTrainer:
                         raise TimeoutError(f"Timed out waiting for peer weights from {missing}")
                     self._condition.wait(timeout=min(remaining, 1.0))
                 incoming = self._incoming.pop((run_id, round_index))
-            weighted_models = [(local_weights, int(self.labels.size))]
+            peer_wait_seconds = time.perf_counter() - peer_wait_started
+            weighted_models = [(local_weights, train_sample_count)]
             bytes_received = 0
             for peer_id in expected_senders:
                 peer_weights, sample_count, received_bytes = incoming[peer_id]
@@ -576,6 +1527,28 @@ class WorkerTrainer:
                 bytes_received += received_bytes
             averaged = weighted_average_weights(weighted_models)
             model.set_weights(averaged)
+            validation_metrics: dict[str, Any] = {}
+            if validation_images is not None and validation_labels is not None:
+                logits = model.predict(
+                    validation_images,
+                    batch_size=min(256, int(validation_labels.size)),
+                    verbose=0,
+                )
+                metrics = classification_metrics(validation_labels, logits)
+                validation_metrics = {
+                    "validation_accuracy": metrics["accuracy"],
+                    "validation_macro_precision": metrics["macro_precision"],
+                    "validation_macro_recall": metrics["macro_recall"],
+                    "validation_macro_f1": metrics["macro_f1"],
+                    "validation_sample_count": int(validation_labels.size),
+                    "validation_per_class_precision": metrics["per_class_precision"],
+                    "validation_per_class_recall": metrics["per_class_recall"],
+                    "validation_per_class_f1": metrics["per_class_f1"],
+                    "validation_confusion_matrix_counts": metrics["confusion_matrix_counts"],
+                    "validation_confusion_matrix_row_normalized_percent": (
+                        metrics["confusion_matrix_row_normalized_percent"]
+                    ),
+                }
             exchange_seconds = time.perf_counter() - exchange_started
             rss_after = _resident_memory_mb()
             after_available_kb = _memory_available_kb()
@@ -592,10 +1565,18 @@ class WorkerTrainer:
                 "topology": topology,
                 "architecture": self._architecture,
                 "dataset_split": self.dataset_split,
+                "dataset_name": self.dataset_name,
                 "local_epochs": epochs,
-                "sample_count": int(self.labels.size),
+                "sample_count": train_sample_count,
+                **self._run_model_audits[run_id],
                 "training_loss": history_values.get("loss"),
                 "training_accuracy": history_values.get("accuracy"),
+                **(
+                    {"initial_validation_accuracy": initial_validation_accuracy}
+                    if initial_validation_accuracy is not None
+                    else {}
+                ),
+                **validation_metrics,
                 "training_seconds": round(train_seconds, 3),
                 "round_seconds": round(time.perf_counter() - started, 3),
                 "rss_before_mb": rss_before,
@@ -610,6 +1591,7 @@ class WorkerTrainer:
                 "peer_messages_sent": len(neighbors),
                 "peer_messages_received": len(expected_senders),
                 "exchange_seconds": round(exchange_seconds, 3),
+                "peer_wait_seconds": round(peer_wait_seconds, 3),
                 "neighbours": list(neighbors),
                 "weight_bytes": model_size_bytes(model),
             }
@@ -618,6 +1600,7 @@ class WorkerTrainer:
                 self._round_weights[(run_id, round_index)] = [
                     np.asarray(item).copy() for item in averaged
                 ]
+                self._round_sample_counts[(run_id, round_index)] = train_sample_count
                 self._results[run_id].append(result)
             _log_event("round_completed", **result)
             return result
@@ -637,10 +1620,18 @@ class WorkerTrainer:
             with self._condition:
                 self._active_run = None
                 self._active_round = None
+                self._active_epoch = None
+                self._total_epochs = None
+                self._active_phase = None
                 self._condition.notify_all()
 
 
 def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPRequestHandler]:
+    nas_lock = threading.Lock()
+    nas_control_lock = threading.Lock()
+    nas_cancel_event = threading.Event()
+    nas_search_active = False
+
     class WorkerHandler(BaseHTTPRequestHandler):
         server_version = "DFLWorkerTraining/1.0"
         sys_version = ""
@@ -655,9 +1646,56 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 return
             if parsed.path == "/v1/status":
                 self._send_json(HTTPStatus.OK, trainer.status())
+            elif parsed.path == "/v1/processes":
+                try:
+                    report = _process_snapshot()
+                    report["node_id"] = config.node_id
+                    report["training"] = trainer.status()
+                    with nas_control_lock:
+                        report["nas_active"] = nas_search_active
+                    self._send_json(HTTPStatus.OK, report)
+                except (OSError, subprocess.SubprocessError, ValueError) as error:
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": f"Could not inspect worker processes: {error}"},
+                    )
             elif parsed.path == "/v1/results":
                 run_id = parse_qs(parsed.query).get("run_id", [None])[0]
                 self._send_json(HTTPStatus.OK, trainer.results(run_id))
+            elif re.fullmatch(r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}", parsed.path):
+                dataset_name = parsed.path.rsplit("/", 1)[-1]
+                metadata_path = (
+                    Path(config.dataset_root).resolve()
+                    / dataset_name
+                    / "metadata.json"
+                )
+                with trainer._lock:
+                    if not metadata_path.is_file():
+                        self._send_json(HTTPStatus.NOT_FOUND, {"error": "dataset_not_found"})
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        json.loads(metadata_path.read_text(encoding="utf-8")),
+                    )
+            elif re.fullmatch(
+                r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/initial-model",
+                parsed.path,
+            ):
+                dataset_name = parsed.path.split("/")[-2]
+                metadata_path = (
+                    Path(config.dataset_root).resolve()
+                    / dataset_name
+                    / "models"
+                    / "initial_model"
+                    / "metadata.json"
+                )
+                if not metadata_path.is_file():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "initial_model_not_found"})
+                    return
+                self._send_json(
+                    HTTPStatus.OK,
+                    json.loads(metadata_path.read_text(encoding="utf-8")),
+                )
             elif parsed.path == "/v1/weights":
                 query = parse_qs(parsed.query)
                 try:
@@ -682,20 +1720,183 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 self._receive_peer_weights()
                 return
             if not is_authorized(self.headers.get("Authorization"), config.api_token):
+                self._discard_request_body(MAX_DATASET_SHARD_BYTES)
                 self._unauthorized()
                 return
             if parsed.path == "/v1/config":
                 self._configure()
+            elif parsed.path == "/v1/peers":
+                self._configure_peers()
             elif parsed.path == "/v1/nas/search":
                 self._nas_search()
+            elif re.fullmatch(
+                r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/shard",
+                parsed.path,
+            ):
+                dataset_name = parsed.path.split("/")[-2]
+                self._install_dataset_shard(dataset_name)
+            elif re.fullmatch(
+                r"/v1/datasets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/initial-model",
+                parsed.path,
+            ):
+                dataset_name = parsed.path.split("/")[-2]
+                self._install_initial_model(dataset_name)
             elif parsed.path == "/v1/start":
                 self._start_run()
             elif parsed.path == "/v1/train-round":
                 self._train_round()
             elif parsed.path == "/v1/cancel":
                 self._send_json(HTTPStatus.OK, trainer.cancel())
+            elif parsed.path == "/v1/nas/cancel":
+                with nas_control_lock:
+                    if not nas_search_active:
+                        self._send_json(
+                            HTTPStatus.OK,
+                            {"accepted": False, "message": "No NAS search is active."},
+                        )
+                        return
+                    nas_cancel_event.set()
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"accepted": True, "message": "NAS search cancellation requested."},
+                    )
+            elif parsed.path == "/v1/memory/cleanup":
+                try:
+                    result = trainer.cleanup_memory(nas_lock)
+                except WorkerMemoryBusyError as error:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+                except RuntimeError as error:
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                else:
+                    self._send_json(HTTPStatus.OK, result)
+            elif parsed.path == "/v1/system/reboot":
+                if self.headers.get("Content-Length", "0") != "0":
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "request_body_not_allowed"})
+                    return
+                if not nas_lock.acquire(blocking=False):
+                    self._send_json(
+                        HTTPStatus.CONFLICT,
+                        {"error": "Cannot reboot while NAS search is active"},
+                    )
+                    return
+                try:
+                    if not trainer.begin_reboot():
+                        self._send_json(
+                            HTTPStatus.CONFLICT,
+                            {"error": "Cannot reboot while worker training is active"},
+                        )
+                        return
+                    request = Request(
+                        "http://127.0.0.1:5005/reboot",
+                        data=b"",
+                        headers={"Authorization": f"Bearer {config.api_token}"},
+                        method="POST",
+                    )
+                    try:
+                        with urlopen(request, timeout=5) as response:
+                            payload = json.loads(response.read().decode("utf-8"))
+                        if (
+                            not isinstance(payload, dict)
+                            or payload.get("status") != "accepted"
+                            or payload.get("action") != "reboot"
+                        ):
+                            raise RuntimeError("Privileged reboot helper returned an invalid response")
+                    except HTTPError as error:
+                        detail = error.read().decode("utf-8", errors="replace").strip()[:300]
+                        raise RuntimeError(
+                            f"Privileged reboot helper returned HTTP {error.code}: {detail}"
+                        ) from error
+                    except (URLError, TimeoutError, OSError) as error:
+                        raise RuntimeError(
+                            f"Could not reach the privileged reboot helper: {error}"
+                        ) from error
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise RuntimeError(
+                            "Privileged reboot helper returned invalid JSON"
+                        ) from error
+                except RuntimeError as error:
+                    trainer.cancel_reboot()
+                    self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+                else:
+                    self._send_json(HTTPStatus.ACCEPTED, payload)
+                finally:
+                    nas_lock.release()
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+        def do_PUT(self) -> None:
+            parsed = urlparse(self.path)
+            if not is_authorized(self.headers.get("Authorization"), config.api_token):
+                self._discard_request_body(MAX_DATASET_SHARD_BYTES)
+                self._unauthorized()
+                return
+            match = re.fullmatch(
+                r"/v1/datasets/([A-Za-z0-9][A-Za-z0-9._-]{0,63})/shard",
+                parsed.path,
+            )
+            if match is None:
+                self._discard_request_body(MAX_DATASET_SHARD_BYTES)
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            self._install_dataset_shard(match.group(1), replace_existing=True)
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            if not is_authorized(self.headers.get("Authorization"), config.api_token):
+                self._unauthorized()
+                return
+            run_match = re.fullmatch(
+                r"/v1/runs/([A-Za-z0-9][A-Za-z0-9._-]{0,63})",
+                parsed.path,
+            )
+            if run_match is not None:
+                try:
+                    result = trainer.cleanup_run(run_match.group(1))
+                except RuntimeError as error:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                else:
+                    self._send_json(HTTPStatus.OK, result)
+                return
+            match = re.fullmatch(
+                r"/v1/datasets/([A-Za-z0-9][A-Za-z0-9._-]{0,63})/initial-model",
+                parsed.path,
+            )
+            if match is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            dataset_name = match.group(1)
+            with trainer._lock:
+                if trainer._active_run is not None or trainer._scheduled_run is not None:
+                    self._send_json(
+                        HTTPStatus.CONFLICT,
+                        {"error": "Cannot remove an initial model while training is active"},
+                    )
+                    return
+
+                dataset_root = Path(config.dataset_root).resolve()
+                dataset_directory = dataset_root / dataset_name
+                models_directory = dataset_directory / "models"
+                model_path = models_directory / "initial_model"
+                if (
+                    dataset_directory.is_symlink()
+                    or dataset_directory.resolve().parent != dataset_root
+                    or models_directory.is_symlink()
+                    or model_path.is_symlink()
+                ):
+                    self._send_json(HTTPStatus.CONFLICT, {"error": "Initial-model path is unsafe"})
+                    return
+                if model_path.exists():
+                    if not model_path.is_dir():
+                        self._send_json(
+                            HTTPStatus.CONFLICT,
+                            {"error": "Initial-model path is not a directory"},
+                        )
+                        return
+                    shutil.rmtree(model_path)
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.end_headers()
 
         def _configure(self) -> None:
             try:
@@ -706,6 +1907,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     topology=payload["topology"],
                     dataset_split=payload.get("dataset_split", "stratified"),
                     architecture=payload.get("architecture", FIXED_ARCHITECTURE),
+                    dataset_name=payload.get("dataset_name"),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
@@ -714,27 +1916,268 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
             else:
                 self._send_json(HTTPStatus.OK, result)
 
-        def _nas_search(self) -> None:
+        def _configure_peers(self) -> None:
             try:
                 payload = self._read_json()
-                if trainer.dataset_split != "stratified":
-                    raise ValueError("NAS search requires the stratified local worker shard")
-                with trainer._lock:
-                    if trainer._active_run is not None or trainer._scheduled_run is not None:
-                        raise RuntimeError("NAS search cannot run while worker training is active")
-                result = search_cifar10_architectures_isolated(
-                    trainer.config.data_path,
-                    seed=payload.get("seed", 2026),
-                    time_limit_seconds=payload.get("time_limit_seconds", MAX_SEARCH_SECONDS),
-                    node_id=config.node_id,
-                    logger=_log_event,
+                raw_peers = payload["peers"]
+                if not isinstance(raw_peers, list):
+                    raise ValueError("peers must be a list")
+                peers = tuple(
+                    Peer(
+                        node_id=str(item["node_id"]),
+                        base_url=str(item["base_url"]).rstrip("/"),
+                        token=str(item["token"]),
+                    )
+                    for item in raw_peers
+                    if isinstance(item, dict)
                 )
+                if len(peers) != len(raw_peers):
+                    raise ValueError("Each peer must be an object")
+                result = trainer.configure_peers(peers)
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
-            except (KeyError, TypeError, ValueError, TimeoutError, MemoryError) as error:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             else:
                 self._send_json(HTTPStatus.OK, result)
+
+        def _install_dataset_shard(
+            self,
+            dataset_name: str,
+            *,
+            replace_existing: bool = False,
+        ) -> None:
+            with trainer._lock:
+                if trainer._active_run is not None or trainer._scheduled_run is not None:
+                    self._discard_request_body(MAX_DATASET_SHARD_BYTES)
+                    self._send_json(
+                        HTTPStatus.CONFLICT,
+                        {"error": "Cannot change a dataset while worker training is active"},
+                    )
+                    return
+                if not nas_lock.acquire(blocking=False):
+                    self._discard_request_body(MAX_DATASET_SHARD_BYTES)
+                    self._send_json(
+                        HTTPStatus.CONFLICT,
+                        {"error": "Cannot change a dataset while NAS is active"},
+                    )
+                    return
+                try:
+                    try:
+                        length = int(self.headers.get("Content-Length", ""))
+                    except ValueError:
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length"})
+                        return
+                    if not 1 <= length <= MAX_DATASET_SHARD_BYTES:
+                        self._send_json(
+                            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            {"error": "Dataset shard payload size is out of range"},
+                        )
+                        return
+                    payload = self.rfile.read(length)
+                    if len(payload) != length:
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Dataset shard was truncated"})
+                        return
+                    try:
+                        result = install_dataset_shard(
+                            config,
+                            dataset_name,
+                            payload,
+                            replace_existing=replace_existing,
+                        )
+                    except FileExistsError as error:
+                        self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+                    except ValueError as error:
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                    except OSError as error:
+                        LOGGER.exception("Could not save uploaded dataset shard for %s", config.node_id)
+                        self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+                    else:
+                        self._send_json(HTTPStatus.OK, result)
+                finally:
+                    nas_lock.release()
+
+        def _install_initial_model(self, dataset_name: str) -> None:
+            with trainer._lock:
+                if trainer._active_run is not None or trainer._scheduled_run is not None:
+                    self._discard_request_body(MAX_DATASET_SHARD_BYTES)
+                    self._send_json(
+                        HTTPStatus.CONFLICT,
+                        {"error": "Cannot install a model while worker training is active"},
+                    )
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", ""))
+                except ValueError:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length"})
+                    return
+                if not 1 <= length <= MAX_DATASET_SHARD_BYTES:
+                    self._send_json(
+                        HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        {"error": "Initial model payload size is out of range"},
+                    )
+                    return
+                payload = self.rfile.read(length)
+                if len(payload) != length:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Initial model was truncated"})
+                    return
+                try:
+                    result = install_initial_model(config, dataset_name, payload)
+                except FileNotFoundError as error:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                except FileExistsError as error:
+                    self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                except ImportError as error:
+                    LOGGER.exception("Model-building dependency unavailable on %s", config.node_id)
+                    self._send_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"error": f"Model-building dependency unavailable: {error}"},
+                    )
+                except OSError as error:
+                    LOGGER.exception("Could not save initial model for %s", config.node_id)
+                    self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+                else:
+                    self._send_json(HTTPStatus.OK, result)
+
+        def _nas_search(self) -> None:
+            nonlocal nas_search_active
+            dataset_name = "<unknown>"
+            try:
+                payload = self._read_json()
+                dataset_name = payload["dataset_name"]
+                if not isinstance(dataset_name, str) or not DATASET_NAME_PATTERN.fullmatch(
+                    dataset_name
+                ):
+                    raise ValueError("NAS search requires a valid dataset_name")
+                with trainer._lock:
+                    if (
+                        trainer._active_run is not None
+                        or trainer._scheduled_run is not None
+                        or trainer._reboot_requested
+                    ):
+                        raise RuntimeError("NAS search cannot run while training or reboot is active")
+                with nas_control_lock:
+                    if not nas_lock.acquire(blocking=False):
+                        raise RuntimeError("Another NAS search is already active on this worker")
+                    nas_cancel_event.clear()
+                    nas_search_active = True
+                try:
+                    dataset_root = Path(config.dataset_root).resolve()
+                    dataset_directory = dataset_root / dataset_name
+                    dataset_path = dataset_directory.resolve()
+                    if (
+                        dataset_directory.is_symlink()
+                        or dataset_path.parent != dataset_root
+                    ):
+                        raise ValueError("Selected dataset path is unsafe")
+                    shard_path = dataset_path / "train.npz"
+                    metadata_path = dataset_path / "metadata.json"
+                    if not shard_path.is_file() or not metadata_path.is_file():
+                        raise FileNotFoundError(
+                            f"Preprocessed dataset shard is not installed: {dataset_name}"
+                        )
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    class_names = metadata.get("class_names")
+                    shape = metadata.get("shape")
+                    rows = metadata.get("rows")
+                    if (
+                        not isinstance(class_names, list)
+                        or not class_names
+                        or not isinstance(shape, list)
+                        or len(shape) != 4
+                        or any(not isinstance(dimension, int) or dimension < 1 for dimension in shape)
+                        or not isinstance(rows, int)
+                        or rows < 1
+                    ):
+                        raise ValueError("Installed dataset metadata is invalid for NAS search")
+                    if shape[0] != rows:
+                        raise ValueError(
+                            "Installed dataset sample count does not match its shape"
+                        )
+                    dataset_samples = rows
+                    dataset_image_shape = shape[1:]
+                    smoke_test = payload.get("smoke_test", False)
+                    if not isinstance(smoke_test, bool):
+                        raise ValueError("NAS smoke_test must be a boolean")
+                    architectures = payload.get("architectures")
+                    epochs = payload.get("epochs", 1)
+                    if smoke_test:
+                        architectures = [
+                            smoke_test_architecture(
+                                input_shape=tuple(dataset_image_shape),
+                                num_classes=len(class_names),
+                            )
+                        ]
+                        epochs = 1
+                    if dataset_name == "cifar10":
+                        images, labels, shard_classes = load_dataset_shard(shard_path)
+                        if shard_classes != class_names:
+                            raise ValueError("NAS shard classes do not match installed dataset metadata")
+                        try:
+                            result = search_dataset_architectures(
+                                images,
+                                labels,
+                                shard_classes,
+                                seed=payload.get("seed", 2026),
+                                time_limit_seconds=payload.get(
+                                    "time_limit_seconds", MAX_SEARCH_SECONDS
+                                ),
+                                node_id=config.node_id,
+                                logger=_log_event,
+                                architectures=architectures,
+                                epochs=epochs,
+                                cancel_event=nas_cancel_event,
+                                reuse_tensorflow_runtime=True,
+                                memory_constrained=dataset_name == "cifar10",
+                            )
+                        finally:
+                            del images, labels, shard_classes
+                            tensorflow = sys.modules.get("tensorflow")
+                            if tensorflow is not None:
+                                tensorflow.keras.backend.clear_session()
+                            gc.collect()
+                            _trim_process_heap()
+                    else:
+                        result = search_dataset_architectures_isolated(
+                            str(shard_path),
+                            seed=payload.get("seed", 2026),
+                            time_limit_seconds=payload.get(
+                                "time_limit_seconds", MAX_SEARCH_SECONDS
+                            ),
+                            node_id=config.node_id,
+                            logger=_log_event,
+                            architectures=architectures,
+                            epochs=epochs,
+                            cancel_event=nas_cancel_event,
+                        )
+                    if result.get("dataset_classes") != class_names:
+                        raise ValueError("NAS result classes do not match the dataset shard")
+                    if smoke_test:
+                        result["smoke_test"] = True
+                        result["search_method"] = "single_candidate_smoke_test"
+                    result["dataset_name"] = dataset_name
+                    result["dataset_samples"] = dataset_samples
+                    result["dataset_image_shape"] = dataset_image_shape
+                finally:
+                    with nas_control_lock:
+                        nas_search_active = False
+                        nas_lock.release()
+            except FileNotFoundError as error:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                return
+            except RuntimeError as error:
+                self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
+                return
+            except (KeyError, TypeError, ValueError, TimeoutError, MemoryError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            except OSError as error:
+                LOGGER.exception("Dataset NAS failed to read %s on %s", dataset_name, config.node_id)
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+                return
+            self._send_json(HTTPStatus.OK, result)
 
         def _start_run(self) -> None:
             try:
@@ -777,6 +2220,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 self.headers.get("Authorization"),
                 peer.token,
             ):
+                self._discard_request_body(MAX_WEIGHT_BYTES)
                 self._unauthorized()
                 return
             try:
@@ -812,6 +2256,18 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 {"error": "unauthorized"},
                 {"WWW-Authenticate": "Bearer"},
             )
+
+        def _discard_request_body(self, maximum_bytes: int) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.close_connection = True
+                return
+            if length < 0 or length > maximum_bytes:
+                self.close_connection = True
+                return
+            if length and len(self.rfile.read(length)) != length:
+                self.close_connection = True
 
         def _send_json(
             self,

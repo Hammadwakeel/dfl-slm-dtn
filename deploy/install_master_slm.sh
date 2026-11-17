@@ -12,14 +12,20 @@ if ! getent passwd hammad >/dev/null; then
 fi
 for required in \
   "$stage_dir/master/app.py" \
+  "$stage_dir/master/reply_inference.py" \
+  "$stage_dir/master/reply_service.py" \
   "$stage_dir/master/__init__.py" \
   "$stage_dir/master/wsgi.py" \
   "$stage_dir/master/requirements.txt" \
   "$stage_dir/master/training.py" \
   "$stage_dir/master/cifar_evaluator.py" \
+  "$stage_dir/master/tests/test_reply_service.py" \
   "$stage_dir/common/__init__.py" \
+  "$stage_dir/common/agent_tools.py" \
   "$stage_dir/common/cifar_model.py" \
+  "$stage_dir/common/dataset_nas.py" \
   "$stage_dir/common/nas.py" \
+  "$stage_dir/common/model_design.py" \
   "$stage_dir/common/slm_action_schema.json" \
   "$stage_dir/data/cifar10_test.npz" \
   "$stage_dir/data/cifar10_train.npz" \
@@ -28,6 +34,8 @@ for required in \
   "$stage_dir/topology_opt/selector.py" \
   "$stage_dir/topology_opt/reward_config.json" \
   "$stage_dir/master.env" \
+  "$stage_dir/reply.env" \
+  "$stage_dir/dfl-slm-reply.service" \
   "$stage_dir/$service_name"; do
   if [[ ! -f "$required" ]]; then
     printf 'Required staged file is missing: %s\n' "$required" >&2
@@ -54,16 +62,83 @@ grep -q '^DFL_STATUS_API_TOKEN=.\{32,\}$' "$stage_dir/master.env" || {
   printf 'Status API token is missing or too short\n' >&2
   exit 1
 }
+grep -q '^DFL_CHAT_API_TOKEN=.\{32,\}$' "$stage_dir/master.env" || {
+  printf 'Read-only browser chat token is missing or too short\n' >&2
+  exit 1
+}
+grep -q '^DFL_CHAT_ALLOWED_ORIGINS=.\+' "$stage_dir/master.env" || {
+  printf 'Allowed browser chat origins are missing\n' >&2
+  exit 1
+}
 grep -qxF 'DFL_PORT=5003' "$stage_dir/master.env" || {
   printf 'SLM service must be configured for TCP/5003\n' >&2
   exit 1
 }
+grep -q '^SLM_MODEL_NAME=.\+' "$stage_dir/master.env" || {
+  printf 'Coordinator Ollama model is missing\n' >&2
+  exit 1
+}
+slm_model="$(sed -n 's/^SLM_MODEL_NAME=//p' "$stage_dir/master.env")"
+if [[ "$(grep -c '^SLM_MODEL_NAME=' "$stage_dir/master.env")" != 1 ||
+      ! "$slm_model" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+  printf 'Coordinator Ollama model identifier is invalid\n' >&2
+  exit 1
+fi
 grep -q '^DFL_WORKERS_JSON_B64=.\{20,\}$' "$stage_dir/master.env" || {
   printf 'Worker training API configuration is missing\n' >&2
   exit 1
 }
+grep -q '^DFL_REPLY_API_TOKEN=.\{32,\}$' "$stage_dir/reply.env" || {
+  printf 'Reply model API token is missing or too short\n' >&2
+  exit 1
+}
+grep -q '^DFL_REPLY_BASE_MODEL=.\+' "$stage_dir/reply.env" || {
+  printf 'Reply model base-model path is missing\n' >&2
+  exit 1
+}
+grep -q '^DFL_REPLY_ADAPTER=.\+' "$stage_dir/reply.env" || {
+  printf 'Reply model adapter path is missing\n' >&2
+  exit 1
+}
+grep -q '^DFL_REPLY_REPORT_PATH=.\+' "$stage_dir/reply.env" || {
+  printf 'Reply model evaluation report path is missing\n' >&2
+  exit 1
+}
+reply_api_token="$(sed -n 's/^DFL_REPLY_API_TOKEN=//p' "$stage_dir/reply.env")"
+reply_base_model="$(sed -n 's/^DFL_REPLY_BASE_MODEL=//p' "$stage_dir/reply.env")"
+reply_adapter="$(sed -n 's/^DFL_REPLY_ADAPTER=//p' "$stage_dir/reply.env")"
+reply_report_path="$(sed -n 's/^DFL_REPLY_REPORT_PATH=//p' "$stage_dir/reply.env")"
+if [[ "$(grep -c '^DFL_REPLY_API_TOKEN=' "$stage_dir/reply.env")" != 1 ||
+      "$(grep -c '^DFL_REPLY_BASE_MODEL=' "$stage_dir/reply.env")" != 1 ||
+      "$(grep -c '^DFL_REPLY_ADAPTER=' "$stage_dir/reply.env")" != 1 ||
+      "$(grep -c '^DFL_REPLY_REPORT_PATH=' "$stage_dir/reply.env")" != 1 ]]; then
+  printf 'Reply model environment must contain exactly one value for each required setting\n' >&2
+  exit 1
+fi
+for model_path in "$reply_base_model" "$reply_adapter"; do
+  if ! runuser -u hammad -- test -d "$model_path"; then
+    printf 'Configured reply model directory is not readable: %s\n' "$model_path" >&2
+    exit 1
+  fi
+done
+if ! runuser -u hammad -- test -f "$reply_report_path"; then
+  printf 'Configured reply model evaluation report is not readable\n' >&2
+  exit 1
+fi
 runuser -u hammad -- /usr/bin/python3 -c 'import tensorflow as tf; assert tf.__version__.startswith("2.15."); assert tf.config.list_physical_devices("GPU")' || {
   printf 'System Python must provide TensorFlow 2.15 with an enumerated GPU for evaluation/baseline\n' >&2
+  exit 1
+}
+if ! systemctl is-active --quiet ollama.service; then
+  printf 'Ollama must be active before installing the coordinator model\n' >&2
+  exit 1
+fi
+runuser -u hammad -- ollama pull "$slm_model" || {
+  printf 'Could not pull coordinator model %s; the current SLM service was not restarted\n' "$slm_model" >&2
+  exit 1
+}
+runuser -u hammad -- ollama show "$slm_model" >/dev/null || {
+  printf 'Pulled coordinator model %s could not be inspected\n' "$slm_model" >&2
   exit 1
 }
 
@@ -71,14 +146,19 @@ install -d -o root -g root -m 0755 "$app_root/master"
 install -d -o root -g root -m 0755 "$app_root/common" "$app_root/data"
 install -d -o root -g root -m 0755 "$app_root/topology_opt"
 install -o root -g root -m 0644 "$stage_dir/master/app.py" "$app_root/master/app.py"
+install -o root -g root -m 0644 "$stage_dir/master/reply_inference.py" "$app_root/master/reply_inference.py"
+install -o root -g root -m 0644 "$stage_dir/master/reply_service.py" "$app_root/master/reply_service.py"
 install -o root -g root -m 0644 "$stage_dir/master/__init__.py" "$app_root/master/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/master/wsgi.py" "$app_root/master/wsgi.py"
 install -o root -g root -m 0644 "$stage_dir/master/requirements.txt" "$app_root/master/requirements.txt"
 install -o root -g root -m 0644 "$stage_dir/master/training.py" "$app_root/master/training.py"
 install -o root -g root -m 0644 "$stage_dir/master/cifar_evaluator.py" "$app_root/master/cifar_evaluator.py"
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
+install -o root -g root -m 0644 "$stage_dir/common/agent_tools.py" "$app_root/common/agent_tools.py"
 install -o root -g root -m 0644 "$stage_dir/common/cifar_model.py" "$app_root/common/cifar_model.py"
+install -o root -g root -m 0644 "$stage_dir/common/dataset_nas.py" "$app_root/common/dataset_nas.py"
 install -o root -g root -m 0644 "$stage_dir/common/nas.py" "$app_root/common/nas.py"
+install -o root -g root -m 0644 "$stage_dir/common/model_design.py" "$app_root/common/model_design.py"
 install -o root -g root -m 0644 "$stage_dir/common/slm_action_schema.json" "$app_root/common/slm_action_schema.json"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/__init__.py" "$app_root/topology_opt/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/topology_opt/reward.py" "$app_root/topology_opt/reward.py"
@@ -88,6 +168,8 @@ install -o hammad -g hammad -m 0600 "$stage_dir/data/cifar10_test.npz" "$app_roo
 install -o hammad -g hammad -m 0600 "$stage_dir/data/cifar10_train.npz" "$app_root/data/cifar10_train.npz"
 install -d -o root -g root -m 0755 "$app_root/master/tests"
 install -o root -g root -m 0644 "$stage_dir/master/tests/test_app.py" "$app_root/master/tests/test_app.py"
+install -o root -g root -m 0644 "$stage_dir/master/tests/test_reply_service.py" \
+  "$app_root/master/tests/test_reply_service.py"
 
 if [[ ! -x "$app_root/master/venv/bin/python" ]]; then
   python3 -m venv "$app_root/master/venv"
@@ -97,10 +179,15 @@ fi
 install -d -o hammad -g hammad -m 0750 /var/log/dfl-slm-master
 install -d -o hammad -g hammad -m 0750 /var/lib/dfl-slm-master
 install -o hammad -g hammad -m 0600 "$stage_dir/master.env" /etc/dfl-slm-master.env
+install -o hammad -g hammad -m 0600 "$stage_dir/reply.env" /etc/dfl-slm-reply.env
 install -o root -g root -m 0644 "$stage_dir/$service_name" "/etc/systemd/system/$service_name"
+install -o root -g root -m 0644 "$stage_dir/dfl-slm-reply.service" \
+  /etc/systemd/system/dfl-slm-reply.service
 systemctl daemon-reload
 systemctl enable --now "$service_name"
 systemctl restart "$service_name"
+systemctl enable dfl-slm-reply.service
+systemctl restart dfl-slm-reply.service
 
 for attempt in {1..20}; do
   if systemctl is-active --quiet "$service_name" &&
@@ -124,6 +211,22 @@ if ! systemctl is-active --quiet "$status_service" ||
   printf 'Existing status service health check failed after SLM installation\n' >&2
   exit 1
 fi
+reply_ready=0
+for attempt in {1..300}; do
+  if systemctl is-active --quiet dfl-slm-reply.service &&
+     DFL_REPLY_API_TOKEN="$reply_api_token" /usr/bin/python3 -c \
+       'import json, os, urllib.request; r=urllib.request.Request("http://127.0.0.1:5004/status", headers={"Authorization":"Bearer "+os.environ["DFL_REPLY_API_TOKEN"]}); d=json.load(urllib.request.urlopen(r, timeout=5)); assert d["available"] is True and d["evaluation"]["status"] == "completed"'; then
+    reply_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$reply_ready" != 1 ]]; then
+  printf 'Fine-tuned reply model did not become ready on TCP/5004\n' >&2
+  systemctl --no-pager --full status dfl-slm-reply.service >&2 || true
+  journalctl --no-pager -u dfl-slm-reply.service -n 50 >&2 || true
+  exit 1
+fi
 set -a
 # Load the protected local environment only into this health-check process.
 . /etc/dfl-slm-master.env
@@ -131,3 +234,5 @@ set +a
 "$app_root/master/venv/bin/python" -c 'import json, os, urllib.request; r=urllib.request.Request("http://127.0.0.1:5003/status", headers={"Authorization":"Bearer "+os.environ["DFL_API_TOKEN"]}); d=json.load(urllib.request.urlopen(r, timeout=8)); assert d["node_id"] == "master" and d["ollama"]["model_available"]'
 printf 'Installed %s on TCP/5003; %s remains active on TCP/5002\n' "$service_name" "$status_service"
 systemctl --no-pager --full status "$service_name"
+printf 'Fine-tuned reply model is active on loopback TCP/5004\n'
+systemctl --no-pager --full status dfl-slm-reply.service

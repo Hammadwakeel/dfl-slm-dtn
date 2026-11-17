@@ -11,7 +11,7 @@ master:
   user: "hammad"
   port: 5002
   slm_port: 5003
-  ollama_model: "llama3.2:1b"
+  ollama_model: "qwen3.5:4b"
 
 workers:
   - id: worker1
@@ -29,6 +29,18 @@ workers:
   - id: worker3
     hostname: "dfl-worker3"
     ip: "192.168.11.13"
+    user: "hammad"
+    service_port: 5001
+    training_port: 5004
+  - id: worker4
+    hostname: "dfl-worker4"
+    ip: "192.168.11.75"
+    user: "jetson5"
+    service_port: 5001
+    training_port: 5004
+  - id: worker5
+    hostname: "dflworker5"
+    ip: "192.168.11.76"
     user: "hammad"
     service_port: 5001
     training_port: 5004

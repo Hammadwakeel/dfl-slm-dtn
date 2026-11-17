@@ -1,6 +1,6 @@
 param(
     [string]$SshKey = (Join-Path $env:USERPROFILE '.ssh\id_ed25519'),
-    [string[]]$WorkerIds = @('worker1', 'worker2', 'worker3')
+    [string[]]$WorkerIds = @('worker1', 'worker2', 'worker3', 'worker4', 'worker5')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,9 +9,11 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $repoRoot '.env'
 $nodes = @(
-    @{ Id = 'worker1'; Ip = '192.168.11.123'; TokenName = 'WORKER1_API_TOKEN' },
-    @{ Id = 'worker2'; Ip = '192.168.11.14'; TokenName = 'WORKER2_API_TOKEN' },
-    @{ Id = 'worker3'; Ip = '192.168.11.13'; TokenName = 'WORKER3_API_TOKEN' }
+    @{ Id = 'worker1'; Ip = '192.168.11.123'; User = 'hammad'; TokenName = 'WORKER1_API_TOKEN' },
+    @{ Id = 'worker2'; Ip = '192.168.11.14'; User = 'hammad'; TokenName = 'WORKER2_API_TOKEN' },
+    @{ Id = 'worker3'; Ip = '192.168.11.13'; User = 'hammad'; TokenName = 'WORKER3_API_TOKEN' },
+    @{ Id = 'worker4'; Ip = '192.168.11.75'; User = 'jetson5'; TokenName = 'WORKER4_API_TOKEN' },
+    @{ Id = 'worker5'; Ip = '192.168.11.76'; User = 'hammad'; TokenName = 'WORKER5_API_TOKEN' }
 )
 
 if (-not (Test-Path -LiteralPath $SshKey -PathType Leaf)) {
@@ -38,7 +40,7 @@ foreach ($node in $nodes) {
 }
 $selected = @($nodes | Where-Object { $WorkerIds -contains $_.Id })
 if ($selected.Count -ne $WorkerIds.Count) {
-    throw 'WorkerIds may contain only worker1, worker2, and worker3.'
+    throw 'WorkerIds may contain only worker1, worker2, worker3, worker4, and worker5.'
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -46,10 +48,28 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-worker-" + [guid]:
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $tempEnvs = [System.Collections.Generic.List[string]]::new()
 try {
+    $pythonPath = $null
+    foreach ($candidate in @('.venv-tf\Scripts\python.exe', '.venv\Scripts\python.exe')) {
+        $candidatePath = Join-Path $repoRoot $candidate
+        if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+            & $candidatePath -c 'import numpy' 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $pythonPath = $candidatePath
+                break
+            }
+        }
+    }
+    if ($null -eq $pythonPath) {
+        $pythonPath = 'python'
+    }
+    & $pythonPath (Join-Path $repoRoot 'scripts\reshard_cifar10.py') --output-root (Join-Path $tempRoot 'shards') --worker-count 5
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not produce disjoint CIFAR-10 shards for all five workers.'
+    }
     foreach ($node in $selected) {
-        $shardPath = Join-Path $repoRoot "data\worker_shards\$($node.Id).npz"
-        $alpha03Path = Join-Path $repoRoot "data\worker_shards\dirichlet_a03\$($node.Id).npz"
-        $alpha05Path = Join-Path $repoRoot "data\worker_shards\dirichlet_a05\$($node.Id).npz"
+        $shardPath = Join-Path $tempRoot "shards\stratified\$($node.Id).npz"
+        $alpha03Path = Join-Path $tempRoot "shards\dirichlet_a03\$($node.Id).npz"
+        $alpha05Path = Join-Path $tempRoot "shards\dirichlet_a05\$($node.Id).npz"
         foreach ($requiredShard in @($shardPath, $alpha03Path, $alpha05Path)) {
             if (-not (Test-Path -LiteralPath $requiredShard -PathType Leaf)) {
                 throw "Training shard is missing: $requiredShard"
@@ -83,15 +103,17 @@ try {
             'DFL_TRAINING_PORT=5004',
             'DFL_BIND_HOST=0.0.0.0',
             'DFL_TRAINING_DATA_PATH=/opt/dfl-slm-dtn/worker/data/train_shard.npz',
+            'DFL_TRAINING_DATASET_ROOT=/var/lib/dfl-slm-dtn/datasets',
+            'HF_HOME=/var/lib/dfl-slm-dtn/huggingface',
             "DFL_TRAINING_SHARDS_JSON_B64=$shardPathsBase64",
             "DFL_TRAINING_LOG_PATH=/var/log/dfl-slm-worker-training/$($node.Id).jsonl",
             "DFL_PEERS_JSON_B64=$peerJsonBase64",
-            'DFL_PEER_TIMEOUT_SECONDS=60'
+            'DFL_PEER_TIMEOUT_SECONDS=600'
         )
         [System.IO.File]::WriteAllText($workerEnv, [string]::Join("`n", $lines) + "`n", $utf8NoBom)
 
         $stageName = ".dfl-worker-training-stage-$($node.Id)"
-        $remote = "hammad@$($node.Ip)"
+        $remote = "$($node.User)@$($node.Ip)"
         & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
             "mkdir -p '$stageName/worker' '$stageName/common' '$stageName/shards' && chmod 700 '$stageName' '$stageName/worker' '$stageName/common' '$stageName/shards'"
         if ($LASTEXITCODE -ne 0) {
@@ -100,6 +122,7 @@ try {
 
         $sources = @(
             (Join-Path $PSScriptRoot 'dfl-slm-worker-training.service'),
+            (Join-Path $PSScriptRoot 'dfl-slm-memory-cleanup.service'),
             (Join-Path $PSScriptRoot 'install_worker_training.sh')
         )
         & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes @sources `
@@ -111,18 +134,29 @@ try {
             (Join-Path $repoRoot 'common\__init__.py') `
             (Join-Path $repoRoot 'common\auth.py') `
             (Join-Path $repoRoot 'common\cifar_model.py') `
+            (Join-Path $repoRoot 'common\dataset_nas.py') `
             (Join-Path $repoRoot 'common\nas.py') `
+            (Join-Path $repoRoot 'common\model_design.py') `
             "$($remote):$stageName/common/"
         if ($LASTEXITCODE -ne 0) {
             throw "Could not stage shared training helpers on $($node.Ip)."
         }
         & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes `
             (Join-Path $repoRoot 'worker\training_service.py') `
+            (Join-Path $repoRoot 'worker\memory_cleanup_helper.py') `
+            (Join-Path $repoRoot 'worker\model_factory.py') `
             (Join-Path $repoRoot 'worker\nas_search.py') `
             (Join-Path $repoRoot 'worker\__init__.py') `
             "$($remote):$stageName/worker/"
         if ($LASTEXITCODE -ne 0) {
             throw "Could not stage the worker service package on $($node.Ip)."
+        }
+        & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes `
+            (Join-Path $repoRoot 'worker\transformer-requirements.txt') `
+            (Join-Path $repoRoot 'worker\legacy-keras-requirements.txt') `
+            "$($remote):$stageName/worker/"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not stage worker transformer dependencies on $($node.Ip)."
         }
         & scp -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $shardPath `
             "$($remote):$stageName/train_shard.npz"
@@ -145,10 +179,16 @@ try {
             throw "Could not stage protected service configuration on $($node.Ip)."
         }
 
-        & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
-            "sed -i 's/\r$//' '$stageName/install_worker_training.sh' '$stageName/dfl-slm-worker-training.service' && sudo -n bash '$stageName/install_worker_training.sh'"
+        & ssh -tt -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
+            "sed -i 's/\r$//' '$stageName/install_worker_training.sh' '$stageName/dfl-slm-worker-training.service' && sudo env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_worker_training.sh'"
         if ($LASTEXITCODE -ne 0) {
-            throw "Training service installation failed on $($node.Ip); staging files remain at ~/$stageName."
+            $installExitCode = $LASTEXITCODE
+            & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
+                "rm -rf -- '$stageName'"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Training service installation failed on $($node.Ip) (exit $installExitCode), and protected staging cleanup also failed."
+            }
+            throw "Training service installation failed on $($node.Ip) (exit $installExitCode); removed protected staging files."
         }
         & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
             "rm -rf -- '$stageName'"

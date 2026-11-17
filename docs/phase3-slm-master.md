@@ -6,8 +6,11 @@ The Waitress-served SLM API runs on `dfl-master` (`192.168.11.15`) at TCP `5003`
 
 - `dfl-slm-status.service`: TCP `5002`, `/etc/dfl-slm-node.env`, `MASTER_API_TOKEN`.
 - `dfl-slm-master.service`: TCP `5003`, `/etc/dfl-slm-master.env`, `MASTER_SLM_API_TOKEN`.
+- `dfl-slm-reply.service`: loopback TCP `5004`, `/etc/dfl-slm-reply.env`, the same server-side SLM token; this hosts the reply-style LoRA without replacing the action model.
 
-Ollama serves the existing `llama3.2:1b` model on loopback. The SLM calls `/api/chat` locally with JSON-schema constrained output, `num_ctx=4096`, `num_predict=256`, `temperature=0`, and `keep_alive=5m`. It does not use Ollama tools, accept tool calls, or execute natural-language-derived shell commands or code.
+The coordinator is configured for Ollama `qwen3.5:4b`. The legacy action endpoint calls `/api/chat` with JSON-schema constrained output; direct RAG chat uses a natural-language prompt containing the retrieved context and original question. Both use `num_ctx=4096`, `keep_alive=5m`, and `think=false`; routing temperatures are 0.0 for schema actions and 0.1 for Agent tool calls. The Agent endpoint passes the existing JSON tool schemas through Ollama's standard chat API. The migration installer pulls and inspects the configured model before restarting the SLM service; if the installed Ollama version cannot load it, installation stops before replacing the running service. The separately hosted reply-style LoRA remains based on Llama 3.2 1B and is not the coordinator model.
+
+The coordinator has been migrated to Ollama `qwen3.5:4b` (Q4_K_M); schema-constrained JSON and tool-call smoke tests passed on Ollama 0.34.0, and the old `llama3.2:1b` Ollama tag was removed. With Qwen loaded, the 8 GB master had about 1.2 GiB available in the latest check, so monitor memory during experiments. The separately hosted reply-style LoRA still uses its Hugging Face Llama 3.2 1B base; keep that cache while the reply service is enabled.
 
 From Windows PowerShell at the repository root, deploy the SLM service with the configured SSH key and passwordless sudo:
 
@@ -15,18 +18,22 @@ From Windows PowerShell at the repository root, deploy the SLM service with the 
 .\deploy\deploy_master_slm.ps1
 ```
 
-The script creates a cryptographically random `MASTER_SLM_API_TOKEN` in the ignored root `.env` if one is not configured, then stages only the SLM package, shared action schema, installer, service unit, and protected environment file to the master. It installs the runtime dependencies into `/opt/dfl-slm-dtn/master/venv`, writes the remote environment to `/etc/dfl-slm-master.env` with mode `0600`, enables `dfl-slm-master.service`, and verifies the status API remains active on port `5002`. The installer does not restart, disable, or replace the Phase 1 unit.
+The script creates a cryptographically random `MASTER_SLM_API_TOKEN` in the ignored root `.env` if one is not configured, then stages the SLM application, shared action schema, installer, service units, and protected environment files to the master. It installs the runtime dependencies into `/opt/dfl-slm-dtn/master/venv`, writes the service environments with mode `0600`, enables the action and LoRA services, and verifies both the existing status API on port `5002` and the reply model on loopback port `5004`. The installer does not restart, disable, or replace the Phase 1 unit.
 
-The backend also requires `MASTER_SLM_API_TOKEN` and reads the SLM host/port from `config/nodes.yaml` (`slm_port: 5003`). Restart the coordinator after setting the token so it can authenticate its proxy requests. The UI uses the existing coordinator bearer token; the SLM token remains server-side and is never returned to the browser.
+The reply service uses the cached Llama 3.2 1B base model and the LoRA adapter at `/home/hammad/slm-ft-outputs/reply-style-20261102T2158JST/adapter`. Each request runs in a bounded one-shot inference process; this releases model allocations when the process exits, at the cost of loading the model for each reply. The dashboard coordinator remains responsible for dashboard and worker workflows. The Assistant chat itself sends the original user question directly to the master SLM; it does not call the coordinator's intent matcher or action dispatcher.
+
+`deploy_master_slm.ps1` configures a dedicated chat-only token from `DTN_API_TOKEN` and the allowed UI origins. The browser already holds that token after login. The master accepts it only on `/rag/chat` and `/rag/conversations`; it cannot access `/command`, status, logs, or other privileged master routes. The privileged `MASTER_SLM_API_TOKEN` remains server-side. The master permits browser requests only from configured Vite origins; add any other exact origin to `DFL_CHAT_ALLOWED_ORIGINS` before deployment. `VITE_MASTER_SLM_BASE_URL` can override the default `http://192.168.11.15:5003` frontend address.
 
 ## Authenticated API and action safety
 
-Every SLM endpoint requires `Authorization: Bearer <MASTER_SLM_API_TOKEN>`. The coordinator proxy endpoints require the regular coordinator token and call the SLM API server-to-server:
+Privileged master endpoints require the master SLM bearer token. Read-only RAG endpoints use the scoped browser chat token:
 
-- Master service: `POST /chat`, `POST /command`, `GET /status`, `GET /logs`.
-- Coordinator: `POST /api/slm/chat`, `POST /api/slm/command`, `GET /api/slm/status`, `GET /api/slm/logs`.
+- Assistant chat: `POST /rag/chat`, `GET /rag/conversations`, `GET /rag/conversations/{id}`, `DELETE /rag/conversations/{id}`.
+- Privileged action API: `POST /chat`, `POST /command`, `GET /status`, `GET /logs`, and `POST /action-history`.
 
-`POST /chat` takes `{"message":"..."}` and returns the model's reply, the single schema-validated action, its result, inference latency, and measured system RAM use before and after generation. The model has a 4,000-character input limit. An invalid JSON/schema response is retried once; a second invalid response returns HTTP 502. The `/command` endpoint validates submitted actions against the same shared schema before dispatch.
+`POST /rag/chat` takes `{"message":"...","conversation_id":"optional-id"}` and returns a natural-language reply plus the master-owned conversation ID. The master retrieves recent turns in that conversation and relevant successful action records—including their saved results—from SQLite, then includes that bounded context and the exact current question in the SLM prompt. The model may recommend a next step based on evidence, but this endpoint never executes actions or returns action JSON. Conversations and messages are stored alongside action history in `/var/lib/dfl-slm-master/action_history.sqlite3`. Existing coordinator-side conversations are not migrated; new direct-master conversations are persisted and restored here.
+
+Successful master actions, including read-only queries, are persisted with their results. The coordinator forwards full results for successful preprocessing and initial-model actions so the RAG chat can refer to those too. Older action rows created before result persistence have no recoverable result payload; new records retain it. `POST /chat` remains a separate legacy action-schema API, while the Assistant UI uses only the RAG endpoints.
 
 `common/slm_action_schema.json` allows only:
 
@@ -44,7 +51,7 @@ Every SLM endpoint requires `Authorization: Bearer <MASTER_SLM_API_TOKEN>`. The 
 | `set_rounds` | 1–100 | Not available yet |
 | `set_epochs` | 1–50 | Not available yet |
 | `enable_nas` | Boolean `enabled`; optional rounds 1–100, epochs 1–50, 1–3 unique uint32 seeds, and search time 30–300 seconds | Not available yet |
-| `optimize_topology` | Optional rounds 1–100, epochs 1–50, 1–3 unique uint32 seeds, and 1–2 unique alpha values from 0.3/0.5 | Not available yet |
+| `optimize_topology` | Optional rounds 1–100, epochs 1–50, 1–3 unique uint32 seeds; currently uses Dirichlet alpha 0.3 only | Not available yet |
 | `get_status` | No parameters | Reads the real local authenticated status agent on port 5002 |
 | `get_logs` | Optional 1–100 log lines | Reads the SLM service's real rotated JSONL event log |
 | `get_results` | No parameters | Not available yet |
@@ -130,6 +137,12 @@ The same 20 prompts were sent again through the live coordinator. Intent accurac
 | 20 | Review dfl-master status once more and tell me if the service is up. | `get_status {}` | `get_status {}` | Pass | Pass |
 
 **Intent accuracy: 16/20 (80%). Parameter accuracy: 15/20 (75%)** over all prompts; among the 16 intent-correct prompts, parameter accuracy was 15/16 (93.8%). Schema validity remained 20/20 (100%), which does not imply semantic accuracy. In particular, prompt 15 confused epochs with rounds; prompts 6, 10, and 19 selected the wrong action. Prompt 7 selected the right action but returned the wrong requested limit. The replies also occasionally contained misleading status or success claims even when the action indicated unavailability; callers must treat the structured action and result as authoritative, not the free-text reply.
+
+## Next-action recommendations
+
+The coordinator recognizes common next-step phrasings before forwarding a request to the action model, so questions such as “what is the next action?”, “what should I do now?”, and “what next?” are not misclassified as master-status queries. When there are no saved MNIST runs, it advises verifying the worker shards, creating and distributing an initial model in Model Studio, and then starting distributed training. When runs exist, the recommendation follows the latest run state and saved metrics.
+
+The master SLM stores successfully executed state-changing actions in `/var/lib/dfl-slm-master/action_history.sqlite3` (override with `DFL_ACTION_HISTORY_PATH`). It retrieves up to ten recent entries itself and supplies their action names, parameters, timestamps, and run/dataset identifiers to both SLM models as factual context. Failed actions, raw prompts, and execution evidence are excluded. Coordinator-executed preprocessing/model-creation actions are forwarded once to the master's authenticated `/action-history` endpoint; the coordinator does not retrieve or construct SLM history context.
 
 ## Security and operations
 

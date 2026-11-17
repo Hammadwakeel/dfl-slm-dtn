@@ -350,7 +350,6 @@ def test_isolated_search_stream_events_are_logged_and_result_is_returned(monkeyp
 def test_isolated_dataset_search_limits_threads_and_logs_complete_failure_context(
     monkeypatch,
 ) -> None:
-    command = ["python", "-m", "worker.nas_search"]
     stderr = "\n".join(
         [
             "Traceback (most recent call last):",

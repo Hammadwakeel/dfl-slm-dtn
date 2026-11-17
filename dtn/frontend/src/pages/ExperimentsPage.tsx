@@ -413,6 +413,16 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
               </button>
             </div>
             <TrainingTopology topology={selectedGroup.topology === "candidate_sweep" ? selectedGroup.selected_configuration?.topology ?? "directed_ring" : selectedGroup.topology} />
+            {selectedGroup.kind === "decentralized" && (
+              <p className="experiment-sync-note">
+                Aggregation: <strong>{selectedGroup.aggregation ?? "fedavg"}</strong> · Synchronization:{" "}
+                <strong>
+                  {selectedGroup.sync_mode === "semi_sync"
+                    ? `semi-synchronous (${selectedGroup.sync_deadline_seconds ?? "default"} s peer deadline)`
+                    : "synchronous"}
+                </strong>
+              </p>
+            )}
             {selectedGroup.error && <div className="alert inline-alert" role="alert">{selectedGroup.error}</div>}
             {selectedGroup.runs.map((run) => (
               <section className="experiment-run" key={run.run_id}>
@@ -428,7 +438,7 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
                           <tr>
                             <th>Node</th><th>Accuracy</th><th>Precision</th><th>Recall</th>
                             <th>Loss</th><th>Macro F1</th><th>Runtime</th><th>Peak RAM</th>
-                            <th>Bytes exchanged</th><th>Exchange</th><th>Peer wait</th>
+                            <th>Bytes exchanged</th><th>Exchange</th><th>Peer wait</th><th>Peers used</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -445,6 +455,11 @@ export default function ExperimentsPage({ token, results, error, onRefresh, onOp
                               <td>{(metrics.bytes_sent ?? 0) + (metrics.bytes_received ?? 0)}</td>
                               <td>{metrics.exchange_seconds === undefined ? "—" : `${metrics.exchange_seconds.toFixed(3)} s`}</td>
                               <td>{metrics.peer_wait_seconds === undefined ? "—" : `${metrics.peer_wait_seconds.toFixed(3)} s`}</td>
+                              <td title={metrics.missing_peers?.length ? `Missing: ${metrics.missing_peers.join(", ")}` : undefined}>
+                                {metrics.peers_used === undefined
+                                  ? "—"
+                                  : `${metrics.peers_used.length}${metrics.missing_peers?.length ? ` (missing ${metrics.missing_peers.join(", ")})` : ""}`}
+                              </td>
                             </tr>
                           ))}
                         </tbody>

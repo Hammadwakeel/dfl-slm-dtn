@@ -13,7 +13,6 @@ from common.dataset_nas import (
     initial_population,
     smoke_test_architecture,
 )
-from common.nas import ARCHITECTURE_SPACE, MAX_PARAMETERS, dataset_architecture_parameters
 from master.training import (
     TrainingConfig,
     TrainingCoordinator,
@@ -657,6 +656,9 @@ def test_dataset_training_forwards_named_shard_and_uses_worker_validation(
         "epochs": 1,
         "dataset_split": "stratified",
         "architecture": {"id": "b1_c8_k3"},
+        "aggregation": "metropolis",
+        "sync_mode": "semi_sync",
+        "sync_deadline_seconds": 120,
         "runs": [
             {
                 "run_id": "dataset-run-seed-2026",
@@ -699,7 +701,8 @@ def test_dataset_training_forwards_named_shard_and_uses_worker_validation(
             ]
         }
     }
-    coordinator._get_bytes = lambda worker, path: b"weights"
+    downloaded_weights = []
+    coordinator._get_bytes = lambda worker, path: downloaded_weights.append(path) or b"weights"
     cleaned_workers = []
     coordinator._delete = lambda worker, path, *, timeout=30: (
         cleaned_workers.append((worker.node_id, path)) or {"cleaned": True}
@@ -710,8 +713,13 @@ def test_dataset_training_forwards_named_shard_and_uses_worker_validation(
     assert len(config_payloads) == 3
     assert all(
         config["dataset_name"] == "cifar_10k_demo"
+        and config["aggregation"] == "metropolis"
+        and config["sync_mode"] == "semi_sync"
+        and config["sync_deadline_seconds"] == 120
         for config in config_payloads
     )
+    # Dataset runs report worker-local validation metrics; weights are not downloaded.
+    assert downloaded_weights == []
     stored_group = coordinator.results()["groups"][0]
     final_workers = stored_group["runs"][0]["rounds"][0]["workers"]
     assert set(final_workers) == {"worker1", "worker2", "worker3"}
@@ -1184,3 +1192,19 @@ def test_results_topologies_include_all_configured_workers(tmp_path: Path) -> No
         ["worker1", "worker3"],
         ["worker1", "worker4"],
     ]
+
+
+def test_configure_validates_aggregation_and_sync_settings(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+
+    settings = coordinator.configure(aggregation="trimmed_mean", sync_mode="semi_sync", sync_deadline_seconds=90)
+
+    assert settings["aggregation"] == "trimmed_mean"
+    assert settings["sync_mode"] == "semi_sync"
+    assert settings["sync_deadline_seconds"] == 90
+    with pytest.raises(ValueError, match="aggregation"):
+        coordinator.configure(aggregation="median")
+    with pytest.raises(ValueError, match="sync_mode"):
+        coordinator.configure(sync_mode="async")
+    with pytest.raises(ValueError, match="sync_deadline_seconds"):
+        coordinator.configure(sync_deadline_seconds=1)

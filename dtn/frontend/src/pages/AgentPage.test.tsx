@@ -34,6 +34,9 @@ function runFixture(overrides: Partial<SupervisorRun> = {}): SupervisorRun {
       local_epochs: 5,
       topology: "directed_ring",
       nas_budget_seconds: 600,
+      aggregation: "fedavg",
+      sync_mode: "semi_sync",
+      sync_deadline_seconds: 300,
     },
     state: {
       stage: "monitoring",
@@ -119,6 +122,7 @@ describe("Agent Supervisor page", () => {
     expect(screen.getByText(/5\/5 workers ready/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Dataset"), { target: { value: "cifar10" } });
     fireEvent.change(screen.getByLabelText("Target validation accuracy (%)"), { target: { value: "70" } });
+    fireEvent.change(screen.getByLabelText("Aggregation"), { target: { value: "metropolis" } });
     fireEvent.click(screen.getByRole("button", { name: "Start supervisor" }));
 
     await waitFor(() => {
@@ -131,6 +135,9 @@ describe("Agent Supervisor page", () => {
       expect(body.target_accuracy).toBeCloseTo(0.7);
       expect(body.rounds).toBe(10);
       expect(body.local_epochs).toBe(5);
+      expect(body.aggregation).toBe("metropolis");
+      expect(body.sync_mode).toBe("semi_sync");
+      expect(body.sync_deadline_seconds).toBe(300);
     });
   });
 

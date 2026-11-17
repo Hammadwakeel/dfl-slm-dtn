@@ -53,6 +53,9 @@ const DEFAULT_GOAL: SupervisorGoal = {
   local_epochs: 5,
   topology: "directed_ring",
   nas_budget_seconds: 600,
+  aggregation: "fedavg",
+  sync_mode: "semi_sync",
+  sync_deadline_seconds: 300,
 };
 
 /** Agentic mode: a server-side supervisor that monitors and controls the whole cluster. */
@@ -246,6 +249,34 @@ function GoalForm({
           <input type="number" min={1} max={20} value={goal.local_epochs} onChange={(event) => update("local_epochs", Number(event.target.value))} />
         </label>
         <label>
+          Aggregation
+          <select value={goal.aggregation} onChange={(event) => update("aggregation", event.target.value as SupervisorGoal["aggregation"])}>
+            <option value="fedavg">FedAvg (by sample count)</option>
+            <option value="uniform">Uniform average</option>
+            <option value="metropolis">Metropolis-Hastings</option>
+            <option value="trimmed_mean">Trimmed mean (robust)</option>
+          </select>
+        </label>
+        <label>
+          Synchronization
+          <select value={goal.sync_mode} onChange={(event) => update("sync_mode", event.target.value as SupervisorGoal["sync_mode"])}>
+            <option value="semi_sync">Semi-synchronous (deadline)</option>
+            <option value="sync">Synchronous (wait for all)</option>
+          </select>
+        </label>
+        <label>
+          Peer deadline (s)
+          <input
+            type="number"
+            min={30}
+            max={3600}
+            step={30}
+            disabled={goal.sync_mode !== "semi_sync"}
+            value={goal.sync_deadline_seconds}
+            onChange={(event) => update("sync_deadline_seconds", Number(event.target.value))}
+          />
+        </label>
+        <label>
           NAS budget (s)
           <input type="number" min={90} max={600} step={30} value={goal.nas_budget_seconds} onChange={(event) => update("nas_budget_seconds", Number(event.target.value))} />
         </label>
@@ -307,7 +338,11 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
         <div>
           <span className={`agent-run-status ${run.status}`}>{run.status}</span>
           <h2>{run.task}</h2>
-          <small>Started {formatDate(run.created_at)} · {run.goal.dataset_split} · {run.goal.rounds} rounds × {run.goal.local_epochs} local epochs</small>
+          <small>
+            Started {formatDate(run.created_at)} · {run.goal.dataset_split} · {run.goal.rounds} rounds × {run.goal.local_epochs} local epochs
+            {run.goal.aggregation ? ` · ${run.goal.aggregation}` : ""}
+            {run.goal.sync_mode === "semi_sync" ? ` · semi-sync ${run.goal.sync_deadline_seconds}s` : run.goal.sync_mode ? " · sync" : ""}
+          </small>
         </div>
         {isActive && (
           <button className="danger-button" type="button" disabled={stopping || run.status === "stopping"} onClick={() => void stop()}>
@@ -391,6 +426,7 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
               <th>Macro-F1</th>
               <th>Architecture</th>
               <th>Topology</th>
+              <th>Aggregation</th>
             </tr>
           </thead>
           <tbody>
@@ -402,6 +438,11 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
                 <td>{experiment.macro_f1 != null ? experiment.macro_f1.toFixed(4) : "–"}</td>
                 <td>{experiment.architecture ?? "–"}{experiment.parameter_count ? ` (${experiment.parameter_count.toLocaleString()} params)` : ""}</td>
                 <td>{experiment.selected_topology ?? experiment.topology ?? "–"}</td>
+                <td title={experiment.partial_rounds ? `${experiment.partial_rounds} round(s) aggregated without every peer` : undefined}>
+                  {experiment.aggregation ?? "–"}
+                  {experiment.sync_mode === "semi_sync" ? " · semi-sync" : ""}
+                  {experiment.partial_rounds ? ` · ${experiment.partial_rounds} partial` : ""}
+                </td>
               </tr>
             ))}
           </tbody>

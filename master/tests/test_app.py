@@ -746,6 +746,9 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
             dataset_split=None,
             dataset_name=None,
             architecture=None,
+            aggregation=None,
+            sync_mode=None,
+            sync_deadline_seconds=None,
         ):
             return {
                 "accepted": True,

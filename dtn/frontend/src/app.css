@@ -960,3 +960,4 @@ h1, h2, h3, h4 { font-family: "Aspecta", "Inter", "Segoe UI", sans-serif; }
 .agent-run-events li.event-decision strong { color: #1d5e9d; }
 .agent-history ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .agent-history .chat-history-item { width: 100%; }
+.experiment-sync-note { margin: 8px 0 12px; color: #334155; font-size: 11px; }

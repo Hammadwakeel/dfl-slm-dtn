@@ -28,6 +28,7 @@ for required in \
   "$stage_dir/worker/transformer-requirements.txt" \
   "$stage_dir/worker/legacy-keras-requirements.txt" \
   "$stage_dir/worker/nas_search.py" \
+  "$stage_dir/worker/aggregation.py" \
   "$stage_dir/worker/__init__.py" \
   "$stage_dir/common/__init__.py" \
   "$stage_dir/common/auth.py" \
@@ -98,6 +99,7 @@ install -o root -g root -m 0644 "$stage_dir/worker/model_factory.py" "$app_root/
 install -o root -g root -m 0644 "$stage_dir/worker/transformer-requirements.txt" "$app_root/worker/transformer-requirements.txt"
 install -o root -g root -m 0644 "$stage_dir/worker/legacy-keras-requirements.txt" "$app_root/worker/legacy-keras-requirements.txt"
 install -o root -g root -m 0644 "$stage_dir/worker/nas_search.py" "$app_root/worker/nas_search.py"
+install -o root -g root -m 0644 "$stage_dir/worker/aggregation.py" "$app_root/worker/aggregation.py"
 install -o root -g root -m 0644 "$stage_dir/worker/__init__.py" "$app_root/worker/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/__init__.py" "$app_root/common/__init__.py"
 install -o root -g root -m 0644 "$stage_dir/common/auth.py" "$app_root/common/auth.py"

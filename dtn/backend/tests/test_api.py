@@ -36,7 +36,7 @@ def test_real_inventory_loads_master_and_five_workers(monkeypatch) -> None:
         "worker4",
         "worker5",
     ]
-    assert nodes[-1].hostname == "dflworker5"
+    assert nodes[-1].hostname == "dfl-worker5"
     assert nodes[-1].ip == "192.168.11.76"
     assert nodes[-1].role == "worker"
     assert nodes[-1].training_port == 5004

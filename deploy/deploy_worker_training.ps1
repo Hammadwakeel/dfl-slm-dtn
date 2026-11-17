@@ -146,6 +146,7 @@ try {
             (Join-Path $repoRoot 'worker\memory_cleanup_helper.py') `
             (Join-Path $repoRoot 'worker\model_factory.py') `
             (Join-Path $repoRoot 'worker\nas_search.py') `
+            (Join-Path $repoRoot 'worker\aggregation.py') `
             (Join-Path $repoRoot 'worker\__init__.py') `
             "$($remote):$stageName/worker/"
         if ($LASTEXITCODE -ne 0) {
@@ -179,7 +180,7 @@ try {
             throw "Could not stage protected service configuration on $($node.Ip)."
         }
 
-        & ssh -tt -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
+        & ssh -q -tt -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
             "sed -i 's/\r$//' '$stageName/install_worker_training.sh' '$stageName/dfl-slm-worker-training.service' && sudo env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_worker_training.sh' 2>&1"
         if ($LASTEXITCODE -ne 0) {
             $installExitCode = $LASTEXITCODE

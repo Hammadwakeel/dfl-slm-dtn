@@ -27,7 +27,6 @@ from worker.training_service import (
     serialize_weights,
     topology_neighbours,
     topology_senders,
-    weighted_average_weights,
 )
 
 
@@ -116,27 +115,6 @@ def test_all_candidate_topologies_have_expected_directed_adjacency():
     assert topology_neighbours("worker2", worker_ids, "chain") == ("worker1", "worker3")
     assert topology_neighbours("worker1", worker_ids, "star") == ("worker2", "worker3")
     assert topology_neighbours("worker3", worker_ids, "star") == ("worker1",)
-
-
-def test_weighted_average_uses_sample_counts():
-    averaged = weighted_average_weights(
-        [
-            ([np.array([1.0, 2.0], dtype=np.float32)], 2),
-            ([np.array([4.0, 5.0], dtype=np.float32)], 1),
-        ]
-    )
-
-    np.testing.assert_allclose(averaged[0], np.array([2.0, 3.0], dtype=np.float32))
-
-
-def test_weighted_average_rejects_mismatched_shapes():
-    with pytest.raises(ValueError, match="shape"):
-        weighted_average_weights(
-            [
-                ([np.zeros((2,), dtype=np.float32)], 1),
-                ([np.zeros((3,), dtype=np.float32)], 1),
-            ]
-        )
 
 
 def test_weight_serialization_accepts_individual_arrays_larger_than_four_megabytes():
@@ -617,7 +595,7 @@ def test_initial_model_bundle_loads_and_predictions_match_reference(tmp_path):
     )
     reference_model(np.zeros((1, 8, 8, 1), dtype=np.float32), training=False)
     with zipfile.ZipFile(io.BytesIO(bundle_bytes), "r") as zipped:
-        architecture = json.loads(zipped.read("architecture.json").decode("utf-8"))
+        json.loads(zipped.read("architecture.json").decode("utf-8"))
         with np.load(io.BytesIO(zipped.read("initial_weights.npz")), allow_pickle=False) as archive:
             reference_model.set_weights([
                 np.asarray(archive["conv1_kernel"]),

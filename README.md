@@ -60,7 +60,7 @@ Dashboard-added workers use the next sequential worker ID and require both a sta
 - Master: `192.168.11.15`
 - Previously provisioned workers: `192.168.11.123`, `192.168.11.14`, `192.168.11.13`
 - The new worker4 is configured at `192.168.11.75` for SSH user `jetson5`; its authenticated status service is active, but its training service must be installed before it can join DFL runs.
-- Worker5 (`dflworker5`, `192.168.11.76`, SSH user `hammad`) is now in the cluster inventory. Its status and training services still need installation before it can join live runs.
+- Worker5 (`dfl-worker5`, `192.168.11.76`, SSH user `hammad`) is in the cluster inventory with status and training services installed. Worker4 (`.75`) is now named `dfl-worker4`. All Jetsons run headless (`multi-user.target`) since 2026-11-17, which freed about 1.7-2.1 GB of RAM per device.
 - SSH key-based batch access and the listed software/hardware checks apply to the four previously provisioned Jetsons.
 - The master currently has Ollama 0.34.0 and `llama3.2:1b` installed. The coordinator is configured for `qwen3.5:4b`; run `.\deploy\deploy_master_slm.ps1` after active training finishes to pull the model and deploy the updated service.
 - The four previously provisioned Jetsons use the distinct hostnames `dfl-master`, `dfl-worker1`, `dfl-worker2`, and `dfl-worker3`; each has a unique `/etc/machine-id`.

@@ -28,6 +28,9 @@ class GoalRequest(BaseModel):
     local_epochs: int = Field(5, ge=1, le=20)
     topology: Literal["directed_ring", "bidirectional_ring", "mesh", "chain", "star"] = "directed_ring"
     nas_budget_seconds: int = Field(600, ge=90, le=600)
+    aggregation: Literal["fedavg", "uniform", "metropolis", "trimmed_mean"] = "fedavg"
+    sync_mode: Literal["sync", "semi_sync"] = "semi_sync"
+    sync_deadline_seconds: int = Field(300, ge=30, le=3600)
     seed: int = Field(2026, ge=0, le=4_294_967_295)
 
 

@@ -21,6 +21,8 @@ from jsonschema import Draft202012Validator, ValidationError
 DATASETS = ("mnist", "cifar10")
 DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07")
 TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star")
+AGGREGATIONS = ("fedavg", "uniform", "metropolis", "trimmed_mean")
+SYNC_MODES = ("sync", "semi_sync")
 FINISH_OUTCOMES = ("objective_achieved", "no_worthwhile_action", "blocked")
 
 # Steps that start a measured experiment on the cluster, in the order the
@@ -59,6 +61,13 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
                 "rounds": {"type": "integer", "minimum": 1, "maximum": 20},
                 "local_epochs": {"type": "integer", "minimum": 1, "maximum": 20},
                 "topology": {"enum": list(TOPOLOGIES)},
+                "aggregation": {
+                    "enum": list(AGGREGATIONS),
+                    "description": (
+                        "fedavg weights peers by data size; uniform equally; metropolis "
+                        "uses consensus weights; trimmed_mean ignores one outlying peer."
+                    ),
+                },
             },
             "additionalProperties": False,
         },
@@ -119,6 +128,9 @@ def default_goal(**overrides: Any) -> dict[str, Any]:
         "topology": "directed_ring",
         "nas_budget_seconds": 600,
         "seed": 2026,
+        "aggregation": "fedavg",
+        "sync_mode": "semi_sync",
+        "sync_deadline_seconds": 300,
     }
     goal.update(overrides)
     return goal
@@ -340,7 +352,7 @@ def prompt_state(goal: dict[str, Any], state: dict[str, Any], cluster: dict[str,
     recent = [
         {
             key: item.get(key)
-            for key in ("step", "status", "validation_accuracy", "macro_f1", "architecture", "topology", "error")
+            for key in ("step", "status", "validation_accuracy", "macro_f1", "architecture", "topology", "aggregation", "partial_rounds", "error")
             if item.get(key) is not None
         }
         for item in state.get("experiments", [])[-3:]
@@ -421,6 +433,15 @@ def summarize_group(group: dict[str, Any]) -> dict[str, Any]:
             summary["rounds_completed"] = len(runs[-1]["rounds"])
             summary["worker_count"] = len(workers)
         summary["topology"] = group.get("topology")
+        summary["aggregation"] = group.get("aggregation", "fedavg")
+        summary["sync_mode"] = group.get("sync_mode", "sync")
+        partial_rounds = 0
+        for run in runs:
+            for round_row in run.get("rounds", []):
+                workers = round_row.get("workers", {}) if isinstance(round_row, dict) else {}
+                if any(isinstance(row, dict) and row.get("missing_peers") for row in workers.values()):
+                    partial_rounds += 1
+        summary["partial_rounds"] = partial_rounds
         architecture = group.get("architecture")
         if isinstance(architecture, dict):
             summary["architecture"] = architecture.get("id") or architecture.get("model_id")

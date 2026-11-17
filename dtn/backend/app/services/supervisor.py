@@ -620,12 +620,19 @@ class Supervisor:
                         run_id,
                     )
                 )
+            aggregation = (
+                arguments.get("aggregation") if step == "train_final" else None
+            ) or goal.get("aggregation", "fedavg")
             parameters: dict[str, Any] = {
                 "rounds": rounds,
                 "epochs": epochs,
                 "dataset_name": goal["dataset"],
                 "dataset_split": goal["dataset_split"],
+                "aggregation": aggregation,
+                "sync_mode": goal.get("sync_mode", "sync"),
             }
+            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
+                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
             if architecture:
                 parameters["architecture"] = architecture
             data = _unwrap_result(
@@ -634,7 +641,13 @@ class Supervisor:
             key = config_key(architecture, topology)
             if key not in state["trained_configs"]:
                 state["trained_configs"].append(key)
-            return _group_id(data), {"topology": topology, "rounds": rounds, "local_epochs": epochs, "config": key}
+            return _group_id(data), {
+                "topology": topology,
+                "rounds": rounds,
+                "local_epochs": epochs,
+                "aggregation": aggregation,
+                "config": key,
+            }
         raise StepFailed(f"Unsupported step {step}")
 
     def _stage_monitoring(self, run_id: str, goal: dict[str, Any], state: dict[str, Any]) -> None:

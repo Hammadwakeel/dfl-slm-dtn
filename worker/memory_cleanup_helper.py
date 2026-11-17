@@ -6,7 +6,6 @@ import logging
 import os
 import subprocess
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 

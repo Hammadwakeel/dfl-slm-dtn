@@ -302,7 +302,10 @@
                 "epochs": {"type": "integer", "minimum": 1, "maximum": 50},
                 "dataset_name": {"$ref": "#/$defs/datasetName"},
                 "architecture": {"$ref": "#/$defs/modelArchitecture"},
-                "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]}
+                "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]},
+                "aggregation": {"enum": ["fedavg", "uniform", "metropolis", "trimmed_mean"]},
+                "sync_mode": {"enum": ["sync", "semi_sync"]},
+                "sync_deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 7200}
               },
               "required": ["rounds", "epochs", "dataset_name"],
               "additionalProperties": false

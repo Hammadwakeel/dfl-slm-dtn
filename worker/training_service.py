@@ -32,6 +32,13 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 
+from worker.aggregation import (
+    AGGREGATION_RULES,
+    SYNC_MODES,
+    Contribution,
+    aggregate,
+    model_signature,
+)
 from common.auth import is_authorized
 from common.cifar_model import build_cifar10_model, compile_cifar10_model, model_size_bytes
 from common.dataset_nas import smoke_test_architecture
@@ -515,33 +522,6 @@ def install_initial_model(
     return metadata
 
 
-def weighted_average_weights(
-    weighted_weights: list[tuple[list[np.ndarray], int]],
-) -> list[np.ndarray]:
-    if not weighted_weights or any(sample_count < 1 for _, sample_count in weighted_weights):
-        raise ValueError("Weighted averaging requires non-empty models and positive sample counts")
-    reference = weighted_weights[0][0]
-    if not reference:
-        raise ValueError("Model weights must not be empty")
-    for weights, _ in weighted_weights:
-        if len(weights) != len(reference):
-            raise ValueError("Peer model weight counts do not match")
-        for current, expected in zip(weights, reference):
-            if current.shape != expected.shape or not np.isfinite(current).all():
-                raise ValueError("Peer model weights have invalid shape or values")
-    total_samples = sum(sample_count for _, sample_count in weighted_weights)
-    return [
-        (
-            sum(
-                weights[index].astype(np.float64) * sample_count
-                for weights, sample_count in weighted_weights
-            )
-            / total_samples
-        ).astype(reference[index].dtype)
-        for index in range(len(reference))
-    ]
-
-
 def _load_installed_dataset_initial_model(
     config: WorkerConfig,
     dataset_name: str,
@@ -830,6 +810,10 @@ class WorkerTrainer:
         self._epochs = 5
         self._topology = "ring"
         self._architecture = architecture_spec(FIXED_ARCHITECTURE)
+        self._aggregation = "fedavg"
+        self._sync_mode = "sync"
+        self._sync_deadline_seconds: float | None = None
+        self._min_peers = 1
 
     def configure_peers(self, peers: tuple[Peer, ...]) -> dict[str, Any]:
         peer_ids = [peer.node_id for peer in peers]
@@ -1093,7 +1077,19 @@ class WorkerTrainer:
         dataset_split: str = "stratified",
         architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
         dataset_name: str | None = None,
+        aggregation: str = "fedavg",
+        sync_mode: str = "sync",
+        sync_deadline_seconds: float | None = None,
+        min_peers: int = 1,
     ) -> dict[str, Any]:
+        if aggregation not in AGGREGATION_RULES:
+            raise ValueError(f"aggregation must be one of {', '.join(AGGREGATION_RULES)}")
+        if sync_mode not in SYNC_MODES:
+            raise ValueError(f"sync_mode must be one of {', '.join(SYNC_MODES)}")
+        if sync_deadline_seconds is not None and not 5 <= float(sync_deadline_seconds) <= 7200:
+            raise ValueError("sync_deadline_seconds must be between 5 and 7200")
+        if not isinstance(min_peers, int) or not 0 <= min_peers <= 64:
+            raise ValueError("min_peers must be an integer between 0 and 64")
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("Rounds must be 1-100 and local epochs 1-50")
         if topology not in {
@@ -1170,6 +1166,12 @@ class WorkerTrainer:
             self._epochs = epochs
             self._topology = topology
             self._architecture = selected_architecture
+            self._aggregation = aggregation
+            self._sync_mode = sync_mode
+            self._sync_deadline_seconds = (
+                float(sync_deadline_seconds) if sync_deadline_seconds is not None else None
+            )
+            self._min_peers = min_peers
         return {
             "rounds": rounds,
             "epochs": epochs,
@@ -1178,6 +1180,10 @@ class WorkerTrainer:
             "dataset_name": dataset_name,
             "sample_count": int(labels.size),
             "architecture": selected_architecture,
+            "aggregation": aggregation,
+            "sync_mode": sync_mode,
+            "sync_deadline_seconds": sync_deadline_seconds,
+            "min_peers": min_peers,
         }
 
     def start_run(self, run_id: str, seed: int, topology: str) -> dict[str, Any]:
@@ -1354,12 +1360,30 @@ class WorkerTrainer:
         sender: str,
         sample_count: int,
         payload: bytes,
-    ) -> None:
+        signature: str | None = None,
+    ) -> bool:
+        """Store a peer's weights; returns False when the round is already finished."""
         if sender not in self._peer_map or sample_count < 1:
             raise ValueError("Unknown peer or invalid sample count")
         weights = deserialize_weights(payload)
+        received_signature = model_signature(weights)
+        if signature is not None and signature != received_signature:
+            raise ValueError("Peer model signature header does not match its weights")
         key = (run_id, round_index)
         with self._condition:
+            if round_index <= self._completed_rounds.get(run_id, -1):
+                # A straggler's update for a round this worker already aggregated
+                # (semi-synchronous mode); keeping it would only leak memory.
+                _log_event("stale_peer_weights_dropped", run_id=run_id, round=round_index, peer_id=sender)
+                return False
+            model = self._models.get(run_id)
+            if model is not None:
+                local_signature = model_signature([np.asarray(item) for item in model.get_weights()])
+                if local_signature != received_signature:
+                    raise ValueError(
+                        f"Architecture mismatch: {sender} sent model {received_signature}, "
+                        f"this worker trains {local_signature}; redistribute one initial model"
+                    )
             senders = self._incoming.setdefault(key, {})
             if sender in senders:
                 raise ValueError("Duplicate weights received from a peer for this round")
@@ -1373,6 +1397,7 @@ class WorkerTrainer:
             sample_count=sample_count,
             bytes_received=len(payload),
         )
+        return True
 
     def _run_split(
         self,
@@ -1487,6 +1512,7 @@ class WorkerTrainer:
                 self._active_phase = "peer_exchange"
             local_weights = [np.asarray(item) for item in model.get_weights()]
             payload = serialize_weights(local_weights)
+            local_signature = model_signature(local_weights)
             sent_bytes = 0
             exchange_started = time.perf_counter()
             for peer_id in neighbors:
@@ -1502,6 +1528,7 @@ class WorkerTrainer:
                         "X-Round": str(round_index),
                         "X-Sender-Node": self.config.node_id,
                         "X-Sample-Count": str(train_sample_count),
+                        "X-Model-Signature": local_signature,
                     },
                     method="POST",
                 )
@@ -1520,7 +1547,16 @@ class WorkerTrainer:
                     )
                 except (HTTPError, URLError, TimeoutError, OSError) as error:
                     raise RuntimeError(f"Peer exchange with {peer_id} failed: {error}") from error
-            deadline = time.monotonic() + self.config.peer_timeout_seconds
+            with self._lock:
+                sync_mode = self._sync_mode
+                aggregation_rule = self._aggregation
+                wait_budget = (
+                    self.config.peer_timeout_seconds
+                    if sync_mode == "sync" or self._sync_deadline_seconds is None
+                    else self._sync_deadline_seconds
+                )
+                required_peers = min(self._min_peers, len(expected_senders))
+            deadline = time.monotonic() + wait_budget
             peer_wait_started = time.perf_counter()
             with self._condition:
                 while not set(expected_senders).issubset(
@@ -1528,23 +1564,37 @@ class WorkerTrainer:
                 ):
                     if self._cancel.is_set():
                         raise RuntimeError("Training was cancelled during peer exchange")
+                    arrived = set(self._incoming.get((run_id, round_index), {}))
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        missing = sorted(
-                            set(expected_senders)
-                            - set(self._incoming.get((run_id, round_index), {}))
-                        )
+                        missing = sorted(set(expected_senders) - arrived)
+                        if sync_mode == "semi_sync" and len(arrived & set(expected_senders)) >= required_peers:
+                            # Semi-synchronous: aggregate what arrived instead of failing the
+                            # whole round because one peer is slow.
+                            break
                         raise TimeoutError(f"Timed out waiting for peer weights from {missing}")
                     self._condition.wait(timeout=min(remaining, 1.0))
-                incoming = self._incoming.pop((run_id, round_index))
+                incoming = self._incoming.pop((run_id, round_index), {})
             peer_wait_seconds = time.perf_counter() - peer_wait_started
-            weighted_models = [(local_weights, train_sample_count)]
+            used_senders = [peer_id for peer_id in expected_senders if peer_id in incoming]
+            missing_senders = sorted(set(expected_senders) - set(used_senders))
+            contributions = [
+                Contribution(self.config.node_id, local_weights, train_sample_count, len(expected_senders))
+            ]
             bytes_received = 0
-            for peer_id in expected_senders:
+            for peer_id in used_senders:
                 peer_weights, sample_count, received_bytes = incoming[peer_id]
-                weighted_models.append((peer_weights, sample_count))
+                contributions.append(
+                    Contribution(
+                        peer_id,
+                        peer_weights,
+                        sample_count,
+                        len(topology_senders(peer_id, worker_ids, topology)),
+                    )
+                )
                 bytes_received += received_bytes
-            averaged = weighted_average_weights(weighted_models)
+            averaged = aggregate(aggregation_rule, contributions)
+            del contributions, incoming
             model.set_weights(averaged)
             validation_metrics: dict[str, Any] = {}
             if validation_images is not None and validation_labels is not None:
@@ -1608,7 +1658,13 @@ class WorkerTrainer:
                 "bytes_sent": sent_bytes,
                 "bytes_received": bytes_received,
                 "peer_messages_sent": len(neighbors),
-                "peer_messages_received": len(expected_senders),
+                "peer_messages_received": len(used_senders),
+                "aggregation": aggregation_rule,
+                "sync_mode": sync_mode,
+                "peers_expected": list(expected_senders),
+                "peers_used": used_senders,
+                "missing_peers": missing_senders,
+                "model_signature": local_signature,
                 "exchange_seconds": round(exchange_seconds, 3),
                 "peer_wait_seconds": round(peer_wait_seconds, 3),
                 "neighbours": list(neighbors),
@@ -1622,6 +1678,10 @@ class WorkerTrainer:
                 self._round_sample_counts[(run_id, round_index)] = train_sample_count
                 # The master reads a round's weights right after that round; older rounds
                 # only grew worker memory for the whole run.
+                for stale_key in [
+                    key for key in self._incoming if key[0] == run_id and key[1] <= round_index
+                ]:
+                    self._incoming.pop(stale_key, None)
                 for stale_round in range(0, round_index - ROUND_WEIGHTS_RETAINED + 1):
                     self._round_weights.pop((run_id, stale_round), None)
                     self._round_sample_counts.pop((run_id, stale_round), None)
@@ -1932,6 +1992,10 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     dataset_split=payload.get("dataset_split", "stratified"),
                     architecture=payload.get("architecture", FIXED_ARCHITECTURE),
                     dataset_name=payload.get("dataset_name"),
+                    aggregation=payload.get("aggregation", "fedavg"),
+                    sync_mode=payload.get("sync_mode", "sync"),
+                    sync_deadline_seconds=payload.get("sync_deadline_seconds"),
+                    min_peers=payload.get("min_peers", 1),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
@@ -2259,11 +2323,18 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 body = self.rfile.read(length)
                 if len(body) != length:
                     raise ValueError("Weight payload was truncated")
-                trainer.accept_peer_weights(run_id, round_index, sender, sample_count, body)
+                stored = trainer.accept_peer_weights(
+                    run_id,
+                    round_index,
+                    sender,
+                    sample_count,
+                    body,
+                    self.headers.get("X-Model-Signature"),
+                )
             except (ValueError, OverflowError) as error:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             else:
-                self._send_json(HTTPStatus.ACCEPTED, {"accepted": True})
+                self._send_json(HTTPStatus.ACCEPTED, {"accepted": True, "stale": not stored})
 
         def _read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0"))

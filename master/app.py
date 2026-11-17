@@ -838,6 +838,9 @@ def _execute_action(
                     epochs=parameters["epochs"],
                     dataset_split=parameters.get("dataset_split"),
                     dataset_name=parameters.get("dataset_name"),
+                    aggregation=parameters.get("aggregation"),
+                    sync_mode=parameters.get("sync_mode"),
+                    sync_deadline_seconds=parameters.get("sync_deadline_seconds"),
                     **(
                         {"architecture": parameters["architecture"]}
                         if "architecture" in parameters

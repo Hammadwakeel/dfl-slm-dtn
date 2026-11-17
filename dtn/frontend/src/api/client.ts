@@ -164,6 +164,10 @@ export interface WorkerRoundMetrics {
   round: number;
   topology: TrainingTopology | "centralized";
   dataset_split?: string;
+  aggregation?: string;
+  sync_mode?: string;
+  peers_used?: string[];
+  missing_peers?: string[];
   local_epochs?: number;
   sample_count?: number;
   training_loss?: number;
@@ -243,6 +247,9 @@ export interface ExperimentGroup {
     | "dataset_architecture_search";
   topology: TrainingTopology | "centralized" | "candidate_sweep";
   dataset_split?: string;
+  aggregation?: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";
+  sync_mode?: "sync" | "semi_sync";
+  sync_deadline_seconds?: number | null;
   alphas?: number[];
   candidates?: TopologyCandidate[];
   nas_candidates?: NASCandidate[];
@@ -976,6 +983,9 @@ export interface SupervisorGoal {
   local_epochs: number;
   topology: "directed_ring" | "bidirectional_ring" | "mesh" | "chain" | "star";
   nas_budget_seconds: number;
+  aggregation: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";
+  sync_mode: "sync" | "semi_sync";
+  sync_deadline_seconds: number;
   seed?: number;
 }
 
@@ -990,6 +1000,9 @@ export interface SupervisorExperiment {
   parameter_count?: number | null;
   topology?: string | null;
   selected_topology?: string | null;
+  aggregation?: string;
+  sync_mode?: string;
+  partial_rounds?: number;
   error?: string;
   completed_at?: string;
 }

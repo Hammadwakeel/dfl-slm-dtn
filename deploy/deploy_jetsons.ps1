@@ -1,5 +1,7 @@
 param(
-    [string]$SshKey = (Join-Path $env:USERPROFILE '.ssh\id_ed25519')
+    [string]$SshKey = (Join-Path $env:USERPROFILE '.ssh\id_ed25519'),
+    # Deploy only these node IDs (default: every node).
+    [string[]]$NodeIds = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,7 +91,7 @@ $sshConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-ssh-" + [guid
 $tempFiles = [System.Collections.Generic.List[string]]::new()
 
 try {
-    foreach ($node in $nodes) {
+    foreach ($node in @($nodes | Where-Object { $NodeIds.Count -eq 0 -or $NodeIds -contains $_.Id })) {
         $token = $values[$node.TokenName]
         if ($token.Length -lt 32) {
             throw "Token $($node.TokenName) must be at least 32 characters"

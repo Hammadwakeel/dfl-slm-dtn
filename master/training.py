@@ -57,6 +57,8 @@ TOPOLOGIES = (
     "chain",
     "star",
 )
+AGGREGATION_RULES = ("fedavg", "uniform", "metropolis", "trimmed_mean")
+SYNC_MODES = ("sync", "semi_sync")
 DATASET_SPLITS = {
     0.1: "dirichlet_a01",
     0.3: "dirichlet_a03",
@@ -304,6 +306,9 @@ class TrainingCoordinator:
             "topology": config.topology,
             "dataset_split": "stratified",
             "architecture": architecture_spec(FIXED_ARCHITECTURE),
+            "aggregation": "fedavg",
+            "sync_mode": "sync",
+            "sync_deadline_seconds": None,
         }
         self._groups: list[dict[str, Any]] = self._load_groups()
         if self._recover_interrupted_groups():
@@ -422,6 +427,9 @@ class TrainingCoordinator:
         epochs: int | None = None,
         topology: str | None = None,
         dataset_split: str | None = None,
+        aggregation: str | None = None,
+        sync_mode: str | None = None,
+        sync_deadline_seconds: int | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if self._active_group_id is not None:
@@ -445,6 +453,18 @@ class TrainingCoordinator:
                 if dataset_split not in {"stratified", *DATASET_SPLITS.values()}:
                     raise ValueError("Unsupported CIFAR-10 training split")
                 updated["dataset_split"] = dataset_split
+            if aggregation is not None:
+                if aggregation not in AGGREGATION_RULES:
+                    raise ValueError(f"aggregation must be one of {', '.join(AGGREGATION_RULES)}")
+                updated["aggregation"] = aggregation
+            if sync_mode is not None:
+                if sync_mode not in SYNC_MODES:
+                    raise ValueError(f"sync_mode must be one of {', '.join(SYNC_MODES)}")
+                updated["sync_mode"] = sync_mode
+            if sync_deadline_seconds is not None:
+                if not 5 <= sync_deadline_seconds <= 7200:
+                    raise ValueError("sync_deadline_seconds must be between 5 and 7200")
+                updated["sync_deadline_seconds"] = sync_deadline_seconds
             self._settings = updated
         return dict(updated)
 
@@ -457,6 +477,9 @@ class TrainingCoordinator:
         dataset_split: str | None = None,
         dataset_name: str | None = None,
         architecture: str | dict[str, Any] = FIXED_ARCHITECTURE,
+        aggregation: str | None = None,
+        sync_mode: str | None = None,
+        sync_deadline_seconds: int | None = None,
     ) -> dict[str, Any]:
         if dataset_name is not None and not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", dataset_name
@@ -528,6 +551,9 @@ class TrainingCoordinator:
                 rounds=rounds,
                 epochs=epochs,
                 dataset_split=dataset_split,
+                aggregation=aggregation,
+                sync_mode=sync_mode,
+                sync_deadline_seconds=sync_deadline_seconds,
             )
             self._settings["architecture"] = selected_architecture
             settings["architecture"] = selected_architecture
@@ -540,6 +566,9 @@ class TrainingCoordinator:
                 "epochs": settings["epochs"],
                 "dataset_split": settings["dataset_split"],
                 "architecture": selected_architecture,
+                "aggregation": settings["aggregation"],
+                "sync_mode": settings["sync_mode"],
+                "sync_deadline_seconds": settings["sync_deadline_seconds"],
                 "nas_enabled": False,
                 "seeds": list(selected_seeds),
                 "status": "running",
@@ -977,7 +1006,11 @@ class TrainingCoordinator:
             "topology": group["topology"],
             "dataset_split": group.get("dataset_split", "stratified"),
             "architecture": group.get("architecture", FIXED_ARCHITECTURE),
+            "aggregation": group.get("aggregation", "fedavg"),
+            "sync_mode": group.get("sync_mode", "sync"),
         }
+        if group.get("sync_deadline_seconds") is not None:
+            configuration["sync_deadline_seconds"] = group["sync_deadline_seconds"]
         if group.get("dataset_name") is not None:
             configuration["dataset_name"] = group["dataset_name"]
         self._parallel_workers(

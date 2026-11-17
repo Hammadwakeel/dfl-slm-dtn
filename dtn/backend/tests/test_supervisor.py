@@ -278,7 +278,7 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     cluster = FakeCluster()
     slm = FakeSLM([
         tool_call("run_nas", {"budget_seconds": 300}, "NAS should find a stronger model."),
-        tool_call("train_final", {"rounds": 4, "local_epochs": 3}, "Retrain with the searched model."),
+        tool_call("train_final", {"rounds": 4, "local_epochs": 3, "aggregation": "metropolis"}, "Retrain with the searched model."),
     ])
     supervisor = make_supervisor(sessions, cluster, slm)
     run = supervisor.create_run(default_goal(target_accuracy=0.95))
@@ -297,6 +297,12 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert cluster.actions[retrain_index - 1]["parameters"]["architecture"] == NAS_ARCHITECTURE
     assert cluster.actions[retrain_index]["parameters"]["architecture"] == NAS_ARCHITECTURE
     assert cluster.actions[retrain_index]["parameters"]["rounds"] == 4
+    # The SLM chose the aggregation rule; synchronization comes from the goal.
+    assert cluster.actions[retrain_index]["parameters"]["aggregation"] == "metropolis"
+    assert cluster.actions[retrain_index]["parameters"]["sync_mode"] == "semi_sync"
+    assert cluster.actions[retrain_index]["parameters"]["sync_deadline_seconds"] == 300
+    baseline = next(action for action in cluster.actions if action["action"] == "start_training")
+    assert baseline["parameters"]["aggregation"] == "fedavg"
     # Every SLM decision received only the compact allowed tool set.
     offered = [{tool["function"]["name"] for tool in tools} for _messages, tools in slm.calls]
     assert offered[0] == {"run_nas", "optimize_topology", "finish_workflow"}

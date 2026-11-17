@@ -232,9 +232,15 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
             steps.append("run_hpo")
         has_improvement = bool(state.get("nas_architecture") or state.get("selected_topology"))
         untried = final_training_config(goal, state) not in state.get("trained_configs", [])
-        if has_improvement and untried and failures.get("train_final", 0) < MAX_STEP_FAILURES:
+        # One explicit final retrain is always worth offering (the SLM may ask for more
+        # rounds), even when a search step already trained the same configuration.
+        never_retrained = "train_final" not in completed
+        if has_improvement and (untried or never_retrained) and failures.get("train_final", 0) < MAX_STEP_FAILURES:
             steps.append("train_final")
-        if can_prune(state):
+        # Compress only a good model: when the target is met, or nothing else can help.
+        best = (state.get("best") or {}).get("validation_accuracy")
+        target_met = isinstance(best, (int, float)) and best >= float(goal["target_accuracy"])
+        if can_prune(state) and (target_met or not steps):
             steps.append("prune_model")
     steps.append("finish_workflow")
     return steps

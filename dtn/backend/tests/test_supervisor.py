@@ -45,7 +45,7 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
 def test_trained_configuration_is_not_offered_again() -> None:
     goal = default_goal()
     state = new_state()
-    state["completed_steps"] = ["run_nas", "run_hpo", "learn_topology", "optimize_topology"]
+    state["completed_steps"] = ["run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final"]
     state["nas_architecture"] = NAS_ARCHITECTURE
     state["trained_configs"] = ["b2_c16_k5|directed_ring"]
 
@@ -539,7 +539,9 @@ def test_baseline_architecture_enables_hpo_without_nas(sessions) -> None:
     run_until_done(supervisor, run["id"])
 
     offered = {tool["function"]["name"] for tool in slm.calls[0][1]}
-    assert {"run_nas", "run_hpo", "optimize_topology", "prune_model"} <= offered
+    assert {"run_nas", "run_hpo", "optimize_topology"} <= offered
+    # Below the target, compressing the model is not offered while other steps can help.
+    assert "prune_model" not in offered
 
 
 def test_learn_topology_trains_on_the_apg_graph_and_keeps_it_when_it_helps(sessions) -> None:

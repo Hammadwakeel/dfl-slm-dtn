@@ -556,3 +556,17 @@ def test_learn_topology_trains_on_the_apg_graph_and_keeps_it_when_it_helps(sessi
     assert topologies == ["directed_ring", "learned"]
     assert finished["state"]["selected_topology"] == "learned"
     assert "learn_topology" in finished["state"]["completed_steps"]
+
+
+def test_hpo_budget_fits_one_worker_search_request(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    slm = FakeSLM([
+        tool_call("run_nas", {}, "search"),
+        tool_call("run_hpo", {}, "tune"),
+        tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "done"}, "done"),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
+    hpo = next(action for action in cluster.actions if action["action"] == "run_hpo")
+    assert hpo["parameters"]["search_time_limit_seconds"] <= 300

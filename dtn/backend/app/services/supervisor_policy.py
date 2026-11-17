@@ -76,6 +76,11 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
         },
     },
 }
+# Every step accepts an optional one-sentence reason so each decision is explainable even
+# when the model returns a tool call without assistant text.
+REASON_PROPERTY = {"type": "string", "maxLength": 300}
+for _tool in STEP_TOOLS.values():
+    _tool["parameters"]["properties"].setdefault("reason", REASON_PROPERTY)
 _VALIDATORS = {
     name: Draft202012Validator(tool["parameters"]) for name, tool in STEP_TOOLS.items()
 }
@@ -85,8 +90,8 @@ SYSTEM_PROMPT = (
     "Jetson devices. Choose the single next step by calling exactly one provided tool. "
     "Use only the state JSON as evidence. Prefer the step most likely to raise the mean "
     "worker validation accuracy toward the target within the remaining budget. Call "
-    "finish_workflow when no listed step is worthwhile. Write one short sentence that "
-    "explains your choice."
+    "finish_workflow when no listed step is worthwhile. Put one short sentence explaining "
+    "your choice in the tool's reason argument."
 )
 
 
@@ -251,6 +256,13 @@ def _rationale(content: Any) -> str:
     return " ".join(text.split())[:500]
 
 
+def _pop_reason(arguments: dict[str, Any], content: str) -> str:
+    reason = arguments.pop("reason", None)
+    if isinstance(reason, str) and reason.strip():
+        return " ".join(reason.split())[:300]
+    return _rationale(content)
+
+
 def parse_decision(message: dict[str, Any], allowed: list[str]) -> Decision:
     """Turn one model message into an allowed, validated step or raise DecisionError."""
     if not isinstance(message, dict):
@@ -261,12 +273,12 @@ def parse_decision(message: dict[str, Any], allowed: list[str]) -> Decision:
         first = calls[0] if isinstance(calls[0], dict) else {}
         function = first.get("function") if isinstance(first.get("function"), dict) else {}
         arguments = validate_step(function.get("name"), function.get("arguments"), allowed)
-        return Decision(function["name"], arguments, _rationale(content), "slm")
+        return Decision(function["name"], arguments, _pop_reason(arguments, content), "slm")
     recovered = _text_tool_call(content)
     if recovered is None:
         raise DecisionError("The model replied in prose without calling one of the allowed tools")
     arguments = validate_step(recovered[0], recovered[1], allowed)
-    return Decision(recovered[0], arguments, _rationale(content), "slm_text")
+    return Decision(recovered[0], arguments, _pop_reason(arguments, content), "slm_text")
 
 
 def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: float) -> Decision | None:

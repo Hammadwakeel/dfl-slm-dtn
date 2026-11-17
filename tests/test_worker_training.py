@@ -1643,3 +1643,59 @@ def test_worker_config_reads_dataset_root_from_environment(monkeypatch, tmp_path
     custom_root = str(tmp_path / "worker-datasets")
     monkeypatch.setenv("DFL_TRAINING_DATASET_ROOT", custom_root)
     assert WorkerConfig.from_env().dataset_root == custom_root
+
+
+def test_worker_keeps_bounded_round_weights_and_one_split_per_run(tmp_path, monkeypatch):
+    import worker.nas_search as nas_search
+
+    dataset_name = "user-images"
+    dataset_path = tmp_path / "datasets" / dataset_name
+    dataset_path.mkdir(parents=True)
+    np.savez_compressed(
+        dataset_path / "train.npz",
+        images=np.zeros((20, 8, 8, 1), dtype=np.float32),
+        labels=np.tile(np.arange(10, dtype=np.int64), 2),
+        class_names=np.array([str(label) for label in range(10)]),
+    )
+    shard_path = tmp_path / "default_shard.npz"
+    np.savez(shard_path, images=np.zeros((4, 32, 32, 3), dtype=np.uint8), labels=np.array([0, 1, 0, 1]))
+    trainer = WorkerTrainer(
+        WorkerConfig(
+            node_id="worker1",
+            api_token="a" * 48,
+            port=5004,
+            data_path=str(shard_path),
+            dataset_root=str(tmp_path / "datasets"),
+            peers=(),
+            log_path=str(tmp_path / "worker.jsonl"),
+        )
+    )
+    trainer.configure(rounds=3, epochs=1, topology="ring", dataset_name=dataset_name)
+    split_calls = []
+    original_split = nas_search._split_indices
+
+    def record_split(labels, seed):
+        split_calls.append(seed)
+        return original_split(labels, seed)
+
+    monkeypatch.setattr(nas_search, "_split_indices", record_split)
+    monkeypatch.setattr(training_service, "topology_neighbours", lambda *args: ())
+    monkeypatch.setattr(training_service, "topology_senders", lambda *args: ())
+    monkeypatch.setattr(training_service, "_memory_available_kb", lambda: 1)
+    monkeypatch.setattr(training_service, "_resident_memory_mb", lambda: 1.0)
+    monkeypatch.setattr(training_service, "_peak_process_rss_mb", lambda: 1.0)
+
+    for round_index in range(3):
+        trainer._incoming[("bounded-run", round_index)] = {}
+        trainer.run_round("bounded-run", round_index, 1, 5, "ring")
+
+    assert split_calls == [5]
+    assert sorted(key[1] for key in trainer._round_weights if key[0] == "bounded-run") == [1, 2]
+    with pytest.raises(KeyError):
+        trainer.weights("bounded-run", 0)
+    payload, _sample_count = trainer.weights("bounded-run", 2)
+    assert payload
+
+    trainer.cleanup_run("bounded-run")
+    assert "bounded-run" not in trainer._run_splits
+    assert not any(key[0] == "bounded-run" for key in trainer._round_weights)

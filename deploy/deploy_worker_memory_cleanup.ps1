@@ -84,7 +84,7 @@ try {
         }
 
         & ssh -tt -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
-            "sed -i 's/\r$//' '$stageName/install_memory_cleanup_helper.sh' '$stageName/dfl-slm-memory-cleanup.service' && sudo bash '$stageName/install_memory_cleanup_helper.sh'"
+            "sed -i 's/\r$//' '$stageName/install_memory_cleanup_helper.sh' '$stageName/dfl-slm-memory-cleanup.service' && sudo bash '$stageName/install_memory_cleanup_helper.sh' 2>&1"
         if ($LASTEXITCODE -ne 0) {
             $installExitCode = $LASTEXITCODE
             & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `

@@ -445,3 +445,12 @@ def test_supervisor_api_requires_auth_and_validates_goal(client, auth_headers) -
     listed = client.get("/api/supervisor/runs", headers=auth_headers)
     assert listed.status_code == 200
     assert listed.json() == []
+
+
+def test_reason_argument_becomes_the_rationale_and_is_not_a_step_argument() -> None:
+    decision = parse_decision(
+        {"tool_calls": [{"function": {"name": "run_nas", "arguments": {"budget_seconds": 300, "reason": "Baseline is 4 points below target."}}}]},
+        ["run_nas", "finish_workflow"],
+    )
+    assert decision.arguments == {"budget_seconds": 300}
+    assert decision.rationale == "Baseline is 4 points below target."

@@ -217,7 +217,7 @@ try {
         throw 'Could not stage protected SLM environment values on the master'
     }
 
-    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' && sudo -n bash '$stageName/install_master_slm.sh'"
+    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' && sudo -n bash '$stageName/install_master_slm.sh' 2>&1"
     if ($LASTEXITCODE -ne 0) {
         throw "Master SLM install failed; protected staging files remain at ~/$stageName for diagnosis"
     }

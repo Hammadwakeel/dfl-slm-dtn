@@ -1017,25 +1017,26 @@ class TrainingCoordinator:
                 node_id: payload["runs"][run["run_id"]][round_index]
                 for node_id, payload in summaries
             }
-            binary_weights = self._parallel_workers(
-                lambda worker: (
-                    worker.node_id,
-                    self._get_bytes(
-                        worker,
-                        "/v1/weights?" + urlencode(
-                            {"run_id": run["run_id"], "round": round_index}
+            scores: dict[str, Any] = {}
+            if group.get("dataset_name") is None:
+                # Only the legacy CIFAR path evaluates held-out accuracy on the master;
+                # dataset runs report worker-local validation metrics, so their weights
+                # are not downloaded every round.
+                binary_weights = self._parallel_workers(
+                    lambda worker: (
+                        worker.node_id,
+                        self._get_bytes(
+                            worker,
+                            "/v1/weights?" + urlencode(
+                                {"run_id": run["run_id"], "round": round_index}
+                            ),
                         ),
-                    ),
+                    )
                 )
-            )
-            scores = (
-                {}
-                if group.get("dataset_name") is not None
-                else self.evaluator.evaluate(
+                scores = self.evaluator.evaluate(
                     dict(binary_weights),
                     group.get("architecture", FIXED_ARCHITECTURE),
                 )
-            )
             worker_metrics = {}
             for node_id in local_rows:
                 metrics = {

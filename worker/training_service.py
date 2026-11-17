@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import io
 import base64
 import gc
@@ -53,6 +52,7 @@ from worker.nas_search import (
 )
 
 LOGGER = logging.getLogger("dfl_slm.worker_training")
+ROUND_WEIGHTS_RETAINED = 2
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MAX_WEIGHT_BYTES = MAX_MODEL_WEIGHT_BYTES
 MAX_DATASET_SHARD_BYTES = 256 * 1024 * 1024
@@ -808,6 +808,8 @@ class WorkerTrainer:
         self._completed_rounds: dict[str, int] = {}
         self._round_weights: dict[tuple[str, int], list[np.ndarray]] = {}
         self._round_sample_counts: dict[tuple[str, int], int] = {}
+        # One train/validation split per run instead of fresh fancy-index copies every round.
+        self._run_splits: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]] = {}
         self._results: dict[str, list[dict[str, Any]]] = {}
         self._run_errors: dict[str, str] = {}
         self._active_run: str | None = None
@@ -888,6 +890,7 @@ class WorkerTrainer:
                 self._completed_rounds.clear()
                 self._round_weights.clear()
                 self._round_sample_counts.clear()
+                self._run_splits.clear()
                 self._results.clear()
                 self._run_errors.clear()
                 self._incoming.clear()
@@ -1046,6 +1049,7 @@ class WorkerTrainer:
                 or any(key[0] == run_id for key in self._incoming)
             )
             self._models.pop(run_id, None)
+            self._run_splits.pop(run_id, None)
             self._run_architectures.pop(run_id, None)
             self._run_model_audits.pop(run_id, None)
             self._completed_rounds.pop(run_id, None)
@@ -1370,6 +1374,32 @@ class WorkerTrainer:
             bytes_received=len(payload),
         )
 
+    def _run_split(
+        self,
+        run_id: str,
+        seed: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+        """Return this run's train/validation arrays, materialized once per run."""
+        with self._lock:
+            cached = self._run_splits.get(run_id)
+        if cached is not None:
+            return cached
+        if self.dataset_name is None:
+            split = (self.images, self.labels, None, None)
+        else:
+            from worker.nas_search import _split_indices
+
+            training_indices, validation_indices = _split_indices(self.labels, seed)
+            split = (
+                self.images[training_indices],
+                self.labels[training_indices],
+                self.images[validation_indices],
+                self.labels[validation_indices],
+            )
+        with self._lock:
+            self._run_splits[run_id] = split
+        return split
+
     def run_round(
         self,
         run_id: str,
@@ -1408,21 +1438,10 @@ class WorkerTrainer:
         try:
             import tensorflow as tf
 
-            if self.dataset_name is None:
-                training_images = self.images
-                training_labels = self.labels
-                validation_images = None
-                validation_labels = None
-                train_sample_count = int(self.labels.size)
-            else:
-                from worker.nas_search import _split_indices
-
-                training_indices, validation_indices = _split_indices(self.labels, seed)
-                training_images = self.images[training_indices]
-                training_labels = self.labels[training_indices]
-                validation_images = self.images[validation_indices]
-                validation_labels = self.labels[validation_indices]
-                train_sample_count = int(training_labels.size)
+            training_images, training_labels, validation_images, validation_labels = (
+                self._run_split(run_id, seed)
+            )
+            train_sample_count = int(training_labels.size)
 
             if validation_images is not None and validation_labels is not None:
                 from common.cifar_model import classification_metrics
@@ -1601,6 +1620,11 @@ class WorkerTrainer:
                     np.asarray(item).copy() for item in averaged
                 ]
                 self._round_sample_counts[(run_id, round_index)] = train_sample_count
+                # The master reads a round's weights right after that round; older rounds
+                # only grew worker memory for the whole run.
+                for stale_round in range(0, round_index - ROUND_WEIGHTS_RETAINED + 1):
+                    self._round_weights.pop((run_id, stale_round), None)
+                    self._round_sample_counts.pop((run_id, stale_round), None)
                 self._results[run_id].append(result)
             _log_event("round_completed", **result)
             return result

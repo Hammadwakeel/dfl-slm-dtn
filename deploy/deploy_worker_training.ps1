@@ -180,7 +180,7 @@ try {
         }
 
         & ssh -tt -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `
-            "sed -i 's/\r$//' '$stageName/install_worker_training.sh' '$stageName/dfl-slm-worker-training.service' && sudo env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_worker_training.sh'"
+            "sed -i 's/\r$//' '$stageName/install_worker_training.sh' '$stageName/dfl-slm-worker-training.service' && sudo env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_worker_training.sh' 2>&1"
         if ($LASTEXITCODE -ne 0) {
             $installExitCode = $LASTEXITCODE
             & ssh -i $SshKey -o IdentitiesOnly=yes -o BatchMode=yes $remote `

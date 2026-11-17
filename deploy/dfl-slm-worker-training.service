@@ -10,6 +10,10 @@ Group=hammad
 WorkingDirectory=/opt/dfl-slm-dtn
 EnvironmentFile=/etc/dfl-slm-worker-training.env
 Environment=PYTHONDONTWRITEBYTECODE=1
+# Jetson CPU and GPU share RAM: grow GPU memory on demand instead of reserving it up front,
+# and limit glibc malloc arenas so the threaded HTTP server does not fragment memory.
+Environment=TF_FORCE_GPU_ALLOW_GROWTH=true
+Environment=MALLOC_ARENA_MAX=2
 ExecStart=/opt/dfl-slm-dtn/worker/venv/bin/python -m worker.training_service
 Restart=on-failure
 RestartSec=3

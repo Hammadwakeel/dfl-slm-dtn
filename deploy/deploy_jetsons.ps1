@@ -134,7 +134,7 @@ try {
             throw "Could not stage protected node configuration on $($node.Ip)"
         }
 
-        $installCommand = "sudo -n env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_jetson.sh' '$($node.Id)' '$($node.Role)' '$($node.Port)' '$($node.User)'"
+        $installCommand = "sudo -n env DFL_SERVICE_USER='$($node.User)' bash '$stageName/install_jetson.sh' '$($node.Id)' '$($node.Role)' '$($node.Port)' '$($node.User)' 2>&1"
         & ssh @sshArgs $installCommand
         if ($LASTEXITCODE -ne 0) {
             throw "Service installation failed on $($node.Ip); staging files remain at ~/$stageName for diagnosis"

@@ -583,3 +583,19 @@ def test_prepare_data_keeps_each_dataset_at_its_native_size(sessions) -> None:
         run_until_done(supervisor, supervisor.create_run(default_goal(dataset=dataset, target_accuracy=0.99))["id"])
         prepare = next(action for action in cluster.actions if action["action"] == "preprocess_dataset")
         assert prepare["parameters"]["target_size"] == {"height": size, "width": size}
+
+
+def test_pruning_is_not_offered_when_the_newest_model_is_not_the_best() -> None:
+    from app.services.supervisor_policy import can_prune
+
+    state = new_state()
+    state["completed_steps"] = ["baseline_training", "train_final"]
+    state["last_trained_architecture"] = {"model_type": "custom", "layers": CNN_LAYERS}
+    state["experiments"] = [
+        {"step": "learn_topology", "kind": "decentralized", "status": "completed", "group_id": "g1", "validation_accuracy": 0.56},
+        {"step": "train_final", "kind": "decentralized", "status": "completed", "group_id": "g2", "validation_accuracy": 0.48},
+    ]
+    state["best"] = {"validation_accuracy": 0.56, "group_id": "g1"}
+    assert not can_prune(state)
+    state["best"] = {"validation_accuracy": 0.48, "group_id": "g2"}
+    assert can_prune(state)

@@ -263,6 +263,11 @@ def can_prune(state: dict[str, Any]) -> bool:
     trained = [item for item in state.get("experiments", []) if item.get("kind") == "decentralized" and item.get("status") == "completed"]
     if not trained:
         return False
+    # Workers keep only their newest model, so pruning compresses the newest training;
+    # only do that when it is also the best model of the run.
+    best_group = (state.get("best") or {}).get("group_id")
+    if best_group is not None and trained[-1].get("group_id") != best_group:
+        return False
     # The newest training is what workers hold; only plain CNN/MLP layers can be pruned.
     architecture = state.get("last_trained_architecture")
     if not is_custom_architecture(architecture):

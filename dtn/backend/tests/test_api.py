@@ -337,7 +337,7 @@ def test_openapi_declares_bearer_auth(client: TestClient) -> None:
     schema = response.json()
     assert "HTTPBearer" in schema["components"]["securitySchemes"]
     assert "/api/devices" in schema["paths"]
-    assert "/api/slm/suggest-next-action" in schema["paths"]
+    assert "/api/slm/agent/chat" in schema["paths"]
 
 
 def test_cors_allows_only_configured_frontend_origins(client: TestClient) -> None:

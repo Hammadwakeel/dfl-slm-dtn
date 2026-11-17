@@ -172,29 +172,6 @@ export interface DatabaseAssistantReply {
   sources: DatabaseAssistantSource[];
 }
 
-export interface SlmReplyEvaluation {
-  available: boolean;
-  model: string;
-  evaluation: {
-    status: string;
-    base_validation_metrics: Record<string, number>;
-    base_test_metrics: Record<string, number>;
-    validation_metrics: Record<string, number>;
-    test_metrics: Record<string, number>;
-    base_perplexity_metrics: Record<string, number>;
-    perplexity_metrics: Record<string, number>;
-    train_seconds: number;
-    steps: number;
-    train_loss: number;
-    generation_probe: {
-      rows: number;
-      empty_responses: number;
-      json_responses: number;
-      mean_characters: number;
-    };
-  };
-}
-
 export interface WorkerRoundMetrics {
   node_id: string;
   run_id: string;
@@ -1170,19 +1147,6 @@ export async function deleteSlmConversation(
   );
 }
 
-export async function getSlmReplyEvaluation(
-  token: string,
-): Promise<SlmReplyEvaluation> {
-  const response = await fetch(`${apiBase}/api/slm/reply-evaluation`, {
-    headers: { Authorization: "Bearer " + token },
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { detail?: string; error?: string };
-    throw new Error(body.detail ?? body.error ?? `Reply model evaluation request failed (HTTP ${response.status}).`);
-  }
-  return response.json() as Promise<SlmReplyEvaluation>;
-}
-
 export async function sendSlmCommand(
   token: string,
   action: SlmAction,
@@ -1255,22 +1219,6 @@ export async function startAPGSimulation(
 
 export async function getAPGJob(token: string, jobId: string): Promise<APGJob> {
   return coordinatorRequest(token, `/api/apg/jobs/${encodeURIComponent(jobId)}`);
-}
-
-export async function startCentralizedBaseline(
-  token: string,
-  rounds: number,
-  epochs: number,
-): Promise<void> {
-  const response = await fetch(`${apiBase}/api/slm/baseline`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ rounds, epochs }),
-  });
-  if (!response.ok) throw new Error(`Could not start centralized baseline (HTTP ${response.status}).`);
 }
 
 export function openDeviceEvents(

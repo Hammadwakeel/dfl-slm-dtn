@@ -92,7 +92,6 @@ $sshConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-ssh-" + [guid
 $stageName = '.dfl-slm-master-stage'
 $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dfl-master-" + [guid]::NewGuid().ToString('N'))
 $localEnv = Join-Path $stageRoot 'master.env'
-$replyEnv = Join-Path $stageRoot 'reply.env'
 $remote = "hammad@$masterIp"
 $tempFiles = [System.Collections.Generic.List[string]]::new()
 New-Item -ItemType Directory -Path (Join-Path $stageRoot 'master') -Force | Out-Null
@@ -125,6 +124,8 @@ $nodeEnv = @(
     'DFL_LOG_FILE=/var/log/dfl-slm-master/events.jsonl',
     'DFL_ACTION_HISTORY_PATH=/var/lib/dfl-slm-master/action_history.sqlite3',
     'DFL_OLLAMA_TIMEOUT_SECONDS=120',
+    'DFL_OLLAMA_NUM_CTX=4096',
+    'DFL_OLLAMA_KEEP_ALIVE=15m',
     "DFL_WORKERS_JSON_B64=$workersJsonBase64",
     'DFL_TRAINING_ROUNDS=10',
     'DFL_LOCAL_EPOCHS=5',
@@ -142,16 +143,6 @@ $nodeEnv = @(
 )
 [System.IO.File]::WriteAllText($localEnv, [string]::Join("`n", $nodeEnv) + "`n", $utf8NoBom)
 $tempFiles.Add($localEnv)
-$replyModelEnv = @(
-    "DFL_REPLY_API_TOKEN=$($values['MASTER_SLM_API_TOKEN'])",
-    'DFL_REPLY_BASE_MODEL=/home/hammad/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B-Instruct/snapshots/9213176726f574b556790deb65791e0c5aa438b6',
-    'DFL_REPLY_ADAPTER=/home/hammad/slm-ft-outputs/reply-style-20261102T2158JST/adapter',
-    'DFL_REPLY_REPORT_PATH=/home/hammad/slm-ft-outputs/reply-style-20261102T2158JST/training_report.json',
-    'DFL_REPLY_MODEL_NAME=llama3.2-1b-reply-style-lora',
-    'DFL_REPLY_PORT=5004'
-)
-[System.IO.File]::WriteAllText($replyEnv, [string]::Join("`n", $replyModelEnv) + "`n", $utf8NoBom)
-$tempFiles.Add($replyEnv)
 [System.IO.File]::WriteAllText($sshConfigPath, [string]::Join("`n", $headers), $utf8NoBom)
 
 try {
@@ -175,9 +166,7 @@ try {
         (Join-Path $repoRoot 'master\requirements.txt'),
         (Join-Path $repoRoot 'master\wsgi.py'),
         (Join-Path $repoRoot 'master\training.py'),
-        (Join-Path $repoRoot 'master\cifar_evaluator.py'),
-        (Join-Path $repoRoot 'master\reply_inference.py'),
-        (Join-Path $repoRoot 'master\reply_service.py')
+        (Join-Path $repoRoot 'master\cifar_evaluator.py')
     )
     & scp -F $sshConfigPath @sources "${remote}:$stageName/master/"
     if ($LASTEXITCODE -ne 0) {
@@ -185,7 +174,6 @@ try {
     }
     & scp -F $sshConfigPath `
         (Join-Path $repoRoot 'master\tests\test_app.py') `
-        (Join-Path $repoRoot 'master\tests\test_reply_service.py') `
         "${remote}:$stageName/master/tests/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage SLM application tests on the master'
@@ -221,7 +209,6 @@ try {
     & scp -F $sshConfigPath `
         (Join-Path $PSScriptRoot 'install_master_slm.sh') `
         (Join-Path $PSScriptRoot 'dfl-slm-master.service') `
-        (Join-Path $PSScriptRoot 'dfl-slm-reply.service') `
         "${remote}:$stageName/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the SLM service installer on the master'
@@ -230,12 +217,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage protected SLM environment values on the master'
     }
-    & scp -F $sshConfigPath $replyEnv "${remote}:$stageName/reply.env"
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not stage protected reply-model environment values on the master'
-    }
 
-    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' '$stageName/dfl-slm-reply.service' && sudo -n bash '$stageName/install_master_slm.sh'"
+    & ssh -F $sshConfigPath $remote "sed -i 's/\r$//' '$stageName/install_master_slm.sh' '$stageName/dfl-slm-master.service' && sudo -n bash '$stageName/install_master_slm.sh'"
     if ($LASTEXITCODE -ne 0) {
         throw "Master SLM install failed; protected staging files remain at ~/$stageName for diagnosis"
     }
@@ -252,6 +235,6 @@ finally {
 }
 
 Write-Output "Master SLM service is installed on $masterIp`:$servicePort."
-Write-Output 'The reply-style LoRA service is installed on the master loopback interface.'
+Write-Output 'Advisory chat and the agent share the single Ollama model; the old LoRA reply service is retired.'
 Write-Output 'The existing dfl-slm-status.service continues on port 5002.'
 Write-Output "The coordinator token is stored locally in the ignored file: $envPath"

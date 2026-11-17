@@ -893,7 +893,7 @@ A greedy generation-format probe on 12 held-out prompts produced no empty or JSO
 
 These extremely low held-out losses are a signal to inspect examples and label repetition before making a quality claim. The format probe checks only emptiness and JSON shape, not whether recommendations are factually correct or sufficiently natural. The adapter is for prose replies only; the active SLM action contract remains unchanged. Final `free -m`: RAM 7,620 MB total, used 1,928 MB, free 4,755 MB, available 5,406 MB; swap 3,810 MB total, used 1,034 MB, free 2,776 MB.
 
-The full machine-readable training and evaluation report is saved in [reply-style-lora-evaluation.json](./reply-style-lora-evaluation.json). It includes base/tuned validation and test loss, generation-format probe, training throughput and duration, step count, and adapter sizes. Accuracy, precision, recall and F1 are not included because this is next-token language generation, not a classification model. Peak CUDA allocation was not recorded because the original run stopped during its post-training probe.
+The full machine-readable training and evaluation report was saved as `docs/reply-style-lora-evaluation.json` (removed in v2 with the retired reply service; recoverable from git commit 8364de5). It includes base/tuned validation and test loss, generation-format probe, training throughput and duration, step count, and adapter sizes. Accuracy, precision, recall and F1 are not included because this is next-token language generation, not a classification model. Peak CUDA allocation was not recorded because the original run stopped during its post-training probe.
 
 ### DTN integration
 

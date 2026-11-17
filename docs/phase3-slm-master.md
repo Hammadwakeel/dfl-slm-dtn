@@ -6,7 +6,7 @@ The Waitress-served SLM API runs on `dfl-master` (`192.168.11.15`) at TCP `5003`
 
 - `dfl-slm-status.service`: TCP `5002`, `/etc/dfl-slm-node.env`, `MASTER_API_TOKEN`.
 - `dfl-slm-master.service`: TCP `5003`, `/etc/dfl-slm-master.env`, `MASTER_SLM_API_TOKEN`.
-- `dfl-slm-reply.service`: loopback TCP `5004`, `/etc/dfl-slm-reply.env`, the same server-side SLM token; this hosts the reply-style LoRA without replacing the action model.
+- `dfl-slm-reply.service` (retired in v2): it hosted a Llama-3.2-1B reply-style LoRA on loopback TCP `5004`. Advisory chat now uses the same Ollama model as the agent, so the master keeps only one language model in memory; the installer disables the old service.
 
 The coordinator is configured for Ollama `qwen3.5:4b`. The legacy action endpoint calls `/api/chat` with JSON-schema constrained output; direct RAG chat uses a natural-language prompt containing the retrieved context and original question. Both use `num_ctx=4096`, `keep_alive=5m`, and `think=false`; routing temperatures are 0.0 for schema actions and 0.1 for Agent tool calls. The Agent endpoint passes the existing JSON tool schemas through Ollama's standard chat API. The migration installer pulls and inspects the configured model before restarting the SLM service; if the installed Ollama version cannot load it, installation stops before replacing the running service. The separately hosted reply-style LoRA remains based on Llama 3.2 1B and is not the coordinator model.
 

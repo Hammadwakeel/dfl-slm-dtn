@@ -153,12 +153,6 @@ npm ci
 npm run dev
 ```
 
-The local read-only demo displays saved JSON/report summaries and uses only `GET /api/autonomy/state` and `GET /api/autonomy/history` on `127.0.0.1:8000`. It reads `DTN_API_TOKEN` from the process environment and does not load `.env`:
-
-```powershell
-& .\.venv-tf\Scripts\python.exe .\scripts\demo_e2e.py
-```
-
 PC-only evaluation scripts:
 
 ```powershell
@@ -183,7 +177,7 @@ Pop-Location
 ## Safety rules
 
 - State-changing actions execute automatically after schema validation. The mode switch and approval queue are removed; global STOP remains available and blocks state changes.
-- Before any hardware operation, run `scripts/m5_preflight.py`. Before backend restart, back up the SQLite database. Deploy one worker at a time with the approved deployment script, verified backup, hash check, and rollback path. Never edit Jetson files directly.
+- Before any hardware operation, confirm no training or NAS is active on the Worker Operations page. Before backend restart, back up the SQLite database with `scripts/backup_backend_database.py`. Deploy one worker at a time with the approved deployment script, verified backup, hash check, and rollback path. Never edit Jetson files directly.
 - Keep global STOP inactive only for authorized work. Check listener PID/start time/parent chain, health, routes, migration revision, and autonomy state after backend changes.
 - Never print tokens or `.env` contents. Do not commit `.env`, keys, generated data, or unverified metrics.
 - Keep test data out of training and tuning. Label validation and test metrics explicitly; report only measured results.

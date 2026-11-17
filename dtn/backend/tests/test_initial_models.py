@@ -137,7 +137,8 @@ def test_build_initial_model_is_deterministic_and_under_parameter_cap():
     repeat_architecture, repeat_weights = build_initial_model(**kwargs)
 
     assert architecture == repeat_architecture
-    assert architecture["parameter_count"] == 835
+    # b1_c8_k3: conv 3*3*3*8 + 8 = 224, classifier 8*3 + 3 = 27.
+    assert architecture["parameter_count"] == 251
     assert architecture["parameter_count"] <= 12_000
     for name in weights:
         np.testing.assert_array_equal(weights[name], repeat_weights[name])

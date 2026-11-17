@@ -12,7 +12,8 @@ def test_agent_tools_are_generated_from_executable_schema_actions() -> None:
 
     tools = agent_tool_definitions()
 
-    assert {tool["function"]["name"] for tool in tools} == expected
+    # finish_agent_workflow is a control tool handled by the coordinator, not a schema action.
+    assert {tool["function"]["name"] for tool in tools} == expected | {"finish_agent_workflow"}
     for tool in tools:
         Draft202012Validator.check_schema(tool["function"]["parameters"])
         assert "$ref" not in str(tool["function"]["parameters"])

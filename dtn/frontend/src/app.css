@@ -471,13 +471,6 @@ h1, h2, h3, h4 { font-family: "Aspecta", "Inter", "Segoe UI", sans-serif; }
 .reply-style-draft strong { color: #957018; font-size: 9px; }
 .reply-style-draft p { margin: 5px 0; color: #957018; font-size: 11px; line-height: 1.55; }
 .reply-style-draft small { color: #8b6e22; font-size: 9px; }
-.reply-evaluation { display: grid; gap: 9px; padding: 12px 17px; border-bottom: 1px solid #b9bdc3; background: #ffffff; }
-.reply-evaluation > button { justify-self: start; padding: 7px 10px; border: 1px solid #959fab; border-radius: 7px; color: #334155; background: #ffffff; font-size: 10px; }
-.reply-evaluation > button:hover:not(:disabled) { border-color: #9bb8ab; color: #18955e; }
-.reply-evaluation > button:disabled { opacity: .6; }
-.reply-evaluation-results { color: #334155; font-size: 10px; line-height: 1.55; }
-.reply-evaluation-results strong { color: #199461; }
-.reply-evaluation-results p { margin: 4px 0 0; }
 .chat-workspace { display: flex; min-height: 0; flex: 1; }
 .chat-history { display: flex; width: 245px; flex: 0 0 auto; flex-direction: column; gap: 13px; padding: 17px 12px; border-right: 1px solid #b9bdc3; background: #ffffff; }
 .chat-history-heading { display: flex; flex-direction: column; gap: 12px; padding: 0 3px 4px; }

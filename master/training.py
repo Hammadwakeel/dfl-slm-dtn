@@ -40,7 +40,6 @@ from common.hpo import (
     hpo_candidates,
     select_best_hyperparameters,
 )
-from topology_opt.learning import learn_senders
 from topology_opt.reward import RewardConfig, calculate_run_reward
 from topology_opt.selector import select_candidate
 from common.model_design import (
@@ -1162,6 +1161,9 @@ class TrainingCoordinator:
             self._persist_locked()
         self._run_distributed_seed(group_id, probe_group, probe)
         probe["status"] = "completed"
+        # numpy-based; imported here so the coordinator starts without it.
+        from topology_opt.learning import learn_senders
+
         worker_ids = [worker.node_id for worker in self.config.workers]
         senders, diagnostics = learn_senders(worker_ids, probe["rounds"][-1]["workers"])
         with self._lock:

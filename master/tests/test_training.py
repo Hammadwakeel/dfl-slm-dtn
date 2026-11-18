@@ -902,16 +902,52 @@ def test_optimizer_defaults_to_only_dirichlet_alpha_03(tmp_path: Path) -> None:
     assert {run["alpha"] for run in group["runs"]} == {0.3}
 
 
-def test_optimizer_rejects_other_or_multiple_alphas(tmp_path: Path) -> None:
+def test_optimizer_rejects_unsupported_or_multiple_alphas(tmp_path: Path) -> None:
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
 
-    for alphas in ((0.5,), (0.3, 0.5)):
-        try:
+    for alphas in ((0.7,), (0.3, 0.5), ()):
+        with pytest.raises(ValueError, match="exactly one Dirichlet alpha"):
             coordinator.start_optimization(alphas=alphas)
-        except ValueError as error:
-            assert "only Dirichlet alpha 0.3" in str(error)
-        else:
-            raise AssertionError(f"Expected alphas {alphas} to be rejected")
+    with pytest.raises(ValueError, match="supports"):
+        coordinator.start_optimization(dataset_name="imagenet")
+
+
+def test_cifar_optimizer_uses_the_cifar_architecture_and_records_the_alpha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    seen: list[dict] = []
+
+    def fake_seed(group_id, group, run):
+        seen.append(group)
+        run["rounds"].append(
+            {
+                "round": 1,
+                "workers": {
+                    worker.node_id: {"validation_accuracy": 0.6}
+                    for worker in coordinator.config.workers
+                },
+            }
+        )
+
+    monkeypatch.setattr(coordinator, "_run_distributed_seed", fake_seed)
+
+    accepted = coordinator.start_optimization(
+        rounds=1, epochs=1, seeds=(17,), alphas=(0.1,), dataset_name="cifar10"
+    )
+    deadline = time.monotonic() + 3
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert accepted["dataset_name"] == "cifar10"
+    assert accepted["architecture_id"] == "nas-d3-w32x64x64-k3-conv-h64-drop20"
+    assert len(seen) == 5
+    assert all(group["dataset_name"] == "cifar10" for group in seen)
+    assert all(group["dataset_split"] == "dirichlet_a01" for group in seen)
+    assert all(
+        group["architecture"]["channel_schedule"] == [32, 64, 64] for group in seen
+    )
 
 
 def test_dataset_nas_searches_selected_shards_and_persists_selection(

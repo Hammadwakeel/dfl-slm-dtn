@@ -29,6 +29,7 @@ from common.dataset_nas import (
     INITIAL_EPOCHS,
     INITIAL_POPULATION_SIZE,
     aggregate_worker_candidates,
+    build_dataset_architecture,
     initial_population,
     mutate_population,
     pareto_front,
@@ -75,6 +76,23 @@ DATASET_SPLITS = {
     0.3: "dirichlet_a03",
     0.5: "dirichlet_a05",
     0.7: "dirichlet_a07",
+}
+OPTIMIZATION_ALPHAS = (0.1, 0.3, 0.5)
+# Datasets the topology sweep supports. MNIST keeps the original fixed CNN so earlier
+# sweeps stay comparable. b1_c8_k3 is too small for CIFAR-10 (about 35% accuracy),
+# which would compress every topology into the same low-accuracy band, so CIFAR-10
+# sweeps use one fixed 3-block CNN of about 62k parameters for every candidate.
+OPTIMIZATION_ARCHITECTURES: dict[str, str | dict[str, Any]] = {
+    "mnist": FIXED_ARCHITECTURE,
+    "cifar10": build_dataset_architecture(
+        input_shape=(32, 32, 3),
+        num_classes=10,
+        channels=(32, 64, 64),
+        kernel_size=3,
+        block_type="conv2d",
+        head_units=64,
+        dropout=0.2,
+    ),
 }
 
 
@@ -903,11 +921,22 @@ class TrainingCoordinator:
         epochs: int = 5,
         seeds: tuple[int, ...] = (17, 42, 2026),
         alphas: tuple[float, ...] = (0.3,),
+        dataset_name: str = "mnist",
     ) -> dict[str, Any]:
         if not 1 <= len(seeds) <= 3 or any(seed < 0 for seed in seeds):
             raise ValueError("Provide between one and three non-negative seeds")
-        if alphas != (0.3,):
-            raise ValueError("Topology optimization currently supports only Dirichlet alpha 0.3")
+        # Workers train on whichever shard the backend installed last, so one sweep
+        # covers exactly one alpha: re-shard between sweeps, never inside one.
+        if len(alphas) != 1 or alphas[0] not in OPTIMIZATION_ALPHAS:
+            raise ValueError(
+                "Topology optimization takes exactly one Dirichlet alpha from "
+                f"{OPTIMIZATION_ALPHAS}; preprocess the shards for that alpha first"
+            )
+        if dataset_name not in OPTIMIZATION_ARCHITECTURES:
+            raise ValueError(
+                f"Topology optimization supports {sorted(OPTIMIZATION_ARCHITECTURES)}"
+            )
+        architecture = OPTIMIZATION_ARCHITECTURES[dataset_name]
         if not 1 <= rounds <= 100 or not 1 <= epochs <= 50:
             raise ValueError("rounds must be 1-100 and epochs must be 1-50")
         with self._lock:
@@ -917,7 +946,8 @@ class TrainingCoordinator:
             group = {
                 "group_id": group_id,
                 "kind": "topology_optimization",
-                "dataset_name": "mnist",
+                "dataset_name": dataset_name,
+                "architecture": architecture,
                 "reward_metric_source": "validation_accuracy",
                 "topology": "candidate_sweep",
                 "rounds": rounds,
@@ -955,6 +985,10 @@ class TrainingCoordinator:
             "seeds": list(seeds),
             "alphas": list(alphas),
             "candidate_count": len(alphas) * len(TOPOLOGIES),
+            "dataset_name": dataset_name,
+            "architecture_id": architecture_spec(architecture)["id"]
+            if isinstance(architecture, str)
+            else architecture["id"],
             "reward_config": self.reward_config.as_dict(),
         }
 

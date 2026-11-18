@@ -386,8 +386,9 @@
                   "minItems": 1,
                   "maxItems": 1,
                   "uniqueItems": true,
-                  "items": {"type": "number", "enum": [0.3]}
-                }
+                  "items": {"type": "number", "enum": [0.1, 0.3, 0.5]}
+                },
+                "dataset_name": {"type": "string", "enum": ["mnist", "cifar10"]}
               },
               "additionalProperties": false
             }

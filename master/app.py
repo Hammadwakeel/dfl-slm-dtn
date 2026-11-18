@@ -888,6 +888,7 @@ def _execute_action(
                     epochs=parameters.get("epochs", 5),
                     seeds=tuple(parameters.get("seeds", (17, 42, 2026))),
                     alphas=tuple(parameters.get("alphas", (0.3,))),
+                    dataset_name=parameters.get("dataset_name", "mnist"),
                 ),
             }
         if name in {"get_results", "suggest_next_action"}:

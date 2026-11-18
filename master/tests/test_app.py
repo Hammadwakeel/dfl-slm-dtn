@@ -155,11 +155,15 @@ def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -
         },
         {
             "action": "optimize_topology",
-            "parameters": {"alphas": [0.5]},
+            "parameters": {"alphas": [0.7]},
         },
         {
             "action": "optimize_topology",
             "parameters": {"alphas": [0.3, 0.5]},
+        },
+        {
+            "action": "optimize_topology",
+            "parameters": {"dataset_name": "imagenet"},
         },
     ):
         try:

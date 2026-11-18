@@ -825,3 +825,5 @@ def test_topology_sweep_is_a_short_screening_run(sessions) -> None:
     sweep = next(action for action in cluster.actions if action["action"] == "optimize_topology")
     # Every candidate topology is trained, so the sweep screens with few rounds.
     assert sweep["parameters"]["rounds"] == 4
+    assert sweep["parameters"]["dataset_name"] == "mnist"
+    assert sweep["parameters"]["alphas"] == [0.3]

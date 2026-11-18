@@ -62,6 +62,9 @@ Dispatch = Callable[[dict[str, Any], str, str], dict[str, Any]]
 ModelCall = Callable[[list[dict[str, Any]], list[dict[str, Any]] | None], dict[str, Any]]
 
 
+SWEEP_ALPHAS = {"dirichlet_a01": 0.1, "dirichlet_a03": 0.3, "dirichlet_a05": 0.5}
+
+
 class SupervisorError(RuntimeError):
     def __init__(self, message: str, status_code: int = 409) -> None:
         super().__init__(message)
@@ -707,7 +710,9 @@ class Supervisor:
                     "rounds": min(TOPOLOGY_SWEEP_ROUNDS, int(goal["rounds"])),
                     "epochs": int(goal["local_epochs"]),
                     "seeds": [int(goal["seed"])],
-                    "alphas": [0.3],
+                    # Sweep on the run's own dataset and Dirichlet split.
+                    "alphas": [SWEEP_ALPHAS.get(goal["dataset_split"], 0.3)],
+                    "dataset_name": goal["dataset"],
                 },
             }
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}

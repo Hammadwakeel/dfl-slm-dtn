@@ -10,11 +10,32 @@ def select_candidate(candidates: list[dict[str, Any]], seed: int = 2026) -> dict
     valid = [candidate for candidate in candidates if candidate.get("completed_runs", 0) > 0]
     if not valid:
         raise ValueError("Topology selection requires at least one candidate with real completed runs")
-    reward_choice = max(valid, key=lambda item: item["mean_reward"])
+    method = "weighted_measured_reward"
+    quality_gate_met = None
+    if all(candidate.get("reward_version") == 2 for candidate in valid):
+        # Reward v2: only topologies whose weakest worker reached the accuracy gate,
+        # unless none did; within one standard deviation of the best, the cheaper wins.
+        passing = [candidate for candidate in valid if candidate.get("passes_quality_gate")]
+        quality_gate_met = bool(passing)
+        pool = passing or valid
+        best = max(pool, key=lambda item: item["mean_reward"])
+        tolerance = float(best.get("std_reward") or 0.0)
+        tied = [item for item in pool if best["mean_reward"] - item["mean_reward"] <= tolerance]
+        reward_choice = max(
+            tied,
+            key=lambda item: (
+                item.get("mean_components", {}).get("bandwidth_efficiency", 0.0),
+                item["mean_reward"],
+            ),
+        )
+        method = "quality_gated_reward_v2"
+    else:
+        reward_choice = max(valid, key=lambda item: item["mean_reward"])
     best_observed = max(valid, key=lambda item: item["mean_final_accuracy"])
     random_choice = random.Random(seed).choice(valid)
     return {
-        "method": "weighted_measured_reward",
+        "method": method,
+        "quality_gate_met": quality_gate_met,
         "selected_candidate": {
             "topology": reward_choice["topology"],
             "alpha": reward_choice["alpha"],

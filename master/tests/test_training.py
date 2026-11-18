@@ -785,10 +785,16 @@ def test_optimizer_runs_real_candidate_sweep_and_persists_reward_selection(tmp_p
     assert group["dataset_name"] == "mnist"
     assert group["reward_metric_source"] == "validation_accuracy"
     assert len(group["candidates"]) == 5
-    assert group["selection"]["selected_candidate"]["topology"] == "directed_ring"
+    # Reward v2: equal costs, so the most accurate topology wins; at 58% no worker
+    # reaches the 90% quality gate, which the selection reports.
+    assert group["selection"]["method"] == "quality_gated_reward_v2"
+    assert group["selection"]["quality_gate_met"] is False
+    assert group["selection"]["selected_candidate"]["topology"] == "star"
     assert group["selection"]["baselines"]["best_observed"]["topology"] == "star"
-    assert group["reward_config"]["weights"]["accuracy_gain"] == 0.5
-    assert group["reward_config"]["weights"]["peer_wait_efficiency"] == 0.15
+    assert group["reward_config"]["version"] == 2
+    assert group["reward_config"]["weights"]["quality"] == 0.5
+    assert all(candidate["reward_version"] == 2 for candidate in group["candidates"])
+    assert all(candidate["std_reward"] == 0 for candidate in group["candidates"])
     assert coordinator.results()["configuration"]["dataset_split"] == "dirichlet_a03"
 
 
@@ -1309,3 +1315,38 @@ def test_learned_topology_requires_a_dataset_run(tmp_path: Path) -> None:
     coordinator.configure(topology="learned")
     with pytest.raises(ValueError, match="dataset"):
         coordinator.start_training(rounds=2, epochs=1)
+
+
+def test_topology_summary_rescores_history_with_the_groups_own_reward_config(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    v1_config = json.loads(
+        (Path(__file__).resolve().parents[2] / "topology_opt" / "reward_config_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    rounds = [
+        {
+            "workers": {
+                f"worker{index}": {
+                    "validation_accuracy": 0.6 + 0.1 * round_index,
+                    "bytes_sent": 100,
+                    "exchange_seconds": 0.1,
+                    "round_seconds": 2,
+                }
+                for index in range(1, 4)
+            }
+        }
+        for round_index in range(2)
+    ]
+    group = {
+        "reward_config": v1_config,
+        "runs": [{"topology": "mesh", "alpha": 0.3, "status": "completed", "rounds": rounds}],
+    }
+
+    (historical,) = coordinator._summarize_topology_candidates(group, [{"topology": "mesh", "alpha": 0.3}])
+
+    assert set(historical["mean_components"]) == set(v1_config["weights"])
+    assert "reward_version" not in historical
+    group["reward_config"] = coordinator.reward_config.as_dict()
+    (current,) = coordinator._summarize_topology_candidates(group, [{"topology": "mesh", "alpha": 0.3}])
+    assert current["reward_version"] == 2

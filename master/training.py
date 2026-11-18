@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import statistics
 import threading
 import time
 import uuid
@@ -1405,6 +1406,12 @@ class TrainingCoordinator:
         group: dict[str, Any],
         candidate_specs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        # Score with the criteria the group was started with, so history never shifts.
+        reward_config = (
+            RewardConfig.from_dict(group["reward_config"])
+            if isinstance(group.get("reward_config"), dict)
+            else self.reward_config
+        )
         summaries = []
         for candidate in candidate_specs:
             matching_runs = [
@@ -1415,7 +1422,7 @@ class TrainingCoordinator:
                 and run["status"] == "completed"
             ]
             per_run = [
-                calculate_run_reward(run["rounds"], self.reward_config)
+                calculate_run_reward(run["rounds"], reward_config)
                 for run in matching_runs
             ]
             summary: dict[str, Any] = {
@@ -1445,11 +1452,29 @@ class TrainingCoordinator:
                                 / len(per_run),
                                 6,
                             )
-                            for name in self.reward_config.weights
+                            for name in reward_config.weights
                         },
+                        "std_reward": round(
+                            statistics.pstdev(value["reward"] for value in per_run), 6
+                        ),
                         "per_run_rewards": per_run,
                     }
                 )
+                if reward_config.version == 2:
+                    summary.update(
+                        {
+                            "reward_version": 2,
+                            "mean_min_worker_accuracy": round(
+                                sum(value["metrics"]["min_worker_accuracy"] for value in per_run)
+                                / len(per_run),
+                                6,
+                            ),
+                            "passes_quality_gate": all(
+                                value["metrics"]["passes_quality_gate"] for value in per_run
+                            ),
+                            "quality_source": per_run[-1]["metrics"]["quality_source"],
+                        }
+                    )
             summaries.append(summary)
         return summaries
 

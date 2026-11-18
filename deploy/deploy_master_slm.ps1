@@ -203,6 +203,7 @@ try {
         (Join-Path $repoRoot 'topology_opt\reward.py') `
         (Join-Path $repoRoot 'topology_opt\selector.py') `
         (Join-Path $repoRoot 'topology_opt\reward_config.json') `
+        (Join-Path $repoRoot 'topology_opt\reward_config_v1.json') `
         "${remote}:$stageName/topology_opt/"
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the topology optimizer on the master'

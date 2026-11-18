@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Sequence
 
@@ -21,6 +23,13 @@ from app.core.config import DeviceConfig
 from app.services.datasets import DatasetStore
 from app.services.initial_models import InitialModelError, create_and_distribute_initial_model
 from app.services.worker_shards import get_worker_latest_model
+
+# The unpruned source model, kept so a rejected pruning can be undone.
+PRE_PRUNING_MODEL_FILE = "pre_pruning_model.json"
+
+
+def _source_path(dataset_store: DatasetStore, dataset_name: str) -> Path:
+    return (dataset_store.root / dataset_name).resolve() / "models" / PRE_PRUNING_MODEL_FILE
 
 
 def _decode_weights(encoded: str) -> list[np.ndarray]:
@@ -72,6 +81,12 @@ def prune_and_distribute(
         )
     except PruningError as error:
         raise InitialModelError(f"Pruning failed: {error}") from error
+    source_path = _source_path(dataset_store, dataset_name)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        json.dumps({"architecture": architecture, "weights_b64": source.get("weights_b64"), "source_worker": node_id}),
+        encoding="utf-8",
+    )
     deployed = create_and_distribute_initial_model(
         dataset_store,
         workers,
@@ -89,6 +104,41 @@ def prune_and_distribute(
         "source_run_id": source.get("run_id"),
         "source_round": source.get("round"),
         "source_validation_accuracy": source.get("validation_accuracy"),
+        "architecture_sha256": deployed.get("architecture_sha256"),
+        "weights_sha256": deployed.get("weights_sha256"),
+    }
+
+
+def restore_source_model(
+    dataset_store: DatasetStore,
+    workers: Sequence[DeviceConfig],
+    dataset_name: str,
+    *,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Redistribute the unpruned model saved by the last ``prune_and_distribute``."""
+    source_path = _source_path(dataset_store, dataset_name)
+    if not source_path.is_file():
+        raise InitialModelError("No unpruned source model is stored for this dataset")
+    try:
+        stored = json.loads(source_path.read_text(encoding="utf-8"))
+        architecture = stored["architecture"]
+        weights = _decode_weights(str(stored["weights_b64"]))
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise InitialModelError("The stored unpruned source model is unreadable") from error
+    deployed = create_and_distribute_initial_model(
+        dataset_store,
+        workers,
+        dataset_name,
+        seed=seed,
+        architecture=architecture,
+        replace_existing=True,
+        initial_weights=weights,
+    )
+    return {
+        "dataset_name": dataset_name,
+        "restored": True,
+        "source_worker": stored.get("source_worker"),
         "architecture_sha256": deployed.get("architecture_sha256"),
         "weights_sha256": deployed.get("weights_sha256"),
     }

@@ -152,6 +152,9 @@ class FakeCluster:
         name = action["action"]
         if name in {"preprocess_dataset", "create_initial_model"}:
             return {"status": "executed", "result": {"available": True, "data": {"dataset_name": "mnist", **self.model_report}}}
+        if name == "prune_model" and action["parameters"].get("restore_source"):
+            self.pruned = False
+            return {"status": "executed", "result": {"available": True, "data": {"restored": True}}}
         if name == "prune_model":
             self.pruned = True
             report = {"ratio": action["parameters"]["ratio"], "parameters_before": 1000, "parameters_after": 400, "compression": 2.5, "architecture_id": "nas-x-pruned50", "source_worker": "worker1"}
@@ -584,6 +587,31 @@ def test_prepare_data_keeps_each_dataset_at_its_native_size(sessions) -> None:
         run_until_done(supervisor, supervisor.create_run(default_goal(dataset=dataset, target_accuracy=0.99))["id"])
         prepare = next(action for action in cluster.actions if action["action"] == "preprocess_dataset")
         assert prepare["parameters"]["target_size"] == {"height": size, "width": size}
+
+
+def test_pruning_that_loses_too_much_accuracy_restores_the_unpruned_model(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy["fine_tune"] = 0.80
+    slm = FakeSLM([
+        tool_call("run_nas", {}, "Search a better CNN."),
+        tool_call("run_hpo", {}, "Tune the learning rate of the searched CNN."),
+        tool_call("train_final", {}, "Retrain with the tuned CNN."),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    assert finished["status"] == "completed"
+    pruning = finished["state"]["pruning"]
+    assert pruning["accepted"] is False
+    assert pruning["restored_unpruned"] is True
+    restores = [a for a in cluster.actions if a["action"] == "prune_model" and a["parameters"].get("restore_source")]
+    assert len(restores) == 1
+    assert cluster.pruned is False
+    # The unpruned model stays the run's result.
+    assert finished["state"]["best"]["step"] != "prune_model"
 
 
 def test_pruning_is_not_offered_when_the_newest_model_is_not_the_best() -> None:

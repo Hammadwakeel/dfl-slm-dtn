@@ -26,7 +26,7 @@ from app.routers.ws import router as websocket_router
 from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
 from app.services.cluster import cluster_nodes, sync_training_registry
-from app.services.pruning import prune_and_distribute
+from app.services.pruning import prune_and_distribute, restore_source_model
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
 from app.services.events import EventManager
@@ -117,6 +117,14 @@ def create_app(
             return {"available": True, "data": report}
         if action["action"] == "prune_model":
             try:
+                if action["parameters"].get("restore_source") is True:
+                    report = restore_source_model(
+                        app.state.datasets,
+                        cluster_nodes(resolved_settings, sessions),
+                        action["parameters"]["model_name"],
+                        seed=action["parameters"].get("seed", 0),
+                    )
+                    return {"available": True, "data": report}
                 report = prune_and_distribute(
                     app.state.datasets,
                     cluster_nodes(resolved_settings, sessions),

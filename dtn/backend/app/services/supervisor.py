@@ -836,6 +836,18 @@ class Supervisor:
                 and isinstance(accuracy_now, (int, float))
                 and accuracy_now >= float(source) - PRUNE_MAX_ACCURACY_DROP
             )
+            if not state["pruning"]["accepted"]:
+                # Put the unpruned trained model back on every worker.
+                restore = {
+                    "action": "prune_model",
+                    "parameters": {"model_name": goal["dataset"], "restore_source": True, "seed": int(goal["seed"])},
+                }
+                try:
+                    _unwrap_result(self._dispatch(restore, "Pruning lost too much accuracy; restore the unpruned model", run_id))
+                    state["pruning"]["restored_unpruned"] = True
+                except Exception as error:  # noqa: BLE001 - recorded, the run result is unaffected
+                    state["pruning"]["restored_unpruned"] = False
+                    state["pruning"]["restore_error"] = str(error)[:300]
             summary["pruning"] = state["pruning"]
         accuracy = summary.get("validation_accuracy")
         best = state.get("best")

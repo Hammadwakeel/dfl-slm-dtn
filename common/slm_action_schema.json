@@ -493,6 +493,7 @@
               "properties": {
                 "model_name": {"$ref": "#/$defs/datasetName"},
                 "ratio": {"type": "number", "minimum": 0.1, "maximum": 0.8},
+                "restore_source": {"type": "boolean", "description": "Undo the last pruning: redistribute the unpruned source model with its trained weights."},
                 "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
               },
               "required": ["model_name"],

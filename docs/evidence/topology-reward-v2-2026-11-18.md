@@ -4,6 +4,8 @@ Measured on the 8-worker Jetson Orin Nano cluster, 2026-11-18.
 Sweep `optimize-1794992581-58384f`. Raw data: [topology-reward-v2-sweep-2026-11-18.json](topology-reward-v2-sweep-2026-11-18.json).
 Reproduce the tables with [topology_reward_v2_analysis.py](topology_reward_v2_analysis.py).
 
+> **Correction (2026-11-19).** This sweep did not start from a random initialization. Workers train the installed initial model in preference to the configured architecture. At the time, that installed model was the 30%-pruned model from supervisor run `82668b5e` (4,921 parameters, weights `23377fc6…`), so every run fine-tuned the same pruned model. Per-worker accuracy before round 1 was 2–81%. The comparison between topologies is still like-for-like, because every run started from the same weights. Treat these results as the *warm-start* setting. The from-scratch sweeps on MNIST (α = 0.1, 0.3, 0.5) and CIFAR-10 are in [topology-reward-v2-paper-results-2026-11-19.md](topology-reward-v2-paper-results-2026-11-19.md).
+
 ## Summary
 
 - The original reward (v1) cannot tell topologies apart. All five score between 0.961 and 0.969.
@@ -17,7 +19,7 @@ Reproduce the tables with [topology_reward_v2_analysis.py](topology_reward_v2_an
 |---|---|
 | Workers | 8 × Jetson Orin Nano 8 GB, real peer-to-peer exchange over LAN |
 | Data | MNIST, Dirichlet α = 0.3 non-IID shards (one per worker) |
-| Model | Fixed small CNN, 128 KB of weights |
+| Model | **Warm start** (see correction): the installed 30%-pruned model from an earlier supervisor run, 4,921 parameters, same weights for every run |
 | Training | 10 rounds × 5 local epochs, semi-synchronous rounds, weighted FedAvg |
 | Topologies | directed ring, bidirectional ring, mesh, chain, star |
 | Seeds | 17, 42, 2026 (15 runs in total) |
@@ -81,7 +83,7 @@ Mesh passes 90% by round 4. No other topology reaches 90% mean accuracy within 1
 ## Findings
 
 1. **Why v1 fails.**
-   - Every topology improves by more than 25 points from a random initialization, so the accuracy-gain term saturates at 1.0 and half of the reward weight carries no information.
+   - Every topology improves by more than 25 points from its starting point, so the accuracy-gain term saturates at 1.0 and half of the reward weight carries no information.
    - Every topology reaches 50% in round 1–2, so the convergence term does not discriminate either.
    - What remains is the cost terms, and those favour the sparsest topology. That is why the topology with the worst model quality is ranked first.
 2. **Local validation overstates quality.**

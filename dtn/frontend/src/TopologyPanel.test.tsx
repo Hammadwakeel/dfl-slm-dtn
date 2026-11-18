@@ -80,6 +80,75 @@ afterEach(() => {
 });
 
 describe("Topology optimizer panel", () => {
+  it("shows reward v2 components, the weakest worker, and the quality gate", () => {
+    const v2Results: ExperimentResults = {
+      ...results,
+      groups: [{
+        ...results.groups[0],
+        group_id: "optimizer-v2",
+        seeds: [17],
+        reward_config: {
+          version: 2,
+          weights: { quality: 0.5, learning_speed: 0.2, bandwidth_efficiency: 0.15, wait_efficiency: 0.15 },
+          worst_worker_share: 0.5,
+          quality_gate_min_worker_accuracy: 0.9,
+        },
+        selection: {
+          method: "quality_gated_reward_v2",
+          quality_gate_met: false,
+          selected_candidate: { topology: "mesh", alpha: 0.3, mean_reward: 0.682 },
+          baselines: {
+            random_seeded: { topology: "chain", alpha: 0.3, mean_reward: 0.6057 },
+            best_observed: { topology: "mesh", alpha: 0.3, mean_final_accuracy: 0.983 },
+          },
+          candidate_count: 2,
+        },
+        candidates: [
+          {
+            topology: "mesh",
+            alpha: 0.3,
+            completed_runs: 1,
+            reward_version: 2,
+            mean_reward: 0.682,
+            std_reward: 0,
+            mean_final_accuracy: 0.983,
+            mean_min_worker_accuracy: 0.97,
+            passes_quality_gate: true,
+            quality_source: "global_validation",
+            mean_components: { quality: 0.8757, learning_speed: 0.6617, bandwidth_efficiency: 0.0059, wait_efficiency: 0.7393 },
+          },
+          {
+            topology: "chain",
+            alpha: 0.3,
+            completed_runs: 1,
+            reward_version: 2,
+            mean_reward: 0.6057,
+            std_reward: 0,
+            mean_final_accuracy: 0.834,
+            mean_min_worker_accuracy: 0.505,
+            passes_quality_gate: false,
+            quality_source: "global_validation",
+            mean_components: { quality: 0.5785, learning_speed: 0.434, bandwidth_efficiency: 0.7514, wait_efficiency: 0.7792 },
+          },
+        ],
+      }],
+    };
+    render(<TrainingTopologyPanel experiments={v2Results} token="test-token" />);
+
+    expect(screen.getByText(/quality_gated_reward_v2/)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Weakest worker" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Quality (Q)" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Accuracy gain" })).not.toBeInTheDocument();
+    expect(screen.getByText("50.50%")).toBeInTheDocument();
+    expect(screen.getByText("pass")).toBeInTheDocument();
+    expect(screen.getByText("fail")).toBeInTheDocument();
+    expect(screen.getAllByText("shared balanced split")).toHaveLength(2);
+    expect(screen.getByText(/No topology brought every worker to 90.00% accuracy/)).toBeInTheDocument();
+    expect(screen.getByText(/Reward v2 = 0.50·Q/)).toBeInTheDocument();
+    const rows = screen.getByRole("table").querySelectorAll("tbody tr");
+    expect(rows[0]).toHaveClass("best-result-row");
+  });
+
   it("shows the active real topology, candidate reward breakdown, and baselines", () => {
     render(<TrainingTopologyPanel experiments={results} token="test-token" />);
 

@@ -237,7 +237,12 @@ export interface ExperimentRun {
 export interface ExperimentGroup {
   group_id: string;
   dataset_name?: string;
-  reward_config?: { weights?: Record<string, number> };
+  reward_config?: {
+    version?: number;
+    weights?: Record<string, number>;
+    worst_worker_share?: number;
+    quality_gate_min_worker_accuracy?: number;
+  };
   reward_metric_source?: "validation_accuracy" | "accuracy";
   architecture?: { dataset_name?: string; [key: string]: unknown };
   kind:
@@ -303,6 +308,7 @@ export interface ExperimentGroup {
   selection?: {
     method: string;
     selected_candidate: { topology: TrainingTopology; alpha: number; mean_reward?: number };
+    quality_gate_met?: boolean | null;
     baselines: Record<string, { topology: TrainingTopology; alpha: number; mean_reward?: number; mean_final_accuracy?: number }>;
     candidate_count: number;
   } | {
@@ -331,6 +337,12 @@ export interface TopologyCandidate {
   mean_final_accuracy?: number;
   mean_accuracy_gain_available?: boolean;
   mean_components?: Record<string, number>;
+  /** Reward v2 only. */
+  reward_version?: number;
+  std_reward?: number;
+  mean_min_worker_accuracy?: number;
+  passes_quality_gate?: boolean;
+  quality_source?: string;
 }
 
 export interface ExperimentResults {

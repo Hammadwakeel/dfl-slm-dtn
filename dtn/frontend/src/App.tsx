@@ -595,6 +595,7 @@ export function TrainingTopologyPanel({
     };
   });
   const validationReward = latestGroup?.reward_metric_source === "validation_accuracy";
+  const rewardV2 = latestGroup?.reward_config?.version === 2;
   const peerWaitIsRewardCriterion =
     latestGroup?.reward_config?.weights?.peer_wait_efficiency !== undefined;
   const latestGroupSeeds = latestGroup?.seeds ?? (latestGroup?.seed === undefined ? [] : [latestGroup.seed]);
@@ -698,7 +699,9 @@ export function TrainingTopologyPanel({
         Active configuration: <strong>{topology}</strong> · {experiments?.configuration.dataset_split ?? "stratified"}
       </p>
       <p className="active-topology-note">
-        {validationReward || !latestGroup
+        {rewardV2
+          ? "Ranking: quality of every worker (weakest included), learning speed, bandwidth, and peer wait · TEST reserved for final evaluation."
+          : validationReward || !latestGroup
           ? "Ranking: validation accuracy, convergence, communication, and peer wait · TEST reserved for final evaluation."
           : "Legacy reward may include held-out TEST scores · not an independent final evaluation."}
       </p>
@@ -854,13 +857,25 @@ export function TrainingTopologyPanel({
           <span>
             <span className="best-result-badge">BEST TOPOLOGY</span>{" "}
             {topologySelection.selected_candidate.topology} at alpha {topologySelection.selected_candidate.alpha}
-            {" "}· {validationReward ? "validation-derived reward" : "legacy reward"} {topologySelection.selected_candidate.mean_reward?.toFixed(4) ?? "—"} · real workers
+            {" "}· {rewardV2 ? "reward v2" : validationReward ? "validation-derived reward" : "legacy reward"} {topologySelection.selected_candidate.mean_reward?.toFixed(4) ?? "—"} · real workers
           </span>
+          {rewardV2 && topologySelection.quality_gate_met === false && (
+            <span className="topology-gate-warning">
+              No topology brought every worker to {formatAccuracy(latestGroup?.reward_config?.quality_gate_min_worker_accuracy)} accuracy; the best reward was chosen anyway.
+            </span>
+          )}
           <span>Random baseline: {topologySelection.baselines.random_seeded.topology} · {validationReward ? "validation-derived reward" : "legacy reward"} {topologySelection.baselines.random_seeded.mean_reward?.toFixed(4) ?? "—"}</span>
           <span>Best-observed baseline: {topologySelection.baselines.best_observed.topology} · {validationReward ? "validation accuracy" : "legacy accuracy"} {formatAccuracy(topologySelection.baselines.best_observed.mean_final_accuracy)}</span>
         </div>
       )}
-      {latestGroup && displayCandidates.length > 0 ? (
+      {latestGroup && rewardV2 && displayCandidates.length > 0 ? (
+        <TopologyRewardV2Table
+          group={latestGroup}
+          candidates={displayCandidates}
+          seedCount={latestGroupSeeds.length}
+          selected={selectedTopology}
+        />
+      ) : latestGroup && displayCandidates.length > 0 ? (
         <div className="table-scroll">
           <table className="metrics-table topology-reward-table">
             <thead>
@@ -873,7 +888,7 @@ export function TrainingTopologyPanel({
                 <th>Peer communication</th>
                 <th>{peerWaitIsRewardCriterion ? "Peer wait efficiency" : "Runtime efficiency (legacy)"}</th>
                 <th>Mean runtime / worker</th>
-                <th>Peer transfer / run</th><th>Peer wait / worker</th>
+                <th>Peer transfer / last round</th><th>Peer wait / worker</th>
               </tr>
             </thead>
             <tbody>
@@ -931,7 +946,15 @@ export function TrainingTopologyPanel({
       ) : (
         <p className="active-topology-note">No measured results.</p>
       )}
-      {latestGroup && (
+      {latestGroup && rewardV2 && (
+        <p className="active-topology-note">
+          Reward v2 = {formatWeight(latestGroup.reward_config?.weights?.quality)}·Q + {formatWeight(latestGroup.reward_config?.weights?.learning_speed)}·S
+          {" "}+ {formatWeight(latestGroup.reward_config?.weights?.bandwidth_efficiency)}·B + {formatWeight(latestGroup.reward_config?.weights?.wait_efficiency)}·W.
+          {" "}Q: final macro-F1, half mean and half weakest worker · S: mean Q over rounds · B: 1 − bytes / full-mesh bytes
+          {" "}· W: 1 − peer wait / round time. Gate: weakest worker ≥ {formatAccuracy(latestGroup.reward_config?.quality_gate_min_worker_accuracy)}.
+        </p>
+      )}
+      {latestGroup && !rewardV2 && (
         <p className="active-topology-note">
           {peerWaitIsRewardCriterion
             ? "Zero convergence: 50% validation target not reached · zero cost efficiency: saved cap reached."
@@ -941,6 +964,81 @@ export function TrainingTopologyPanel({
       )}
       {latestGroup && <small className="active-topology-note">Latest sweep: {latestGroup.group_id} · {latestGroup.status}{latestGroupDetails ? ` · ${latestGroupDetails}` : ""}</small>}
     </section>
+  );
+}
+
+function formatWeight(value: number | undefined): string {
+  return value === undefined ? "—" : value.toFixed(2);
+}
+
+const QUALITY_SOURCE_LABELS: Record<string, string> = {
+  global_validation: "shared balanced split",
+  local_present_classes: "local split (present classes)",
+  local: "local split",
+};
+
+function TopologyRewardV2Table({
+  group,
+  candidates,
+  seedCount,
+  selected,
+}: {
+  group: ExperimentGroup;
+  candidates: TopologyCandidate[];
+  seedCount: number;
+  selected: { topology: string; alpha: number } | undefined;
+}) {
+  return (
+    <div className="table-scroll">
+      <table className="metrics-table topology-reward-table">
+        <thead>
+          <tr>
+            <th>Topology</th><th>Alpha</th><th>Runs</th>
+            <th>Reward v2</th><th>Quality gate</th>
+            <th>Mean accuracy</th><th>Weakest worker</th>
+            <th title="Final macro-F1: half the mean, half the weakest worker">Quality (Q)</th>
+            <th title="Mean Q over all rounds (area under the learning curve)">Learning speed (S)</th>
+            <th title="1 − bytes sent / bytes of a full mesh">Bandwidth (B)</th>
+            <th title="1 − peer wait / round time">Wait (W)</th>
+            <th>Scored on</th>
+            <th>Mean runtime / worker</th><th>Peer transfer / last round</th><th>Peer wait / worker</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.map((candidate) => {
+            const observed = candidateRunMetrics(group, candidate);
+            const completedRuns = observed.completedRuns || candidate.completed_runs || 0;
+            const isSelected = selected?.topology === candidate.topology && selected.alpha === candidate.alpha;
+            const components = candidate.mean_components;
+            return (
+              <tr className={isSelected ? "best-result-row" : undefined} key={`${candidate.topology}-${candidate.alpha}`}>
+                <td>
+                  {candidate.topology}
+                  {isSelected && <span className="best-result-badge">BEST</span>}
+                </td>
+                <td>{candidate.alpha}</td>
+                <td>{completedRuns}/{seedCount}</td>
+                <td>
+                  {candidate.mean_reward?.toFixed(4) ?? "—"}
+                  {candidate.mean_reward !== undefined && completedRuns > 1 && ` ± ${candidate.std_reward?.toFixed(4) ?? "—"}`}
+                </td>
+                <td>{candidate.passes_quality_gate === undefined ? "—" : candidate.passes_quality_gate ? "pass" : "fail"}</td>
+                <td>{formatAccuracy(candidate.mean_final_accuracy)}</td>
+                <td>{formatAccuracy(candidate.mean_min_worker_accuracy)}</td>
+                <td>{components?.quality?.toFixed(3) ?? "—"}</td>
+                <td>{components?.learning_speed?.toFixed(3) ?? "—"}</td>
+                <td>{components?.bandwidth_efficiency?.toFixed(3) ?? "—"}</td>
+                <td>{components?.wait_efficiency?.toFixed(3) ?? "—"}</td>
+                <td>{candidate.quality_source ? QUALITY_SOURCE_LABELS[candidate.quality_source] ?? candidate.quality_source : "—"}</td>
+                <td>{observed.meanRuntime?.toFixed(2) ?? "—"} s</td>
+                <td>{observed.meanCommunication?.toLocaleString() ?? "—"} B</td>
+                <td>{observed.meanPeerWait?.toFixed(2) ?? "—"} s</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

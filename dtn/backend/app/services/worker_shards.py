@@ -287,6 +287,47 @@ def upload_worker_shard(
     return result
 
 
+def upload_worker_global_validation(
+    worker: DeviceConfig,
+    dataset_name: str,
+    payload: bytes,
+    *,
+    timeout_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Install the shared class-balanced validation subset next to the worker's shard."""
+    if worker.role != "worker":
+        raise ValueError(f"Cannot upload a validation split to non-worker node {worker.node_id}")
+    request = Request(
+        f"{worker.training_url}/v1/datasets/{quote(dataset_name, safe='')}/global-validation",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {worker.token}",
+            "Content-Type": "application/octet-stream",
+            "Accept": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace").strip()[:500]
+        raise WorkerShardError(
+            f"{worker.node_id} returned HTTP {error.code} while installing the global validation split: {detail}"
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise WorkerShardError(
+            f"Could not reach {worker.node_id} to install the global validation split: {error}"
+        ) from error
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise WorkerShardError(
+            f"{worker.node_id} returned invalid JSON after the global validation upload"
+        ) from error
+    if not isinstance(result, dict) or result.get("node_id") != worker.node_id:
+        raise WorkerShardError(f"{worker.node_id} returned a mismatched global validation response")
+    return result
+
+
 def get_worker_latest_model(
     worker: DeviceConfig,
     dataset_name: str,

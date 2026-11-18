@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import threading
@@ -268,6 +269,7 @@ class _WorkerFixtureHandler(BaseHTTPRequestHandler):
     token = ""
     installed: dict[str, dict] = {}
     installed_methods: dict[str, str] = {}
+    global_validation: dict[str, dict] = {}
 
     def log_message(self, _format, *_args):
         return
@@ -332,6 +334,22 @@ class _WorkerFixtureHandler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def do_PUT(self):
+        if self.path.endswith("/global-validation"):
+            if not self._authorized():
+                self._send_json(401, {"error": "unauthorized"})
+                return
+            payload = self.rfile.read(int(self.headers["Content-Length"]))
+            with np.load(io.BytesIO(payload), allow_pickle=False) as split:
+                labels = split["labels"]
+            result = {
+                "node_id": self.node_id,
+                "rows": int(len(labels)),
+                "class_counts": {str(k): int(v) for k, v in zip(*np.unique(labels, return_counts=True))},
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            self.global_validation[self.node_id] = result
+            self._send_json(200, result)
+            return
         self.do_POST()
 
 
@@ -398,6 +416,12 @@ def test_preprocess_action_pipeline_checks_and_installs_all_worker_shards(
             "worker4",
         }
         expected_method = "PUT" if replace_existing else "POST"
+        shipped = report["global_validation"]
+        assert "error" not in shipped
+        assert set(shipped["workers"]) == {"worker1", "worker2", "worker3", "worker4"}
+        assert len({row["sha256"] for row in _WorkerFixtureHandler.global_validation.values()}) == 1
+        # Both classes, equally represented (the 2-image validation split caps it at one each).
+        assert next(iter(_WorkerFixtureHandler.global_validation.values()))["class_counts"] == {"0": 1, "1": 1}
         assert set(_WorkerFixtureHandler.installed_methods.values()) == {expected_method}
         for node_id, expected in report["workers"].items():
             installed = _WorkerFixtureHandler.installed[node_id]

@@ -10,6 +10,8 @@ from app.services.datasets import (
     DatasetStore,
 )
 from app.services.cluster import cluster_nodes
+from app.services.dataset_pipeline import ship_global_validation
+from app.services.preprocessing import PreprocessingError
 from app.services.dataset_samples import get_dataset_samples
 from app.services.initial_models import (
     InitialModelError,
@@ -110,6 +112,28 @@ def delete_dataset_initial_model(
     except (InitialModelError, WorkerShardError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{dataset_name}/global-validation")
+def install_dataset_global_validation(
+    dataset_name: str,
+    request: Request,
+    store: DatasetStore = Depends(get_dataset_store),
+) -> dict[str, Any]:
+    """Ship the shared class-balanced validation subset of the installed shards to every worker."""
+    _require_supported_dataset(dataset_name)
+    try:
+        return ship_global_validation(
+            store,
+            cluster_nodes(request.app.state.settings, request.app.state.session_factory),
+            dataset_name,
+        )
+    except DatasetError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except PreprocessingError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except WorkerShardError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @router.get("/{dataset_name}")

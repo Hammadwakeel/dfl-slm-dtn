@@ -67,6 +67,10 @@ RECYCLE_DELAY_SECONDS = 1.0
 ROUND_WEIGHTS_RETAINED = 2
 # Newest aggregated model of a dataset run, kept on disk for pruning.
 LATEST_MODEL_WEIGHTS = "latest_model.npz"
+# Shared, class-balanced validation subset (same for every worker), used to score
+# each round on all classes instead of only this worker's non-IID slice.
+GLOBAL_VALIDATION_FILE = "global_validation.npz"
+MAX_GLOBAL_VALIDATION_ROWS = 5000
 # "learned" uses an explicit receiver -> senders map chosen by APG topology learning.
 TRAINING_TOPOLOGIES = frozenset({"ring", "directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned"})
 LATEST_MODEL_METADATA = "latest_model.json"
@@ -275,15 +279,10 @@ def topology_senders(
     return topology_neighbours(node_id, worker_ids, topology)
 
 
-def install_dataset_shard(
-    config: WorkerConfig,
-    dataset_name: str,
+def _read_dataset_arrays(
     payload: bytes,
-    *,
-    replace_existing: bool = False,
-) -> dict[str, Any]:
-    if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
-        raise ValueError("Invalid dataset name")
+) -> tuple[np.ndarray, np.ndarray, list[str], dict[str, int]]:
+    """Validate an uploaded images/labels/class_names NPZ and return its arrays."""
     if not payload or len(payload) > MAX_DATASET_SHARD_BYTES:
         raise ValueError("Dataset shard payload size is out of range")
     try:
@@ -331,6 +330,20 @@ def install_dataset_shard(
         class_names[int(label)]: int(count)
         for label, count in zip(*np.unique(labels, return_counts=True))
     }
+
+    return images, labels, class_names, class_counts
+
+
+def install_dataset_shard(
+    config: WorkerConfig,
+    dataset_name: str,
+    payload: bytes,
+    *,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
+    if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
+        raise ValueError("Invalid dataset name")
+    images, labels, class_names, class_counts = _read_dataset_arrays(payload)
 
     root = Path(config.dataset_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -402,6 +415,54 @@ def install_dataset_shard(
                     f"Dataset shard already exists with different contents: {dataset_name}"
                 ) from error
     return metadata
+
+
+def install_global_validation(
+    config: WorkerConfig,
+    dataset_name: str,
+    payload: bytes,
+) -> dict[str, Any]:
+    """Store the shared validation subset next to an installed shard of the same dataset."""
+    if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
+        raise ValueError("Invalid dataset name")
+    root = Path(config.dataset_root).resolve()
+    target = root / dataset_name
+    metadata_path = target / "metadata.json"
+    if target.is_symlink() or not metadata_path.is_file() or target.resolve().parent != root:
+        raise ValueError(f"Install the {dataset_name} training shard before its global validation split")
+    images, labels, class_names, class_counts = _read_dataset_arrays(payload)
+    shard = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if class_names != shard.get("class_names"):
+        raise ValueError("Global validation classes do not match the installed shard")
+    if list(images.shape[1:]) != list(shard.get("shape", [])[1:]):
+        raise ValueError("Global validation image shape does not match the installed shard")
+    if labels.size > MAX_GLOBAL_VALIDATION_ROWS:
+        raise ValueError(f"Global validation split exceeds {MAX_GLOBAL_VALIDATION_ROWS} rows")
+    destination = target / GLOBAL_VALIDATION_FILE
+    if destination.is_symlink():
+        raise ValueError("Global validation file cannot be a symbolic link")
+    staged = target / f".{GLOBAL_VALIDATION_FILE}.tmp"
+    staged.write_bytes(payload)
+    os.replace(staged, destination)
+    return {
+        "node_id": config.node_id,
+        "dataset_name": dataset_name,
+        "rows": int(labels.size),
+        "class_counts": class_counts,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def load_global_validation(dataset_path: Path) -> tuple[np.ndarray, np.ndarray] | None:
+    """Arrays of the installed global validation split, or None when absent."""
+    path = dataset_path / GLOBAL_VALIDATION_FILE
+    if not path.is_file() or path.is_symlink():
+        return None
+    with np.load(path, allow_pickle=False) as split:
+        return (
+            np.asarray(split["images"], dtype=np.float32),
+            np.asarray(split["labels"], dtype=np.int64),
+        )
 
 
 def install_initial_model(
@@ -849,6 +910,7 @@ class WorkerTrainer:
         self.dataset_split = "stratified"
         self.dataset_name: str | None = None
         self._dataset_class_names: list[str] | None = None
+        self._global_validation: tuple[np.ndarray, np.ndarray] | None = None
         self.images, self.labels = self._load_shard(config.data_path)
         self._rounds = 10
         self._epochs = 5
@@ -1184,6 +1246,7 @@ class WorkerTrainer:
 
             shard_path = Path(self.config.dataset_root).resolve() / dataset_name / "train.npz"
             images, labels, class_names = load_dataset_shard(shard_path)
+            global_validation = load_global_validation(shard_path.parent)
             if isinstance(architecture, dict) and architecture.get("model_type") in {
                 "custom",
                 "pretrained_deit",
@@ -1221,6 +1284,7 @@ class WorkerTrainer:
                 raise ValueError(f"Worker shard for {dataset_split} is not installed")
             images, labels = self._load_shard(shard_path)
             class_names = None
+            global_validation = None
             selected_dataset_split = dataset_split
         with self._lock:
             if self._scheduled_run is not None or self._active_run is not None:
@@ -1230,6 +1294,7 @@ class WorkerTrainer:
             self.dataset_split = selected_dataset_split
             self.dataset_name = dataset_name
             self._dataset_class_names = class_names
+            self._global_validation = global_validation
             self._rounds = rounds
             self._epochs = epochs
             self._topology = topology
@@ -1792,6 +1857,26 @@ class WorkerTrainer:
                         metrics["confusion_matrix_row_normalized_percent"]
                     ),
                 }
+            global_validation = self._global_validation
+            if global_validation is not None:
+                from common.cifar_model import classification_metrics as score_logits
+
+                global_images, global_labels = global_validation
+                global_logits = model.predict(
+                    global_images,
+                    batch_size=min(256, int(global_labels.size)),
+                    verbose=0,
+                )
+                global_metrics = score_logits(global_labels, global_logits)
+                del global_logits
+                validation_metrics.update(
+                    {
+                        "global_validation_accuracy": global_metrics["accuracy"],
+                        "global_validation_macro_f1": global_metrics["macro_f1"],
+                        "global_validation_sample_count": int(global_labels.size),
+                        "global_validation_per_class_recall": global_metrics["per_class_recall"],
+                    }
+                )
             exchange_seconds = time.perf_counter() - exchange_started
             rss_after = _resident_memory_mb()
             after_available_kb = _memory_available_kb()
@@ -2099,6 +2184,13 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                 self._discard_request_body(MAX_DATASET_SHARD_BYTES)
                 self._unauthorized()
                 return
+            global_match = re.fullmatch(
+                r"/v1/datasets/([A-Za-z0-9][A-Za-z0-9._-]{0,63})/global-validation",
+                parsed.path,
+            )
+            if global_match is not None:
+                self._install_dataset_shard(global_match.group(1), installer=install_global_validation)
+                return
             match = re.fullmatch(
                 r"/v1/datasets/([A-Za-z0-9][A-Za-z0-9._-]{0,63})/shard",
                 parsed.path,
@@ -2221,6 +2313,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
             dataset_name: str,
             *,
             replace_existing: bool = False,
+            installer: Any = None,
         ) -> None:
             with trainer._lock:
                 if trainer._active_run is not None or trainer._scheduled_run is not None:
@@ -2254,11 +2347,15 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                         self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Dataset shard was truncated"})
                         return
                     try:
-                        result = install_dataset_shard(
-                            config,
-                            dataset_name,
-                            payload,
-                            replace_existing=replace_existing,
+                        result = (
+                            installer(config, dataset_name, payload)
+                            if installer is not None
+                            else install_dataset_shard(
+                                config,
+                                dataset_name,
+                                payload,
+                                replace_existing=replace_existing,
+                            )
                         )
                     except FileExistsError as error:
                         self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})

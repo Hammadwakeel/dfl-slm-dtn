@@ -20,6 +20,7 @@ from worker.training_service import (
     _load_installed_dataset_initial_model,
     deserialize_weights,
     install_dataset_shard,
+    install_global_validation,
     install_initial_model,
     make_handler,
     mesh_neighbours,
@@ -1720,3 +1721,129 @@ def test_worker_keeps_bounded_round_weights_and_one_split_per_run(tmp_path, monk
     trainer.cleanup_run("bounded-run")
     assert "bounded-run" not in trainer._run_splits
     assert not any(key[0] == "bounded-run" for key in trainer._round_weights)
+
+
+def _npz_bytes(images, labels, class_names):
+    buffer = io.BytesIO()
+    np.savez_compressed(buffer, images=images, labels=labels, class_names=np.array(class_names))
+    return buffer.getvalue()
+
+
+def _dataset_worker_config(tmp_path, dataset_root):
+    shard_path = tmp_path / "default_shard.npz"
+    np.savez(
+        shard_path,
+        images=np.zeros((4, 32, 32, 3), dtype=np.uint8),
+        labels=np.array([0, 1, 0, 1], dtype=np.int64),
+    )
+    return WorkerConfig(
+        node_id="worker1",
+        api_token="a" * 48,
+        port=5004,
+        data_path=str(shard_path),
+        dataset_root=str(dataset_root),
+        peers=(),
+        log_path=str(tmp_path / "worker.jsonl"),
+    )
+
+
+def test_global_validation_install_requires_a_matching_shard(tmp_path):
+    root = tmp_path / "datasets"
+    root.mkdir()
+    config = _dataset_worker_config(tmp_path, root)
+    classes = [str(label) for label in range(3)]
+    split = _npz_bytes(
+        np.zeros((6, 8, 8, 1), dtype=np.float32), np.tile(np.arange(3), 2), classes
+    )
+    with pytest.raises(ValueError, match="training shard before"):
+        install_global_validation(config, "digits", split)
+
+    install_dataset_shard(
+        config,
+        "digits",
+        _npz_bytes(np.zeros((9, 8, 8, 1), dtype=np.float32), np.tile(np.arange(3), 3), classes),
+    )
+    with pytest.raises(ValueError, match="classes do not match"):
+        install_global_validation(
+            config,
+            "digits",
+            _npz_bytes(np.zeros((6, 8, 8, 1), dtype=np.float32), np.tile(np.arange(3), 2), ["a", "b", "c"]),
+        )
+    with pytest.raises(ValueError, match="image shape"):
+        install_global_validation(
+            config,
+            "digits",
+            _npz_bytes(np.zeros((6, 4, 4, 1), dtype=np.float32), np.tile(np.arange(3), 2), classes),
+        )
+
+    result = install_global_validation(config, "digits", split)
+    assert result["rows"] == 6
+    assert result["class_counts"] == {"0": 2, "1": 2, "2": 2}
+    assert (root / "digits" / training_service.GLOBAL_VALIDATION_FILE).read_bytes() == split
+
+
+def test_dataset_round_reports_global_validation_metrics(tmp_path, monkeypatch):
+    dataset_name = "user-images"
+    root = tmp_path / "datasets"
+    root.mkdir()
+    config = _dataset_worker_config(tmp_path, root)
+    classes = [str(label) for label in range(10)]
+    rng = np.random.default_rng(0)
+    # Non-IID local shard (classes 0-4 only); the shared split holds all ten classes.
+    install_dataset_shard(
+        config,
+        dataset_name,
+        _npz_bytes(
+            rng.normal(size=(20, 8, 8, 1)).astype(np.float32),
+            np.tile(np.arange(5, dtype=np.int64), 4),
+            classes,
+        ),
+    )
+    install_global_validation(
+        config,
+        dataset_name,
+        _npz_bytes(
+            rng.normal(size=(30, 8, 8, 1)).astype(np.float32),
+            np.tile(np.arange(10, dtype=np.int64), 3),
+            classes,
+        ),
+    )
+    trainer = WorkerTrainer(config)
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name)
+    monkeypatch.setattr(training_service, "topology_neighbours", lambda *args: ())
+    monkeypatch.setattr(training_service, "topology_senders", lambda *args: ())
+    monkeypatch.setattr(training_service, "_memory_available_kb", lambda: 1)
+    monkeypatch.setattr(training_service, "_resident_memory_mb", lambda: 1.0)
+    monkeypatch.setattr(training_service, "_peak_process_rss_mb", lambda: 1.0)
+    trainer._incoming[("global-run", 0)] = {}
+
+    result = trainer.run_round("global-run", 0, 1, 11, "ring")
+
+    assert result["global_validation_sample_count"] == 30
+    assert 0.0 <= result["global_validation_accuracy"] <= 1.0
+    assert 0.0 <= result["global_validation_macro_f1"] <= 1.0
+    assert len(result["global_validation_per_class_recall"]) == 10
+
+
+def test_round_without_global_validation_reports_no_global_metrics(tmp_path, monkeypatch):
+    root = tmp_path / "datasets"
+    root.mkdir()
+    config = _dataset_worker_config(tmp_path, root)
+    classes = [str(label) for label in range(10)]
+    install_dataset_shard(
+        config,
+        "plain",
+        _npz_bytes(np.zeros((20, 8, 8, 1), dtype=np.float32), np.tile(np.arange(10, dtype=np.int64), 2), classes),
+    )
+    trainer = WorkerTrainer(config)
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name="plain")
+    monkeypatch.setattr(training_service, "topology_neighbours", lambda *args: ())
+    monkeypatch.setattr(training_service, "topology_senders", lambda *args: ())
+    monkeypatch.setattr(training_service, "_memory_available_kb", lambda: 1)
+    monkeypatch.setattr(training_service, "_resident_memory_mb", lambda: 1.0)
+    monkeypatch.setattr(training_service, "_peak_process_rss_mb", lambda: 1.0)
+    trainer._incoming[("plain-run", 0)] = {}
+
+    result = trainer.run_round("plain-run", 0, 1, 11, "ring")
+
+    assert "global_validation_accuracy" not in result

@@ -267,10 +267,17 @@ def can_prune(state: dict[str, Any]) -> bool:
     if not trained:
         return False
     # Workers keep only their newest model, so pruning compresses the newest training;
-    # only do that when it is also the best model of the run.
-    best_group = (state.get("best") or {}).get("group_id")
-    if best_group is not None and trained[-1].get("group_id") != best_group:
-        return False
+    # only do that when it is the best model of the run or within the accepted drop.
+    best = state.get("best") or {}
+    if best.get("group_id") is not None and trained[-1].get("group_id") != best["group_id"]:
+        newest_accuracy = trained[-1].get("validation_accuracy")
+        best_accuracy = best.get("validation_accuracy")
+        if not (
+            isinstance(newest_accuracy, (int, float))
+            and isinstance(best_accuracy, (int, float))
+            and newest_accuracy >= best_accuracy - PRUNE_MAX_ACCURACY_DROP
+        ):
+            return False
     # The newest training is what workers hold; only plain CNN/MLP layers can be pruned.
     architecture = state.get("last_trained_architecture")
     if not is_custom_architecture(architecture):

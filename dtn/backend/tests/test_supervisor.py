@@ -628,3 +628,7 @@ def test_pruning_is_not_offered_when_the_newest_model_is_not_the_best() -> None:
     assert not can_prune(state)
     state["best"] = {"validation_accuracy": 0.48, "group_id": "g2"}
     assert can_prune(state)
+    # A newest model within the accepted 2-point drop of the best may be pruned.
+    state["experiments"][-1]["validation_accuracy"] = 0.5624
+    state["best"] = {"validation_accuracy": 0.5638, "group_id": "g1"}
+    assert can_prune(state)

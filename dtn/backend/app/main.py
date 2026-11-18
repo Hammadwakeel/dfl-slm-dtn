@@ -181,13 +181,13 @@ def create_app(
             raise RuntimeError("The SLM master returned an invalid agent model response")
         return message
 
-    def supervisor_memory_cleanup() -> dict[str, Any]:
+    def supervisor_memory_cleanup(recycle: bool = False) -> dict[str, Any]:
         workers = tuple(
             node
             for node in cluster_nodes(resolved_settings, sessions)
             if node.role == "worker"
         )
-        return cleanup_worker_memory_cluster(workers, timeout_seconds=30.0)
+        return cleanup_worker_memory_cluster(workers, timeout_seconds=30.0, recycle=recycle)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

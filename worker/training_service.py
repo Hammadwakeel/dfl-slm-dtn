@@ -59,6 +59,11 @@ from worker.nas_search import (
 )
 
 LOGGER = logging.getLogger("dfl_slm.worker_training")
+# A long-lived service that still holds more than this after cleanup is restarted
+# (on request) so TensorFlow/allocator growth cannot accumulate across runs.
+WORKER_RECYCLE_RSS_MB = 1536
+RECYCLE_EXIT_CODE = 75
+RECYCLE_DELAY_SECONDS = 1.0
 ROUND_WEIGHTS_RETAINED = 2
 # Newest aggregated model of a dataset run, kept on disk for pruning.
 LATEST_MODEL_WEIGHTS = "latest_model.npz"
@@ -876,7 +881,21 @@ class WorkerTrainer:
             self._peer_map = {peer.node_id: peer for peer in peers}
         return {"configured_peers": peer_ids}
 
-    def cleanup_memory(self, nas_lock: threading.Lock) -> dict[str, Any]:
+    @staticmethod
+    def _exit_for_recycle() -> None:
+        _log_event("worker_recycling", exit_code=RECYCLE_EXIT_CODE)
+        logging.shutdown()
+        os._exit(RECYCLE_EXIT_CODE)
+
+    def cleanup_memory(self, nas_lock: threading.Lock, *, recycle: bool = False) -> dict[str, Any]:
+        """Free idle model memory; with ``recycle``, restart a bloated idle service.
+
+        TensorFlow and the allocator keep memory that ``clear_session`` cannot return,
+        so a long-lived service grows across runs. When asked to recycle and the
+        process still holds more than ``WORKER_RECYCLE_RSS_MB`` after cleanup, the
+        service exits with ``RECYCLE_EXIT_CODE`` and systemd (Restart=on-failure)
+        starts a fresh one; shards and models live on disk, so nothing is lost.
+        """
         if not nas_lock.acquire(blocking=False):
             raise WorkerMemoryBusyError("Cannot clean worker memory while NAS search is active")
         try:
@@ -942,6 +961,15 @@ class WorkerTrainer:
                 }
                 if cache_drop_error is not None:
                     result["error"] = cache_drop_error
+                result["recycle_scheduled"] = bool(
+                    recycle and result["process_rss_after_mb"] > WORKER_RECYCLE_RSS_MB
+                )
+                if result["recycle_scheduled"]:
+                    # Reject new work until the process is replaced.
+                    self._reboot_requested = True
+                    timer = threading.Timer(RECYCLE_DELAY_SECONDS, self._exit_for_recycle)
+                    timer.daemon = True
+                    timer.start()
         finally:
             nas_lock.release()
 
@@ -2001,8 +2029,9 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                         {"accepted": True, "message": "NAS search cancellation requested."},
                     )
             elif parsed.path == "/v1/memory/cleanup":
+                recycle = parse_qs(parsed.query).get("recycle", ["0"])[0] == "1"
                 try:
-                    result = trainer.cleanup_memory(nas_lock)
+                    result = trainer.cleanup_memory(nas_lock, recycle=recycle)
                 except WorkerMemoryBusyError as error:
                     self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
                 except RuntimeError as error:

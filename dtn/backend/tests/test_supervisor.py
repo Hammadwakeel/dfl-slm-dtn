@@ -227,9 +227,12 @@ class FakeCluster:
             group["status"] = "completed"
         return {"active_group_id": None, "groups": self.groups}
 
-    def cleanup(self) -> dict[str, Any]:
-        self.cleanups += 1
-        return {"complete": True}
+    def cleanup(self, recycle: bool = False) -> dict[str, Any]:
+        # Count remediation cleanups separately from the once-per-run recycle check.
+        if not recycle:
+            self.cleanups += 1
+        self.recycle_requests = getattr(self, "recycle_requests", 0) + int(recycle)
+        return {"complete": True, "recycled": list(getattr(self, "recycle_next", []))} if recycle else {"complete": True}
 
 
 class FakeSLM:
@@ -755,3 +758,25 @@ def test_no_warm_start_when_the_architecture_changed() -> None:
     assert Supervisor._warm_start_source(state, tuned)["from_group_id"] == "g1"
     state["best"] = {"group_id": "g0", "validation_accuracy": 0.95}
     assert Supervisor._warm_start_source(state, tuned) is None
+
+
+def test_runs_start_by_recycling_bloated_workers_and_wait_for_them(sessions) -> None:
+    from datetime import timedelta
+
+    cluster = FakeCluster()
+    cluster.recycle_next = ["worker2"]
+    clock = Clock()
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]), clock=clock)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95, max_experiments=1))
+
+    supervisor.tick()
+    waiting = supervisor.get_run(run["id"])
+    assert cluster.recycle_requests == 1
+    assert waiting["state"]["stage"] == "preflight"
+    assert waiting["state"]["workers_recycled"] == ["worker2"]
+
+    clock.now += timedelta(seconds=60)
+    finished = run_until_done(supervisor, run["id"])
+    # Recycling happens once per run, then the run proceeds normally.
+    assert cluster.recycle_requests == 1
+    assert finished["status"] == "completed"

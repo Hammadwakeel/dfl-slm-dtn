@@ -15,9 +15,9 @@ class WorkerMemoryCleanupError(RuntimeError):
     pass
 
 
-def _cleanup_worker(worker: DeviceConfig, timeout_seconds: float) -> dict[str, Any]:
+def _cleanup_worker(worker: DeviceConfig, timeout_seconds: float, recycle: bool = False) -> dict[str, Any]:
     request = Request(
-        f"{worker.training_url}/v1/memory/cleanup",
+        f"{worker.training_url}/v1/memory/cleanup{'?recycle=1' if recycle else ''}",
         data=b"",
         headers={
             "Authorization": f"Bearer {worker.token}",
@@ -76,6 +76,7 @@ def _cleanup_worker(worker: DeviceConfig, timeout_seconds: float) -> dict[str, A
         "cleaned_runs": cleaned_runs,
         "process_memory_cleaned": True,
         "os_page_cache_dropped": cache_dropped,
+        "recycle_scheduled": result.get("recycle_scheduled") is True,
         **{key: result[key] for key in metric_names},
     }
     if not cache_dropped:
@@ -92,7 +93,9 @@ def cleanup_worker_memory_cluster(
     workers: tuple[DeviceConfig, ...],
     *,
     timeout_seconds: float = 10.0,
+    recycle: bool = False,
 ) -> dict[str, Any]:
+    """Clean idle memory on every worker; ``recycle`` restarts bloated idle services."""
     if not workers:
         raise ValueError("No configured worker nodes are available for memory cleanup")
 
@@ -134,7 +137,7 @@ def cleanup_worker_memory_cluster(
     results: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=len(workers)) as executor:
         cleanups = {
-            executor.submit(_cleanup_worker, worker, timeout_seconds): worker
+            executor.submit(_cleanup_worker, worker, timeout_seconds, recycle): worker
             for worker in workers
         }
         for future in as_completed(cleanups):
@@ -159,4 +162,5 @@ def cleanup_worker_memory_cluster(
             else "Memory cleanup did not complete on every worker."
         ),
         "workers": ordered_results,
+        "recycled": [result["node_id"] for result in ordered_results if result.get("recycle_scheduled")],
     }

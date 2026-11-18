@@ -48,7 +48,7 @@ def test_memory_cleanup_reports_per_worker_partial_failures(monkeypatch):
         lambda worker, *, timeout_seconds: {"node_id": worker.node_id},
     )
 
-    def cleanup(worker, timeout_seconds):
+    def cleanup(worker, timeout_seconds, recycle=False):
         if worker.node_id == "worker3":
             return {
                 "node_id": worker.node_id,

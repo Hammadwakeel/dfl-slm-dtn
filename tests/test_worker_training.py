@@ -256,6 +256,7 @@ def test_cleanup_memory_clears_all_run_caches_and_reports_memory(tmp_path, monke
         "process_rss_after_mb": 120.0,
         "process_memory_cleaned": True,
         "os_page_cache_dropped": True,
+        "recycle_scheduled": False,
     }
     assert cache_drops == [True]
     assert trainer._run_architectures == {}
@@ -263,6 +264,48 @@ def test_cleanup_memory_clears_all_run_caches_and_reports_memory(tmp_path, monke
     assert trainer._incoming == {}
     assert trainer._round_weights == {}
     assert trainer.images.shape == (4, 32, 32, 3)
+
+
+def test_cleanup_with_recycle_restarts_only_a_bloated_idle_service(tmp_path, monkeypatch):
+    shard_path = tmp_path / "base.npz"
+    np.savez(shard_path, images=np.zeros((4, 32, 32, 3), dtype=np.uint8), labels=np.array([0, 1, 0, 1]))
+    config = WorkerConfig(
+        node_id="worker1",
+        api_token="a" * 48,
+        port=5004,
+        data_path=str(shard_path),
+        peers=(),
+        log_path=str(tmp_path / "worker.jsonl"),
+    )
+    trainer = WorkerTrainer(config)
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, function):
+            timers.append((delay, function))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(trainer, "_drop_os_page_cache", lambda: None)
+    monkeypatch.setattr(training_service, "_memory_available_mb", lambda: 3000.0)
+    monkeypatch.setattr(training_service, "_trim_process_heap", lambda: None)
+    monkeypatch.setattr(training_service.threading, "Timer", FakeTimer)
+
+    # A lean service is never recycled, even when asked.
+    monkeypatch.setattr(training_service, "_resident_memory_mb", lambda: 900.0)
+    assert trainer.cleanup_memory(threading.Lock(), recycle=True)["recycle_scheduled"] is False
+    assert not timers and trainer._reboot_requested is False
+
+    # A bloated one is recycled only when the caller asks for it.
+    monkeypatch.setattr(training_service, "_resident_memory_mb", lambda: 3900.0)
+    assert trainer.cleanup_memory(threading.Lock())["recycle_scheduled"] is False
+    assert not timers
+    assert trainer.cleanup_memory(threading.Lock(), recycle=True)["recycle_scheduled"] is True
+    assert timers and timers[0][1] == trainer._exit_for_recycle
+    # New work is refused until the process is replaced.
+    assert trainer._reboot_requested is True
 
 
 def test_cleanup_memory_clears_loaded_tensorflow_session_without_tracked_models(tmp_path, monkeypatch):

@@ -66,6 +66,11 @@ class SupervisorError(RuntimeError):
         self.status_code = status_code
 
 
+# Time for a restarted worker service to exit, restart and reload TensorFlow
+# before preflight re-checks its readiness.
+WORKER_RECYCLE_WAIT_SECONDS = 45
+
+
 class StepFailed(RuntimeError):
     """A step could not be started; the message is safe to show the operator."""
 
@@ -101,7 +106,7 @@ class Supervisor:
         dispatch: Dispatch,
         master_results: Callable[[], dict[str, Any]],
         model_call: ModelCall,
-        memory_cleanup: Callable[[], dict[str, Any]],
+        memory_cleanup: Callable[..., dict[str, Any]],
         global_evaluate: Callable[[str], dict[str, Any]] | None = None,
         min_free_memory_mb: int = 1200,
         preflight_wait_seconds: float = 600.0,
@@ -470,11 +475,42 @@ class Supervisor:
         if active_group:
             self._wait(run_id, state, f"Another experiment ({active_group}) is active on the master")
             return
+        if not self._recycle_workers_once(run_id, state):
+            return
         if not self._cluster_ready(run_id, state):
             return
         state["stage"] = "prepare_data"
         self._save(run_id, state, progress=5)
         self._event(run_id, "stage", "Preflight passed: workers ready and memory admitted.", {"cluster": self._cluster()})
+
+    def _recycle_workers_once(self, run_id: str, state: dict[str, Any]) -> bool:
+        """At the start of a run, restart worker services bloated by earlier runs.
+
+        Returns False while restarted workers come back (preflight retries).
+        """
+        if "workers_recycled" not in state:
+            try:
+                report = self._memory_cleanup(recycle=True)
+            except Exception as error:  # noqa: BLE001 - a fresh start is an optimisation
+                state["workers_recycled"] = []
+                self._event(run_id, "warning", f"Worker memory cleanup before the run failed: {error}")
+                return True
+            recycled = list(report.get("recycled") or [])
+            state["workers_recycled"] = recycled
+            if recycled:
+                ready_at = self._clock() + timedelta(seconds=WORKER_RECYCLE_WAIT_SECONDS)
+                state["recycle_ready_at"] = ready_at.isoformat()
+                self._event(
+                    run_id,
+                    "remediation",
+                    f"Restarting bloated worker services before the run: {', '.join(recycled)}.",
+                    {"cleanup": report},
+                )
+            self._save(run_id, state)
+        ready_at = state.get("recycle_ready_at")
+        if ready_at and self._clock() < _as_utc(datetime.fromisoformat(ready_at)):
+            return False
+        return True
 
     def _wait(self, run_id: str, state: dict[str, Any], reason: str) -> None:
         """Wait for an external condition, ending the run as blocked after the wait budget."""

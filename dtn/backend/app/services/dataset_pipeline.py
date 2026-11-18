@@ -1,6 +1,7 @@
 """Runs local image preprocessing and installs the resulting worker shards."""
 
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -14,6 +15,27 @@ from app.services.worker_shards import (
     get_worker_training_status,
     upload_worker_shard,
 )
+
+# Each preprocessing run stores a full normalized copy of the dataset (about 450 MB
+# for CIFAR-10), so only the newest few runs are kept on disk.
+KEEP_PROCESSED_RUNS = 3
+
+
+def prune_processed_runs(dataset_path: Path, *, keep: int = KEEP_PROCESSED_RUNS) -> list[str]:
+    """Delete all but the newest ``keep`` preprocessing runs; return the removed names."""
+    processed = dataset_path / "processed"
+    if keep < 1 or not processed.is_dir():
+        return []
+    runs = sorted(
+        (path for path in processed.glob("run-*") if path.is_dir() and not path.is_symlink()),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    removed = []
+    for path in runs[keep:]:
+        shutil.rmtree(path, ignore_errors=True)
+        removed.append(path.name)
+    return removed
 
 
 def preprocess_and_ship(
@@ -96,4 +118,6 @@ def preprocess_and_ship(
             json.dumps(report, indent=2),
             encoding="utf-8",
         )
+    # Only after every shard was installed and verified: older runs are now unused.
+    report["removed_processed_runs"] = prune_processed_runs(dataset_path)
     return report

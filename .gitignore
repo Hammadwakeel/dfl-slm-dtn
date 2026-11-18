@@ -47,3 +47,6 @@ results_apg/
 results_export/
 results_export.zip
 .mplconfig/
+
+# Local TensorFlow CPU venv for global test-set evaluation
+dtn/backend/.venv-eval/

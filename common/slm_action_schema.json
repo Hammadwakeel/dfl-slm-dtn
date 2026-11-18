@@ -280,7 +280,9 @@
                 },
                 "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
                 "replace_existing": {"type": "boolean"},
-                "restore_baseline": {"type": "boolean"}
+                "restore_baseline": {"type": "boolean"},
+                "from_trained_model": {"type": "boolean", "description": "Install the newest run's best trained model, with its weights, on every worker (warm start)."},
+                "source_worker": {"type": "string", "pattern": "^worker[1-9][0-9]*$"}
               },
               "required": ["model_name"],
               "additionalProperties": false

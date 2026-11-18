@@ -27,7 +27,7 @@ from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
 from app.services.cluster import cluster_nodes, sync_training_registry
 from app.services.global_evaluation import evaluate_newest_models
-from app.services.pruning import prune_and_distribute, restore_source_model
+from app.services.pruning import prune_and_distribute, redistribute_trained_model, restore_source_model
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
 from app.services.events import EventManager
@@ -95,6 +95,19 @@ def create_app(
             return {"available": True, "data": report}
         if action["action"] == "create_initial_model":
             dataset_name = action["parameters"]["model_name"]
+            if action["parameters"].get("from_trained_model") is True:
+                try:
+                    report = redistribute_trained_model(
+                        app.state.datasets,
+                        cluster_nodes(resolved_settings, sessions),
+                        dataset_name,
+                        source_worker=action["parameters"].get("source_worker"),
+                        seed=action["parameters"].get("seed", 0),
+                    )
+                except (InitialModelError, WorkerShardError) as error:
+                    status_code = 502 if isinstance(error, WorkerShardError) else 422
+                    raise AutonomyError(str(error), status_code) from error
+                return {"available": True, "data": report}
             try:
                 architecture = (
                     {"architecture": action["parameters"]["architecture"]}

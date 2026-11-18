@@ -39,6 +39,7 @@ from app.services.supervisor_policy import (
     experiments_used,
     fallback_decision,
     group_progress,
+    is_custom_architecture,
     is_transient_failure,
     new_state,
     parse_decision,
@@ -686,7 +687,28 @@ class Supervisor:
                 rounds = max(rounds, int(goal["rounds"]))
             epochs = int(arguments.get("local_epochs", goal["local_epochs"]))
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
-            if architecture:
+            warm_start = self._warm_start_source(state, architecture) if step == "train_final" else None
+            if warm_start is not None:
+                # Continue from the run's best trained model instead of retraining the
+                # same architecture from its random initialization.
+                report = _unwrap_result(
+                    self._dispatch(
+                        {
+                            "action": "create_initial_model",
+                            "parameters": {
+                                "model_name": goal["dataset"],
+                                "from_trained_model": True,
+                                "seed": int(goal["seed"]),
+                                **({"source_worker": warm_start["source_worker"]} if warm_start.get("source_worker") else {}),
+                            },
+                        },
+                        reason,
+                        run_id,
+                    )
+                ).get("data") or {}
+                warm_start["source_worker"] = report.get("source_worker", warm_start.get("source_worker"))
+                state["warm_start"] = warm_start
+            elif architecture:
                 # Workers train their installed initial model, so the searched architecture
                 # must be redistributed first or the retrain would silently use the old one.
                 _unwrap_result(
@@ -717,7 +739,7 @@ class Supervisor:
             }
             if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
                 parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
-            if architecture:
+            if architecture and warm_start is None:
                 parameters["architecture"] = architecture
             state["last_trained_architecture"] = architecture or state.get("baseline_architecture")
             data = _unwrap_result(
@@ -732,6 +754,7 @@ class Supervisor:
                 "local_epochs": epochs,
                 "aggregation": aggregation,
                 "config": key,
+                **({"warm_start": warm_start} if warm_start is not None else {}),
             }
         raise StepFailed(f"Unsupported step {step}")
 
@@ -872,6 +895,34 @@ class Supervisor:
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
 
+    @staticmethod
+    def _warm_start_source(state: dict[str, Any], architecture: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Warm-start the final training when workers still hold the run's best model.
+
+        Workers keep only their newest model, so this applies when the newest
+        decentralized experiment is the best one and trained the same architecture.
+        """
+        trained = [
+            item
+            for item in state.get("experiments", [])
+            if item.get("kind") == "decentralized" and item.get("status") == "completed"
+        ]
+        best = state.get("best") or {}
+        if not trained or trained[-1].get("group_id") != best.get("group_id"):
+            return None
+        if trained[-1].get("step") == "prune_model":
+            return None
+        expected = architecture or state.get("baseline_architecture")
+        if not is_custom_architecture(expected) or state.get("last_trained_architecture") != expected:
+            return None
+        per_worker = trained[-1].get("validation_per_worker") or {}
+        return {
+            "from_group_id": trained[-1].get("group_id"),
+            "from_step": trained[-1].get("step"),
+            "from_validation_accuracy": trained[-1].get("validation_accuracy"),
+            "source_worker": max(sorted(per_worker), key=per_worker.get) if per_worker else None,
+        }
+
     def _apply_global_evaluation(
         self,
         run_id: str,
@@ -910,6 +961,11 @@ class Supervisor:
             for node, row in (test.get("per_worker") or {}).items()
         }
         summary["evaluated_classes"] = result.get("classes")
+        summary["validation_per_worker"] = {
+            node: row["accuracy"]
+            for node, row in (validation.get("per_worker") or {}).items()
+            if isinstance(row, dict) and isinstance(row.get("accuracy"), (int, float))
+        }
 
     def _watch_memory(self, run_id: str, state: dict[str, Any]) -> None:
         low = self._cluster()["low_memory"]

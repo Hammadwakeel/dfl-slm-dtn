@@ -150,6 +150,10 @@ class FakeCluster:
     def dispatch(self, action: dict[str, Any], reason: str, run_id: str) -> dict[str, Any]:
         self.actions.append(action)
         name = action["action"]
+        if name == "create_initial_model" and action["parameters"].get("from_trained_model"):
+            self.warm_started = True
+            report = {"warm_started": True, "source_worker": action["parameters"].get("source_worker", "worker1")}
+            return {"status": "executed", "result": {"available": True, "data": report}}
         if name in {"preprocess_dataset", "create_initial_model"}:
             return {"status": "executed", "result": {"available": True, "data": {"dataset_name": "mnist", **self.model_report}}}
         if name == "prune_model" and action["parameters"].get("restore_source"):
@@ -182,6 +186,7 @@ class FakeCluster:
                 "runs": [],
                 "_action": action,
                 "_fine_tune": name == "start_training" and self.pruned,
+                "_warm": name == "start_training" and getattr(self, "warm_started", False),
             }
         )
         return {
@@ -197,7 +202,15 @@ class FakeCluster:
                 continue
             action = group["_action"]
             if group["kind"] == "decentralized":
-                step = "fine_tune" if group["_fine_tune"] else "train_final" if "architecture" in action["parameters"] else "baseline_training"
+                step = (
+                    "fine_tune"
+                    if group["_fine_tune"]
+                    else "warm_final"
+                    if group.get("_warm")
+                    else "train_final"
+                    if "architecture" in action["parameters"]
+                    else "baseline_training"
+                )
                 if step in self.fail_next:
                     group.update(status="failed", error=self.fail_next.pop(step))
                     continue
@@ -695,3 +708,50 @@ def test_failed_global_evaluation_keeps_worker_accuracy_and_the_run_going(sessio
     assert baseline["validation_accuracy"] == baseline["local_validation_accuracy"]
     assert "evaluator missing" in baseline["global_evaluation_error"]
     assert any(event["event_type"] == "global_evaluation_failed" for event in finished["events"])
+
+
+def test_final_training_warm_starts_from_the_best_trained_model(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy.update(train_final=0.93, warm_final=0.95, fine_tune=0.90)
+    slm = FakeSLM([
+        tool_call("run_nas", {}, "search"),
+        tool_call("learn_topology", {}, "learn the graph"),
+        tool_call("train_final", {}, "final"),
+    ])
+
+    scores = iter([0.80, 0.93, 0.95, 0.90, 0.90])
+
+    def evaluate(dataset_name: str) -> dict:
+        score = next(scores)
+        result = _global_result(score, score - 0.01)
+        result["validation"]["per_worker"] = {"worker1": {"accuracy": 0.91}, "worker4": {"accuracy": 0.95}}
+        return result
+
+    supervisor = make_supervisor(sessions, cluster, slm, global_evaluate=evaluate)
+    run = supervisor.create_run(default_goal(target_accuracy=0.99))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    warm = [a for a in cluster.actions if a["action"] == "create_initial_model" and a["parameters"].get("from_trained_model")]
+    assert len(warm) == 1
+    # The source is the worker with the best *global validation* accuracy.
+    assert warm[0]["parameters"]["source_worker"] == "worker4"
+    final = next(a for a in cluster.actions[cluster.actions.index(warm[0]):] if a["action"] == "start_training")
+    assert "architecture" not in final["parameters"]
+    assert finished["state"]["warm_start"]["from_step"] == "learn_topology"
+
+
+def test_no_warm_start_when_the_architecture_changed() -> None:
+    from app.services.supervisor import Supervisor
+
+    state = new_state()
+    tuned = {"model_type": "custom", "id": "hpo", "layers": CNN_LAYERS}
+    state["experiments"] = [{"step": "learn_topology", "kind": "decentralized", "status": "completed", "group_id": "g1"}]
+    state["best"] = {"group_id": "g1", "validation_accuracy": 0.9}
+    state["last_trained_architecture"] = {"model_type": "custom", "id": "nas", "layers": CNN_LAYERS}
+    assert Supervisor._warm_start_source(state, tuned) is None
+    state["last_trained_architecture"] = tuned
+    assert Supervisor._warm_start_source(state, tuned)["from_group_id"] == "g1"
+    state["best"] = {"group_id": "g0", "validation_accuracy": 0.95}
+    assert Supervisor._warm_start_source(state, tuned) is None

@@ -63,3 +63,14 @@ def test_restore_without_a_saved_source_is_rejected(tmp_path) -> None:
 
     with pytest.raises(InitialModelError):
         pruning.restore_source_model(SimpleNamespace(root=tmp_path), [], "mnist")
+
+
+def test_preferred_source_worker_wins_within_the_newest_run() -> None:
+    models = {
+        "worker1": {"run_id": "r2", "saved_at": 2, "validation_accuracy": 0.9},
+        "worker2": {"run_id": "r2", "saved_at": 2, "validation_accuracy": 0.5},
+        "worker3": {"run_id": "r1", "saved_at": 1, "validation_accuracy": 0.99},
+    }
+    assert select_source_model(models, preferred_worker="worker2")[0] == "worker2"
+    # A preferred worker without a model from the newest run is ignored.
+    assert select_source_model(models, preferred_worker="worker3")[0] == "worker1"

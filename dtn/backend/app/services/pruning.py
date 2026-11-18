@@ -40,14 +40,23 @@ def _decode_weights(encoded: str) -> list[np.ndarray]:
         return [np.asarray(archive[key]) for key in keys]
 
 
-def select_source_model(models: dict[str, dict[str, Any] | None]) -> tuple[str, dict[str, Any]]:
-    """Pick the best-validated worker model from the newest run every worker finished."""
+def select_source_model(
+    models: dict[str, dict[str, Any] | None],
+    preferred_worker: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Pick the best-validated worker model from the newest run every worker finished.
+
+    ``preferred_worker`` (chosen by the supervisor on the global validation split)
+    wins when that worker holds a model from the newest run.
+    """
     available = {node: model for node, model in models.items() if isinstance(model, dict)}
     if not available:
         raise InitialModelError("No worker has a trained model for this dataset yet; train first")
     newest = max(available.values(), key=lambda model: float(model.get("saved_at") or 0))
     run_id = newest.get("run_id")
     same_run = {node: model for node, model in available.items() if model.get("run_id") == run_id}
+    if preferred_worker in same_run:
+        return preferred_worker, same_run[preferred_worker]
     accuracy = lambda item: float(item[1].get("validation_accuracy") or 0)  # noqa: E731
     return max(sorted(same_run.items()), key=accuracy)
 
@@ -139,6 +148,49 @@ def restore_source_model(
         "dataset_name": dataset_name,
         "restored": True,
         "source_worker": stored.get("source_worker"),
+        "architecture_sha256": deployed.get("architecture_sha256"),
+        "weights_sha256": deployed.get("weights_sha256"),
+    }
+
+
+def redistribute_trained_model(
+    dataset_store: DatasetStore,
+    workers: Sequence[DeviceConfig],
+    dataset_name: str,
+    *,
+    source_worker: str | None = None,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Install the newest run's best trained model (weights included) on every worker.
+
+    Used to warm-start the final training from the run's best model instead of
+    training the same architecture again from its random initialization.
+    """
+    selected = sorted((worker for worker in workers if worker.role == "worker"), key=lambda worker: worker.node_id)
+    with ThreadPoolExecutor(max_workers=max(1, len(selected))) as pool:
+        fetched = list(pool.map(lambda worker: get_worker_latest_model(worker, dataset_name), selected))
+    node_id, source = select_source_model(
+        {worker.node_id: model for worker, model in zip(selected, fetched)},
+        preferred_worker=source_worker,
+    )
+    architecture = source.get("architecture")
+    if not isinstance(architecture, dict):
+        raise InitialModelError(f"{node_id} returned a trained model without its architecture")
+    deployed = create_and_distribute_initial_model(
+        dataset_store,
+        workers,
+        dataset_name,
+        seed=seed,
+        architecture=architecture,
+        replace_existing=True,
+        initial_weights=_decode_weights(str(source.get("weights_b64", ""))),
+    )
+    return {
+        "dataset_name": dataset_name,
+        "warm_started": True,
+        "source_worker": node_id,
+        "source_run_id": source.get("run_id"),
+        "source_round": source.get("round"),
         "architecture_sha256": deployed.get("architecture_sha256"),
         "weights_sha256": deployed.get("weights_sha256"),
     }

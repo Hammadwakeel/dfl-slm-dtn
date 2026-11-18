@@ -1075,6 +1075,13 @@ export interface SupervisorState {
   selected_topology: string | null;
   nas_architecture: Record<string, unknown> | null;
   pruning?: SupervisorPruning | null;
+  /** The final training continued from this experiment's trained model. */
+  warm_start?: {
+    from_group_id?: string;
+    from_step?: string;
+    from_validation_accuracy?: number | null;
+    source_worker?: string | null;
+  } | null;
   active: { step: string; group_id: string; started_at: string; progress?: number } | null;
   pending_step: { step: string; rationale?: string; source?: string } | null;
   counters: SupervisorCounters;

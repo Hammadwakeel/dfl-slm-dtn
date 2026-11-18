@@ -407,6 +407,16 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
         </div>
       )}
 
+      {run.state.warm_start && (
+        <p className="agent-warm-start" aria-label="Warm start">
+          Final training continued from the trained{" "}
+          <strong>{STEP_LABELS[run.state.warm_start.from_step ?? ""] ?? run.state.warm_start.from_step ?? "best"}</strong> model
+          {run.state.warm_start.from_validation_accuracy != null
+            ? ` (${formatPercent(run.state.warm_start.from_validation_accuracy)} validation)`
+            : ""}
+          {run.state.warm_start.source_worker ? `, taken from ${run.state.warm_start.source_worker}` : ""}.
+        </p>
+      )}
       {run.state.pruning && <PruningPanel pruning={run.state.pruning} />}
       <ExperimentTable run={run} />
       <AskBox token={token} runId={run.id} />

@@ -161,6 +161,21 @@ describe("Agent Supervisor page", () => {
     expect(screen.getByText("97.00%")).toBeInTheDocument();
   });
 
+  it("explains a warm-started final training", async () => {
+    const run = runFixture();
+    run.state.warm_start = {
+      from_step: "learn_topology",
+      from_validation_accuracy: 0.4188,
+      source_worker: "worker4",
+    };
+    mockApi([run]);
+    render(<AgentPage token="dtn-token" active />);
+
+    const note = await screen.findByLabelText("Warm start");
+    expect(note).toHaveTextContent("41.88% validation");
+    expect(note).toHaveTextContent("worker4");
+  });
+
   it("stops an active run after confirmation", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const run = runFixture();

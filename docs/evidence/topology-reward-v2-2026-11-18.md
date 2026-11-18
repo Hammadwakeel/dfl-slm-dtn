@@ -101,8 +101,20 @@ Mesh passes 90% by round 4. No other topology reaches 90% mean accuracy within 1
   - Over all 969 weight vectors on a 0.05 grid with quality weight ≥ 0.2, the reward alone picks mesh in 44.8% of cases, bidirectional ring in 36.8% and directed ring in 18.3%.
 - **The gate is what makes the selection robust.** Because only mesh passes the 90% weakest-worker gate, the gated selection picks mesh for every one of those weight vectors. The gate threshold (90%) is a design choice and should be stated as one.
 - **Narrow scope.** MNIST, one non-IID level (α = 0.3), one fixed small model and 8 workers on one LAN. The bandwidth trade-off would weigh more with larger models or constrained links. CIFAR-10 and other α values are needed before generalising.
-- **No test-set results.** Test-set accuracy was not computed for this sweep. Workers keep only their newest model, so per-topology final models were not retained. Report shared-validation numbers as validation results, and evaluate the selected topology on the test split separately.
+- **No test-set results for the sweep itself.** Test-set accuracy was not computed per topology. Workers keep only their newest model, so per-topology final models were not retained. Report shared-validation numbers as validation results. The selected topology was evaluated on the test split in a separate run (see below).
 - **Three seeds.** Standard deviations are population std over 3 seeds. Confidence intervals would need more seeds.
+
+## Corroborating end-to-end run (test split)
+
+After the sweep, the agentic supervisor ran the full pipeline on the same cluster and dataset (supervisor run `395f597b`, outcome `objective_achieved`). This was a single run, not part of the 3-seed sweep:
+
+| Step | Result |
+|---|---|
+| Topology sweep (reward v2, 4 rounds) | Selected **mesh**, independently of the 10-round sweep above. It took about 25 min, against about 55 min for the longer setting. |
+| Final training on mesh | **99.12%** test accuracy |
+| 30% structured pruning (accepted) | 78,890 → 38,305 parameters, **98.92%** test accuracy |
+
+A shorter sweep reached the same selection, and the selected topology generalises to the held-out test split. One run gives no variance estimate, so report these test numbers as a single run.
 
 ## Suggested paper wording
 

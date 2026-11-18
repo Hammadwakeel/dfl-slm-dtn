@@ -161,6 +161,7 @@ class FakeCluster:
             return {"status": "executed", "result": {"available": True, "data": {"restored": True}}}
         if name == "prune_model":
             self.pruned = True
+            self.prune_ratio = action["parameters"]["ratio"]
             report = {"ratio": action["parameters"]["ratio"], "parameters_before": 1000, "parameters_after": 400, "compression": 2.5, "architecture_id": "nas-x-pruned50", "source_worker": "worker1"}
             return {"status": "executed", "result": {"available": True, "data": report}}
         if name in {"set_topology", "stop_training"}:
@@ -186,6 +187,7 @@ class FakeCluster:
                 "runs": [],
                 "_action": action,
                 "_fine_tune": name == "start_training" and self.pruned,
+                "_ratio": getattr(self, "prune_ratio", None),
                 "_warm": name == "start_training" and getattr(self, "warm_started", False),
             }
         )
@@ -214,7 +216,10 @@ class FakeCluster:
                 if step in self.fail_next:
                     group.update(status="failed", error=self.fail_next.pop(step))
                     continue
-                accuracy = self.accuracy[step]
+                if step == "fine_tune" and f"fine_tune_{group['_ratio']}" in self.accuracy:
+                    accuracy = self.accuracy[f"fine_tune_{group['_ratio']}"]
+                else:
+                    accuracy = self.accuracy[step]
                 group["runs"] = [{"rounds": [{"workers": {"worker1": {"validation_accuracy": accuracy, "validation_macro_f1": accuracy - 0.01}}}]}]
                 group["topology"] = "directed_ring"
             elif group["kind"] == "dataset_architecture_search":
@@ -631,10 +636,37 @@ def test_pruning_that_loses_too_much_accuracy_restores_the_unpruned_model(sessio
     assert pruning["accepted"] is False
     assert pruning["restored_unpruned"] is True
     restores = [a for a in cluster.actions if a["action"] == "prune_model" and a["parameters"].get("restore_source")]
-    assert len(restores) == 1
+    # The rejected 30% prune is retried once at 15%; both are rejected and restored.
+    assert len(restores) == 2
+    ratios = [a["parameters"]["ratio"] for a in cluster.actions if a["action"] == "prune_model" and "ratio" in a["parameters"]]
+    assert ratios == [0.3, 0.15]
+    assert [item["ratio"] for item in finished["state"]["pruning_attempts"]] == [0.3, 0.15]
     assert cluster.pruned is False
     # The unpruned model stays the run's result.
     assert finished["state"]["best"]["step"] != "prune_model"
+
+
+def test_rejected_pruning_is_retried_once_at_a_gentler_ratio(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy["fine_tune_0.3"] = 0.80
+    cluster.accuracy["fine_tune_0.15"] = 0.95
+    slm = FakeSLM([
+        tool_call("run_nas", {}, "Search a better CNN."),
+        tool_call("run_hpo", {}, "Tune the learning rate of the searched CNN."),
+        tool_call("train_final", {}, "Retrain with the tuned CNN."),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.95))["id"])
+
+    assert finished["status"] == "completed"
+    pruning = finished["state"]["pruning"]
+    assert pruning["ratio"] == 0.15
+    assert pruning["accepted"] is True
+    assert pruning["architecture_id"].endswith("-pruned15")
+    attempts = finished["state"]["pruning_attempts"]
+    assert [(item["ratio"], item["accepted"]) for item in attempts] == [(0.3, False), (0.15, True)]
+    assert cluster.pruned is True
 
 
 def test_pruning_is_not_offered_when_the_newest_model_is_not_the_best() -> None:

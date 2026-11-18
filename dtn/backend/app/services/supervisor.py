@@ -31,6 +31,7 @@ from app.services.supervisor_policy import (
     PRUNE_MAX_ACCURACY_DROP,
     PRUNE_MIN_FINE_TUNE_ROUNDS,
     PRUNE_RATIO,
+    PRUNE_RETRY_RATIO,
     Decision,
     DecisionError,
     decision_messages,
@@ -649,15 +650,17 @@ class Supervisor:
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
             return _group_id(data), {}
         if step == "prune_model":
+            # The SLM cannot choose the ratio; only the rule-driven retry passes a gentler one.
+            ratio = PRUNE_RETRY_RATIO if arguments.get("ratio") == PRUNE_RETRY_RATIO else PRUNE_RATIO
             prune = {
                 "action": "prune_model",
-                "parameters": {"model_name": goal["dataset"], "ratio": PRUNE_RATIO, "seed": int(goal["seed"])},
+                "parameters": {"model_name": goal["dataset"], "ratio": ratio, "seed": int(goal["seed"])},
             }
             report = _unwrap_result(self._dispatch(prune, reason, run_id)).get("data") or {}
             pruned_from = (state.get("last_trained_architecture") or {}).get("id")
             if pruned_from:
                 # Workers store the deployed design without its search id; restore it.
-                report["architecture_id"] = f"{pruned_from}-pruned{int(round(PRUNE_RATIO * 100))}"
+                report["architecture_id"] = f"{pruned_from}-pruned{int(round(ratio * 100))}"
             state["pruning"] = {
                 key: report.get(key)
                 for key in (
@@ -672,7 +675,7 @@ class Supervisor:
             }
             # Fine-tune the pruned model (already installed with its trained weights).
             topology = state.get("selected_topology") or goal["topology"]
-            # Removing 30% of channels costs accuracy that a short fine-tune cannot
+            # Removing channels costs accuracy that a short fine-tune cannot
             # recover; fine-tune for the full training length of the goal.
             rounds = max(PRUNE_MIN_FINE_TUNE_ROUNDS, int(goal["rounds"]))
             epochs = int(goal["local_epochs"])
@@ -889,6 +892,7 @@ class Supervisor:
             best_now = (state.get("best") or {}).get("validation_accuracy")
             if isinstance(accuracy_now, (int, float)) and (best_now is None or accuracy_now >= best_now):
                 state["selected_topology"] = "learned"
+        retry_pruning = False
         if step == "prune_model" and isinstance(state.get("pruning"), dict):
             state["pruning"]["validation_accuracy"] = summary.get("validation_accuracy")
             state["pruning"]["macro_f1"] = summary.get("macro_f1")
@@ -916,6 +920,16 @@ class Supervisor:
                     state["pruning"]["restored_unpruned"] = False
                     state["pruning"]["restore_error"] = str(error)[:300]
             summary["pruning"] = state["pruning"]
+            state.setdefault("pruning_attempts", []).append(dict(state["pruning"]))
+            # Retry once at a gentler ratio when the unpruned model is back on the
+            # workers and the experiment budget allows another fine-tune.
+            retry_pruning = (
+                not state["pruning"]["accepted"]
+                and state["pruning"].get("restored_unpruned") is True
+                and state["pruning"].get("ratio") != PRUNE_RETRY_RATIO
+                and len(state["pruning_attempts"]) < 2
+                and experiments_used(state) < int(goal["max_experiments"])
+            )
         accuracy = summary.get("validation_accuracy")
         best = state.get("best")
         if isinstance(accuracy, (int, float)) and (not best or accuracy > best.get("validation_accuracy", -1)):
@@ -928,6 +942,17 @@ class Supervisor:
                 "topology": summary.get("topology"),
             }
         state["stage"] = "deciding"
+        if retry_pruning:
+            state["pending_step"] = {
+                "step": "prune_model",
+                "arguments": {"ratio": PRUNE_RETRY_RATIO},
+                "rationale": (
+                    f"Pruning {int(round(PRUNE_RATIO * 100))}% lost too much accuracy; "
+                    f"retry once with {int(round(PRUNE_RETRY_RATIO * 100))}%."
+                ),
+                "source": "rule",
+            }
+            state["stage"] = "executing"
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
 

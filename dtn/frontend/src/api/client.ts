@@ -1039,6 +1039,8 @@ export interface SupervisorPruning {
   source_validation_accuracy?: number | null;
   validation_accuracy?: number | null;
   macro_f1?: number | null;
+  reference_accuracy?: number | null;
+  accepted?: boolean;
 }
 
 export interface SupervisorBest {

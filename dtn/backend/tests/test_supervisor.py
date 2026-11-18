@@ -514,16 +514,17 @@ def test_supervisor_tunes_hyperparameters_then_prunes_once_the_target_is_met(ses
     assert hpo["parameters"]["architecture"]["id"] == "nas-cnn"
     retrain = [action for action in cluster.actions if action["action"] == "start_training" and "architecture" in action["parameters"]]
     assert retrain[-1]["parameters"]["architecture"]["id"] == "hpo-adam-lr3e-3-bs64"
-    # Target met -> the rule prunes once, then a shorter fine-tune runs without a new architecture.
+    # Target met -> the rule prunes once, then a full-length fine-tune runs without a new architecture.
     prune_index = names.index("prune_model")
     assert cluster.actions[prune_index]["parameters"]["ratio"] == 0.3
     fine_tune = next(action for action in cluster.actions[prune_index:] if action["action"] == "start_training")
     assert "architecture" not in fine_tune["parameters"]
-    assert fine_tune["parameters"]["rounds"] == 5
+    assert fine_tune["parameters"]["rounds"] == 10
     pruning = finished["state"]["pruning"]
     assert pruning["compression"] == 2.5
     assert pruning["architecture_id"] == "hpo-adam-lr3e-3-bs64-pruned30"
     assert pruning["validation_accuracy"] == pytest.approx(0.955)
+    assert pruning["accepted"] is True
     assert names.count("prune_model") == 1
     decisions = [event for event in finished["events"] if event["event_type"] == "decision"]
     assert [event["details"]["source"] for event in decisions][-2:] == ["rule", "rule"]

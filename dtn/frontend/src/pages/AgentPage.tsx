@@ -434,11 +434,20 @@ function PruningPanel({ pruning }: { pruning: SupervisorPruning }) {
           <span>Accuracy after fine-tune</span>
           <strong>{pruning.validation_accuracy != null ? formatPercent(pruning.validation_accuracy) : "fine-tuning…"}</strong>
           <small>
-            {pruning.source_validation_accuracy != null
-              ? `before pruning ${formatPercent(pruning.source_validation_accuracy)} on ${pruning.source_worker ?? "best worker"}`
-              : ""}
+            {pruning.reference_accuracy != null
+              ? `before pruning ${formatPercent(pruning.reference_accuracy)} (mean of workers)`
+              : pruning.source_validation_accuracy != null
+                ? `before pruning ${formatPercent(pruning.source_validation_accuracy)} on ${pruning.source_worker ?? "best worker"}`
+                : ""}
           </small>
         </div>
+        {pruning.accepted != null && (
+          <div className="metric">
+            <span>Decision</span>
+            <strong>{pruning.accepted ? "Pruned model kept" : "Unpruned model kept"}</strong>
+            <small>{pruning.accepted ? "accuracy within 2 points of the best" : "pruning cost more than 2 points of accuracy"}</small>
+          </div>
+        )}
       </div>
     </section>
   );

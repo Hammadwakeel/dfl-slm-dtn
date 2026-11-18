@@ -28,6 +28,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
     DATASET_IMAGE_SIZES,
+    PRUNE_MAX_ACCURACY_DROP,
+    PRUNE_MIN_FINE_TUNE_ROUNDS,
     PRUNE_RATIO,
     Decision,
     DecisionError,
@@ -631,7 +633,9 @@ class Supervisor:
             }
             # Fine-tune the pruned model (already installed with its trained weights).
             topology = state.get("selected_topology") or goal["topology"]
-            rounds = max(3, int(goal["rounds"]) // 2)
+            # Removing 30% of channels costs accuracy that a short fine-tune cannot
+            # recover; fine-tune for the full training length of the goal.
+            rounds = max(PRUNE_MIN_FINE_TUNE_ROUNDS, int(goal["rounds"]))
             epochs = int(goal["local_epochs"])
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
             parameters = {
@@ -821,6 +825,17 @@ class Supervisor:
         if step == "prune_model" and isinstance(state.get("pruning"), dict):
             state["pruning"]["validation_accuracy"] = summary.get("validation_accuracy")
             state["pruning"]["macro_f1"] = summary.get("macro_f1")
+            # Compare like with like: mean worker accuracy of the run's best model.
+            source = (state.get("best") or {}).get("validation_accuracy")
+            state["pruning"]["reference_accuracy"] = source
+            accuracy_now = summary.get("validation_accuracy")
+            # Accept the pruned model only if it keeps accuracy close to its source;
+            # otherwise the unpruned model (still the run's best) is the result.
+            state["pruning"]["accepted"] = bool(
+                isinstance(source, (int, float))
+                and isinstance(accuracy_now, (int, float))
+                and accuracy_now >= float(source) - PRUNE_MAX_ACCURACY_DROP
+            )
             summary["pruning"] = state["pruning"]
         accuracy = summary.get("validation_accuracy")
         best = state.get("best")

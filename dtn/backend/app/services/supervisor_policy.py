@@ -46,6 +46,9 @@ MODEL_STEPS = ("train_final", "prune_model")
 # Measured on MNIST (8 workers): 50% pruning gave 3.9x fewer parameters but lost ~5
 # points after a 5-round fine-tune; 30% keeps the model lighter with a smaller loss.
 PRUNE_RATIO = 0.3
+# A pruned model is accepted when its mean accuracy is within this of the best.
+PRUNE_MAX_ACCURACY_DROP = 0.02
+PRUNE_MIN_FINE_TUNE_ROUNDS = 5
 MAX_STEP_FAILURES = 2
 
 STEP_TOOLS: dict[str, dict[str, Any]] = {

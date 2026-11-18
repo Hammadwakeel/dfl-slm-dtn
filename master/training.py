@@ -78,12 +78,22 @@ DATASET_SPLITS = {
     0.7: "dirichlet_a07",
 }
 OPTIMIZATION_ALPHAS = (0.1, 0.3, 0.5)
-# Datasets the topology sweep supports. MNIST keeps the original fixed CNN so earlier
-# sweeps stay comparable. b1_c8_k3 is too small for CIFAR-10 (about 35% accuracy),
-# which would compress every topology into the same low-accuracy band, so CIFAR-10
-# sweeps use one fixed 3-block CNN of about 62k parameters for every candidate.
+# Datasets the topology sweep supports. Both use the same fixed 3-block CNN
+# (32/64/64 channels; ~61k parameters on MNIST, ~62k on CIFAR-10) for every
+# candidate. b1_c8_k3 is too small for CIFAR-10 (about 35% accuracy), which would
+# compress every topology into one low-accuracy band.
+# Workers train an installed initial model in preference to this architecture, so
+# install a fresh model of this architecture (create_initial_model) before a sweep.
 OPTIMIZATION_ARCHITECTURES: dict[str, str | dict[str, Any]] = {
-    "mnist": FIXED_ARCHITECTURE,
+    "mnist": build_dataset_architecture(
+        input_shape=(28, 28, 1),
+        num_classes=10,
+        channels=(32, 64, 64),
+        kernel_size=3,
+        block_type="conv2d",
+        head_units=64,
+        dropout=0.2,
+    ),
     "cifar10": build_dataset_architecture(
         input_shape=(32, 32, 3),
         num_classes=10,

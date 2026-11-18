@@ -27,6 +27,10 @@ from worker.model_factory import build_dataset_model
 MAX_SEARCH_SECONDS = 300
 MAX_SEARCH_RSS_MB = 3072
 MIN_SEARCH_AVAILABLE_MEMORY_MB = 1024
+# In-process (CIFAR-10) search shares the long-lived training service, whose RSS
+# already includes TensorFlow and earlier runs; cap the search's own growth there.
+# The available-system-memory guard above still prevents an OOM.
+MAX_IN_PROCESS_SEARCH_GROWTH_MB = 1536
 DATASET_NAS_TRAIN_BATCH_SIZE = 8
 DATASET_NAS_SHUFFLE_BUFFER_SIZE = 32
 DATASET_NAS_VALIDATION_BATCH_SIZE = 16
@@ -52,6 +56,13 @@ def _rss_mb() -> float:
             if line.startswith("VmRSS:"):
                 return int(line.split()[1]) / 1024
     raise RuntimeError("VmRSS is missing from /proc/self/status")
+
+
+def search_rss_cap_mb(start_rss_mb: float, in_process: bool) -> float:
+    """RSS cap for a dataset search: absolute in a subprocess, growth-based in-process."""
+    if not in_process:
+        return float(MAX_SEARCH_RSS_MB)
+    return max(float(MAX_SEARCH_RSS_MB), start_rss_mb + MAX_IN_PROCESS_SEARCH_GROWTH_MB)
 
 
 def _available_system_memory_mb() -> float:
@@ -339,6 +350,7 @@ def search_dataset_architectures(
             f"{MIN_SEARCH_AVAILABLE_MEMORY_MB} MiB available system memory; "
             f"only {available_memory_mb:.1f} MiB is available"
         )
+    rss_cap_mb = search_rss_cap_mb(_rss_mb(), reuse_tensorflow_runtime)
     import tensorflow as tf
 
     devices = tf.config.list_physical_devices("GPU")
@@ -422,10 +434,10 @@ def search_dataset_architectures(
                 f"Dataset NAS candidate {candidate_id} stopped before training to preserve "
                 f"{MIN_SEARCH_AVAILABLE_MEMORY_MB} MiB of available system memory"
             )
-        if _rss_mb() > MAX_SEARCH_RSS_MB:
+        if _rss_mb() > rss_cap_mb:
             raise MemoryError(
                 f"Dataset NAS candidate {candidate_id} exceeded "
-                f"the {MAX_SEARCH_RSS_MB} MiB RSS cap during model initialization"
+                f"the {rss_cap_mb:.0f} MiB RSS cap during model initialization"
             )
         exceeded: list[str] = []
         peak_rss_mb = [_rss_mb()]
@@ -440,7 +452,7 @@ def search_dataset_architectures(
                 elif cancel_event is not None and cancel_event.is_set():
                     exceeded.append("cancelled")
                     self.model.stop_training = True
-                elif rss_mb > MAX_SEARCH_RSS_MB:
+                elif rss_mb > rss_cap_mb:
                     exceeded.append("process-memory")
                     self.model.stop_training = True
                 elif _available_system_memory_mb() < MIN_SEARCH_AVAILABLE_MEMORY_MB:
@@ -470,7 +482,7 @@ def search_dataset_architectures(
                 )
             raise MemoryError(
                 f"Dataset NAS candidate {candidate_id} exceeded the "
-                f"{MAX_SEARCH_RSS_MB} MiB process RSS cap"
+                f"{rss_cap_mb:.0f} MiB process RSS cap"
             )
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("Dataset NAS search was cancelled")
@@ -513,10 +525,10 @@ def search_dataset_architectures(
                 f"Dataset NAS candidate {candidate_id} completed with less than "
                 f"{MIN_SEARCH_AVAILABLE_MEMORY_MB} MiB of available system memory"
             )
-        if peak_rss_mb[0] > MAX_SEARCH_RSS_MB:
+        if peak_rss_mb[0] > rss_cap_mb:
             raise MemoryError(
                 f"Dataset NAS candidate {candidate_id} exceeded "
-                f"the {MAX_SEARCH_RSS_MB} MiB RSS cap"
+                f"the {rss_cap_mb:.0f} MiB RSS cap"
             )
         accuracy = float(np.mean(logits.argmax(axis=1) == labels[validation_indices]))
         elapsed_seconds = round(time.perf_counter() - candidate_started, 3)
@@ -557,7 +569,7 @@ def search_dataset_architectures(
         "time_limit_seconds": time_limit_seconds,
         "fidelity_epochs": epochs,
         "search_method": "pareto_evolutionary_multifidelity",
-        "memory_limit_mb": MAX_SEARCH_RSS_MB,
+        "memory_limit_mb": round(rss_cap_mb, 1),
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "peak_rss_mb": round(max(row["peak_rss_mb"] for row in candidates), 1),
         "candidates": candidates,

@@ -10,6 +10,7 @@ import pytest
 from common.dataset_nas import (
     CIFAR_INITIAL_POPULATION_SIZE,
     FINAL_EPOCHS,
+    MEMORY_CONSTRAINED_MAX_PARAMETERS,
     INITIAL_EPOCHS,
     INITIAL_POPULATION_SIZE,
     initial_population,
@@ -1043,23 +1044,25 @@ def test_cifar10_dataset_nas_uses_memory_constrained_candidates(tmp_path: Path) 
         if item["group_id"] == accepted["group_id"]
     )
     assert group["status"] == "completed"
-    assert len(calls) == len(coordinator.config.workers)
-    assert group["search_method"] == "pareto_constrained_single_stage"
-    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [INITIAL_EPOCHS]
-    assert [len(stage["candidates"]) for stage in group["nas_generations"]] == [3]
-    assert [
-        payload["epochs"] for payload in calls[: len(coordinator.config.workers)]
-    ] == [INITIAL_EPOCHS] * len(coordinator.config.workers)
-    assert all("architectures" not in payload for payload in calls)
+    workers = len(coordinator.config.workers)
+    # CIFAR-10 now evolves too: a one-epoch screen, then the survivors for FINAL_EPOCHS.
+    assert len(calls) == 2 * workers
+    assert group["search_method"] == "pareto_evolutionary_multifidelity"
+    assert [stage["fidelity_epochs"] for stage in group["nas_generations"]] == [INITIAL_EPOCHS, FINAL_EPOCHS]
+    assert len(group["nas_generations"][0]["candidates"]) == CIFAR_INITIAL_POPULATION_SIZE
+    assert [payload["epochs"] for payload in calls[:workers]] == [INITIAL_EPOCHS] * workers
+    assert [payload["epochs"] for payload in calls[workers:]] == [FINAL_EPOCHS] * workers
+    assert all("architectures" not in payload for payload in calls[:workers])
     assert all(
-        candidate["architecture"]["blocks"] == 2
-        and max(candidate["architecture"]["channel_schedule"]) <= 32
+        2 <= candidate["architecture"]["blocks"] <= 3
+        and max(candidate["architecture"]["channel_schedule"]) <= 64
+        and candidate["architecture"]["parameter_count"] <= MEMORY_CONSTRAINED_MAX_PARAMETERS
         and candidate["architecture"]["kernel_size"] == 3
         and candidate["architecture"]["attention"] is False
         for stage in group["nas_generations"]
         for candidate in stage["candidates"]
     )
-    assert group["selection"]["method"] == "pareto_constrained_single_stage"
+    assert group["selection"]["method"] == "pareto_evolutionary_multifidelity"
 
 
 def test_dataset_nas_publishes_worker_progress_as_each_worker_finishes(

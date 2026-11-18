@@ -350,12 +350,12 @@ def search_dataset_architectures(
             f"{MIN_SEARCH_AVAILABLE_MEMORY_MB} MiB available system memory; "
             f"only {available_memory_mb:.1f} MiB is available"
         )
-    rss_cap_mb = search_rss_cap_mb(_rss_mb(), reuse_tensorflow_runtime)
     import tensorflow as tf
 
     devices = tf.config.list_physical_devices("GPU")
     if not devices:
         raise RuntimeError("NAS search requires an enumerated TensorFlow GPU")
+    rss_cap_mb = search_rss_cap_mb(_rss_mb(), reuse_tensorflow_runtime)
     if not reuse_tensorflow_runtime:
         _enable_gpu_memory_growth(tf, devices)
         tf.config.threading.set_intra_op_parallelism_threads(1)

@@ -707,8 +707,6 @@ class TrainingCoordinator:
                 "search_method": (
                     "single_candidate_smoke_test"
                     if smoke_test
-                    else "pareto_constrained_single_stage"
-                    if dataset_name == "cifar10"
                     else "pareto_evolutionary_multifidelity"
                 ),
                 "nas_generations": [],
@@ -1724,11 +1722,9 @@ class TrainingCoordinator:
             fidelities = (
                 (1,)
                 if smoke_test
-                else (
-                    (INITIAL_EPOCHS,)
-                    if group["dataset_name"] == "cifar10"
-                    else (INITIAL_EPOCHS, FINAL_EPOCHS)
-                )
+                # CIFAR-10 also evolves: a one-epoch screen alone always favoured the
+                # smallest, fastest-learning model.
+                else (INITIAL_EPOCHS, FINAL_EPOCHS)
             )
             with self._lock:
                 group["worker_search"] = []
@@ -1921,8 +1917,6 @@ class TrainingCoordinator:
                     group["search_method"] = (
                         "single_candidate_smoke_test"
                         if smoke_test
-                        else "pareto_constrained_single_stage"
-                        if group["dataset_name"] == "cifar10"
                         else "pareto_evolutionary_multifidelity"
                     )
                     self._persist_locked()
@@ -1937,8 +1931,6 @@ class TrainingCoordinator:
                 "method": (
                     "single_candidate_smoke_test"
                     if smoke_test
-                    else "pareto_constrained_single_stage"
-                    if group["dataset_name"] == "cifar10"
                     else "pareto_evolutionary_multifidelity"
                 ),
                 "fidelity_epochs": fidelities[-1],

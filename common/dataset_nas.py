@@ -9,7 +9,15 @@ from common.model_design import validate_model_design
 
 MAX_DATASET_NAS_PARAMETERS = 1_000_000
 INITIAL_POPULATION_SIZE = 8
-CIFAR_INITIAL_POPULATION_SIZE = 3
+# CIFAR-10 trains in the long-lived worker service on an 8 GB Jetson. The search's
+# memory is dominated by TensorFlow and the shard, not by these small CNNs, so the
+# space allows up to three blocks of 64 channels under a parameter cap. The former
+# space (two blocks of <= 32 channels, three candidates) used ~1 of its 10 minutes
+# and could only find ~3k-parameter models.
+CIFAR_INITIAL_POPULATION_SIZE = 6
+MEMORY_CONSTRAINED_MAX_PARAMETERS = 150_000
+MEMORY_CONSTRAINED_CHANNELS = (16, 32, 64)
+MEMORY_CONSTRAINED_DROPOUT = (0.0, 0.2, 0.35)
 FINAL_POPULATION_SIZE = 4
 # Fidelity schedule measured on 8 Jetson workers (~7.5k MNIST samples each, ~16 s per
 # epoch): 8 candidates x 1 epoch, then 4 x 3 epochs, fits the 600 s budget with margin.
@@ -150,21 +158,32 @@ def _random_candidate(
     num_classes: int,
     memory_constrained: bool = False,
 ) -> dict[str, Any]:
-    channel_choices = (16, 32) if memory_constrained else CHANNEL_CHOICES
-    depth = 2 if memory_constrained else rng.randint(2, MAX_BLOCKS)
+    channel_choices = MEMORY_CONSTRAINED_CHANNELS if memory_constrained else CHANNEL_CHOICES
+    depth = rng.randint(2, MAX_BLOCKS)
     channels = tuple(
         sorted(rng.choices(channel_choices, k=depth))
     )
-    return build_dataset_architecture(
+    candidate = build_dataset_architecture(
         input_shape=input_shape,
         num_classes=num_classes,
         channels=channels,
         kernel_size=3 if memory_constrained else rng.choice(KERNEL_CHOICES),
         block_type=rng.choice(BLOCK_CHOICES),
-        head_units=rng.choice((0, 64) if memory_constrained else HEAD_CHOICES),
-        dropout=rng.choice((0.0, 0.2) if memory_constrained else DROPOUT_CHOICES),
+        head_units=rng.choice(HEAD_CHOICES),
+        dropout=rng.choice(MEMORY_CONSTRAINED_DROPOUT if memory_constrained else DROPOUT_CHOICES),
         attention=False if memory_constrained else rng.random() < 0.2,
     )
+    if memory_constrained:
+        _check_memory_constrained(candidate)
+    return candidate
+
+
+def _check_memory_constrained(candidate: dict[str, Any]) -> None:
+    if int(candidate["parameter_count"]) > MEMORY_CONSTRAINED_MAX_PARAMETERS:
+        raise ValueError(
+            f"{candidate['id']} exceeds the {MEMORY_CONSTRAINED_MAX_PARAMETERS:,}-parameter "
+            "cap for memory-constrained search"
+        )
 
 
 def initial_population(
@@ -180,8 +199,8 @@ def initial_population(
     if size >= 2:
         fixed_candidates = (
             (
-                ((16, 16), "conv2d", 0, 0.0, False),
-                ((16, 32), "separable_conv2d", 64, 0.2, False),
+                ((32, 64), "conv2d", 64, 0.2, False),
+                ((16, 32, 64), "conv2d", 64, 0.2, False),
             )
             if memory_constrained
             else (
@@ -264,19 +283,25 @@ def mutate_population(
         dropout = float(parent["dropout"])
         attention = bool(parent.get("attention", False))
         if memory_constrained:
-            mutation = rng.randrange(3)
+            mutation = rng.randrange(5)
             if mutation == 0:
                 index = rng.randrange(len(channels))
-                channels[index] = rng.choice((16, 32))
+                channels[index] = rng.choice(MEMORY_CONSTRAINED_CHANNELS)
             elif mutation == 1:
                 block_type = (
                     "separable_conv2d"
                     if block_type == "conv2d"
                     else "conv2d"
                 )
-            else:
+            elif mutation == 2:
                 head_units = 64 if head_units == 0 else 0
-                dropout = 0.2 if head_units else 0.0
+            elif mutation == 3:
+                if len(channels) < MAX_BLOCKS:
+                    channels.append(rng.choice(MEMORY_CONSTRAINED_CHANNELS))
+                elif len(channels) > 2:
+                    channels.pop(rng.randrange(len(channels)))
+            else:
+                dropout = rng.choice(MEMORY_CONSTRAINED_DROPOUT)
             try:
                 candidate = build_dataset_architecture(
                     input_shape=input_shape,
@@ -288,6 +313,7 @@ def mutate_population(
                     dropout=dropout,
                     attention=False,
                 )
+                _check_memory_constrained(candidate)
             except ValueError:
                 continue
             population.setdefault(candidate["id"], candidate)

@@ -8,6 +8,7 @@ import json
 
 from common.dataset_nas import (
     CIFAR_INITIAL_POPULATION_SIZE,
+    MEMORY_CONSTRAINED_MAX_PARAMETERS,
     MAX_DATASET_NAS_PARAMETERS,
     aggregate_worker_candidates,
     initial_population,
@@ -102,16 +103,16 @@ def test_cifar_dataset_nas_uses_a_memory_constrained_architecture_population() -
         memory_constrained=True,
     )
 
-    assert len(initial) == 3
+    assert len(initial) == CIFAR_INITIAL_POPULATION_SIZE == 6
     assert len(evolved) == 4
     assert len({candidate["id"] for candidate in evolved}) == 4
-    assert all(
-        candidate["blocks"] == 2
-        and max(candidate["channel_schedule"]) <= 32
-        and candidate["kernel_size"] == 3
-        and candidate["attention"] is False
-        for candidate in evolved
-    )
+    for candidate in [*initial, *evolved]:
+        assert 2 <= candidate["blocks"] <= 3
+        assert max(candidate["channel_schedule"]) <= 64
+        assert candidate["kernel_size"] == 3 and candidate["attention"] is False
+        assert candidate["parameter_count"] <= MEMORY_CONSTRAINED_MAX_PARAMETERS
+    # The space now reaches models far larger than the former ~3k-parameter CNNs.
+    assert max(candidate["parameter_count"] for candidate in initial) > 20_000
 
 
 def test_dataset_nas_mutation_preserves_parents_and_adds_unique_offspring() -> None:

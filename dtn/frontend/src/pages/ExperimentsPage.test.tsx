@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExperimentResults } from "../api/client";
-import ExperimentsPage, { topologyLinks } from "./ExperimentsPage";
+import { topologyLinks } from "../lib/topology";
+import ExperimentsPage from "./ExperimentsPage";
 
 const results: ExperimentResults = {
   configuration: { rounds: 10, epochs: 5, topology: "ring", dataset_split: "stratified" },

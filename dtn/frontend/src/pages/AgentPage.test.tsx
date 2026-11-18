@@ -176,6 +176,28 @@ describe("Agent Supervisor page", () => {
     expect(note).toHaveTextContent("worker4");
   });
 
+  it("lists a rejected prune and its gentler retry", async () => {
+    const run = runFixture();
+    const attempt = {
+      parameters_before: 8531,
+      parameters_after: 6800,
+      compression: 1.25,
+      architecture_id: "hpo-pruned15",
+      source_worker: "worker6",
+    };
+    run.state.pruning_attempts = [
+      { ...attempt, ratio: 0.3, validation_accuracy: 0.81, accepted: false },
+      { ...attempt, ratio: 0.15, validation_accuracy: 0.935, accepted: true },
+    ];
+    run.state.pruning = run.state.pruning_attempts[1];
+    mockApi([run]);
+    render(<AgentPage token="dtn-token" active />);
+
+    const attempts = await screen.findByLabelText("Pruning attempts");
+    expect(attempts).toHaveTextContent("30% pruned: 81.00% · rejected, unpruned model restored");
+    expect(attempts).toHaveTextContent("15% pruned: 93.50% · kept");
+  });
+
   it("stops an active run after confirmation", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const run = runFixture();

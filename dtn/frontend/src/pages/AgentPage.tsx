@@ -417,7 +417,7 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
           {run.state.warm_start.source_worker ? `, taken from ${run.state.warm_start.source_worker}` : ""}.
         </p>
       )}
-      {run.state.pruning && <PruningPanel pruning={run.state.pruning} />}
+      {run.state.pruning && <PruningPanel pruning={run.state.pruning} attempts={run.state.pruning_attempts ?? []} />}
       <ExperimentTable run={run} />
       <AskBox token={token} runId={run.id} />
       <EventTimeline events={run.events ?? []} />
@@ -425,7 +425,7 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
   );
 }
 
-function PruningPanel({ pruning }: { pruning: SupervisorPruning }) {
+function PruningPanel({ pruning, attempts }: { pruning: SupervisorPruning; attempts: SupervisorPruning[] }) {
   return (
     <section className="agent-pruning" aria-label="Pruned model">
       <h3>Pruned model</h3>
@@ -459,6 +459,18 @@ function PruningPanel({ pruning }: { pruning: SupervisorPruning }) {
           </div>
         )}
       </div>
+      {attempts.length > 1 && (
+        <ol className="agent-pruning-attempts" aria-label="Pruning attempts">
+          {attempts.map((attempt, index) => (
+            <li key={`${attempt.ratio}-${index}`}>
+              {Math.round(attempt.ratio * 100)}% pruned:{" "}
+              {attempt.validation_accuracy != null ? formatPercent(attempt.validation_accuracy) : "n/a"}
+              {" · "}
+              {attempt.accepted ? "kept" : "rejected, unpruned model restored"}
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

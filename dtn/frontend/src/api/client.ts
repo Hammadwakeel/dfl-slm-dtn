@@ -1087,6 +1087,8 @@ export interface SupervisorState {
   selected_topology: string | null;
   nas_architecture: Record<string, unknown> | null;
   pruning?: SupervisorPruning | null;
+  /** Every pruning attempt in order; a rejected 30% prune is retried once at 15%. */
+  pruning_attempts?: SupervisorPruning[];
   /** The final training continued from this experiment's trained model. */
   warm_start?: {
     from_group_id?: string;

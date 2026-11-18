@@ -101,6 +101,7 @@ class Supervisor:
         master_results: Callable[[], dict[str, Any]],
         model_call: ModelCall,
         memory_cleanup: Callable[[], dict[str, Any]],
+        global_evaluate: Callable[[str], dict[str, Any]] | None = None,
         min_free_memory_mb: int = 1200,
         preflight_wait_seconds: float = 600.0,
         tick_seconds: float = 10.0,
@@ -111,6 +112,7 @@ class Supervisor:
         self._master_results = master_results
         self._model_call = model_call
         self._memory_cleanup = memory_cleanup
+        self._global_evaluate = global_evaluate
         self._min_free_memory_mb = min_free_memory_mb
         self._preflight_wait = timedelta(seconds=preflight_wait_seconds)
         self._tick_seconds = tick_seconds
@@ -797,6 +799,8 @@ class Supervisor:
                 summary["architecture"] = deployed.get("id") or "baseline"
                 summary["parameter_count"] = deployed.get("parameter_count")
         summary["completed_at"] = self._clock().isoformat()
+        if status == "completed" and summary.get("kind") == "decentralized":
+            self._apply_global_evaluation(run_id, goal, state, summary)
         if status != "completed":
             state["experiments"].append(summary)
             state["active"] = None
@@ -867,6 +871,45 @@ class Supervisor:
         state["stage"] = "deciding"
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
+
+    def _apply_global_evaluation(
+        self,
+        run_id: str,
+        goal: dict[str, Any],
+        state: dict[str, Any],
+        summary: dict[str, Any],
+    ) -> None:
+        """Score the experiment on the shared class-balanced splits.
+
+        Workers report accuracy on their own non-IID slices, which overstates
+        quality. When the global evaluation succeeds, its *validation* accuracy
+        replaces the worker-reported one for every decision (best model, target,
+        pruning); the *test* accuracy is only reported, never used to choose.
+        """
+        if self._global_evaluate is None:
+            return
+        summary["local_validation_accuracy"] = summary.get("validation_accuracy")
+        summary["local_macro_f1"] = summary.get("macro_f1")
+        try:
+            result = self._global_evaluate(goal["dataset"])
+            validation, test = result["validation"], result["test"]
+            if not validation.get("workers_evaluated"):
+                raise ValueError("no worker model could be evaluated")
+        except Exception as error:  # noqa: BLE001 - evaluation never fails the run
+            summary["global_evaluation_error"] = str(error)[:300]
+            self._event(run_id, "global_evaluation_failed", f"Global evaluation unavailable: {str(error)[:200]}", {})
+            return
+        summary["validation_accuracy"] = validation["mean_accuracy"]
+        summary["macro_f1"] = validation["mean_macro_f1"]
+        summary["global_validation"] = {key: value for key, value in validation.items() if key != "per_worker"}
+        summary["test_accuracy"] = test.get("mean_accuracy")
+        summary["test_macro_f1"] = test.get("mean_macro_f1")
+        summary["test"] = {key: value for key, value in test.items() if key != "per_worker"}
+        summary["test_per_worker"] = {
+            node: {key: row.get(key) for key in ("accuracy", "macro_f1", "per_class_recall", "error") if key in row}
+            for node, row in (test.get("per_worker") or {}).items()
+        }
+        summary["evaluated_classes"] = result.get("classes")
 
     def _watch_memory(self, run_id: str, state: dict[str, Any]) -> None:
         low = self._cluster()["low_memory"]

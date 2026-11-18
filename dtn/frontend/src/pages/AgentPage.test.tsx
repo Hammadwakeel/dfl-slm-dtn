@@ -51,6 +51,9 @@ function runFixture(overrides: Partial<SupervisorRun> = {}): SupervisorRun {
           macro_f1: 0.9031,
           architecture: "b1_c8_k3",
           topology: "directed_ring",
+          local_validation_accuracy: 0.97,
+          test_accuracy: 0.8811,
+          test: { std_accuracy: 0.012 },
         },
       ],
       best: {
@@ -153,6 +156,9 @@ describe("Agent Supervisor page", () => {
     expect(screen.getByText("Architecture search")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
     expect(screen.getByText("Baseline DFL", { selector: "td" })).toBeInTheDocument();
+    // Global test accuracy and the inflated worker-reported accuracy are both shown.
+    expect(screen.getByText("88.11% ± 1.20%")).toBeInTheDocument();
+    expect(screen.getByText("97.00%")).toBeInTheDocument();
   });
 
   it("stops an active run after confirmation", async () => {

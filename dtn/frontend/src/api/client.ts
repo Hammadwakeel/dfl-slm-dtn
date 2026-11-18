@@ -1025,6 +1025,14 @@ export interface SupervisorExperiment {
   hyperparameters?: { optimizer: string; learning_rate: number; batch_size: number };
   search_validation_accuracy?: number;
   pruning?: SupervisorPruning;
+  /** Worker-reported accuracy on each worker's own non-IID slice. */
+  local_validation_accuracy?: number | null;
+  local_macro_f1?: number | null;
+  /** Mean over workers on the official, class-balanced test split (reported only). */
+  test_accuracy?: number | null;
+  test_macro_f1?: number | null;
+  test?: { std_accuracy?: number; min_accuracy?: number; max_accuracy?: number; workers_evaluated?: number };
+  global_evaluation_error?: string;
   error?: string;
   completed_at?: string;
 }

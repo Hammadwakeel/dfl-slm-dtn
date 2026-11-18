@@ -269,13 +269,20 @@ def sessions():
     return factory
 
 
-def make_supervisor(sessions, cluster: FakeCluster, slm: FakeSLM, clock: Clock | None = None) -> Supervisor:
+def make_supervisor(
+    sessions,
+    cluster: FakeCluster,
+    slm: FakeSLM,
+    clock: Clock | None = None,
+    global_evaluate=None,
+) -> Supervisor:
     return Supervisor(
         sessions,
         dispatch=cluster.dispatch,
         master_results=cluster.results,
         model_call=slm,
         memory_cleanup=cluster.cleanup,
+        global_evaluate=global_evaluate,
         clock=clock or Clock(),
         preflight_wait_seconds=600,
     )
@@ -632,3 +639,59 @@ def test_pruning_is_not_offered_when_the_newest_model_is_not_the_best() -> None:
     state["experiments"][-1]["validation_accuracy"] = 0.5624
     state["best"] = {"validation_accuracy": 0.5638, "group_id": "g1"}
     assert can_prune(state)
+
+
+def _global_result(validation: float, test: float) -> dict:
+    def split(accuracy: float) -> dict:
+        return {
+            "workers_evaluated": 5,
+            "mean_accuracy": accuracy,
+            "std_accuracy": 0.01,
+            "min_accuracy": accuracy - 0.02,
+            "max_accuracy": accuracy + 0.02,
+            "mean_macro_f1": accuracy - 0.05,
+            "per_worker": {"worker1": {"accuracy": accuracy, "macro_f1": accuracy - 0.05, "per_class_recall": [1.0, 0.0]}},
+        }
+
+    return {"classes": ["0", "1"], "validation": split(validation), "test": split(test)}
+
+
+def test_global_evaluation_replaces_worker_reported_accuracy_for_decisions(sessions) -> None:
+    cluster = FakeCluster()
+    calls = []
+
+    def evaluate(dataset_name: str) -> dict:
+        calls.append(dataset_name)
+        return _global_result(0.61, 0.59)
+
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]), global_evaluate=evaluate)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95, max_experiments=1))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    baseline = finished["state"]["experiments"][0]
+    assert calls and calls[0] == "mnist"
+    assert baseline["validation_accuracy"] == pytest.approx(0.61)
+    assert baseline["local_validation_accuracy"] != pytest.approx(0.61)
+    assert baseline["test_accuracy"] == pytest.approx(0.59)
+    assert baseline["test_per_worker"]["worker1"]["per_class_recall"] == [1.0, 0.0]
+    assert "per_worker" not in baseline["test"]
+    assert finished["state"]["best"]["validation_accuracy"] == pytest.approx(0.61)
+
+
+def test_failed_global_evaluation_keeps_worker_accuracy_and_the_run_going(sessions) -> None:
+    cluster = FakeCluster()
+
+    def evaluate(dataset_name: str) -> dict:
+        raise RuntimeError("evaluator missing")
+
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]), global_evaluate=evaluate)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95, max_experiments=1))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    baseline = finished["state"]["experiments"][0]
+    assert finished["status"] == "completed"
+    assert baseline["validation_accuracy"] == baseline["local_validation_accuracy"]
+    assert "evaluator missing" in baseline["global_evaluation_error"]
+    assert any(event["event_type"] == "global_evaluation_failed" for event in finished["events"])

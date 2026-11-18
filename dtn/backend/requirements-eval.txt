@@ -1,0 +1,4 @@
+# Separate CPU environment for global test-set evaluation (common/global_evaluation.py).
+# Matches the workers' TensorFlow 2.15 so saved weights load identically.
+tensorflow-cpu==2.15.1
+numpy>=1.26,<2

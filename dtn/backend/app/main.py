@@ -26,6 +26,7 @@ from app.routers.ws import router as websocket_router
 from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
 from app.services.cluster import cluster_nodes, sync_training_registry
+from app.services.global_evaluation import evaluate_newest_models
 from app.services.pruning import prune_and_distribute, restore_source_model
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
@@ -195,6 +196,11 @@ def create_app(
             master_results=lambda: _forward(resolved_settings, "/results"),
             model_call=supervisor_model_call,
             memory_cleanup=supervisor_memory_cleanup,
+            global_evaluate=lambda dataset_name: evaluate_newest_models(
+                app.state.datasets,
+                cluster_nodes(resolved_settings, sessions),
+                dataset_name,
+            ),
             min_free_memory_mb=resolved_settings.supervisor_min_free_memory_mb,
             tick_seconds=resolved_settings.supervisor_tick_seconds,
         )

@@ -465,8 +465,10 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
             <tr>
               <th>Step</th>
               <th>Status</th>
-              <th>Val. accuracy</th>
+              <th title="Mean worker accuracy on the shared class-balanced validation split (drives decisions)">Val. accuracy</th>
               <th>Macro-F1</th>
+              <th title="Mean worker accuracy on the official test split (reported only)">Test accuracy</th>
+              <th title="Accuracy each worker reports on its own non-IID data">Worker-reported</th>
               <th>Architecture</th>
               <th>Topology</th>
               <th>Aggregation</th>
@@ -485,6 +487,14 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
                       : "–"}
                 </td>
                 <td>{experiment.macro_f1 != null ? experiment.macro_f1.toFixed(4) : "–"}</td>
+                <td title={experiment.global_evaluation_error}>
+                  {experiment.test_accuracy != null
+                    ? `${formatPercent(experiment.test_accuracy)}${
+                        experiment.test?.std_accuracy != null ? ` ± ${formatPercent(experiment.test.std_accuracy)}` : ""
+                      }`
+                    : "–"}
+                </td>
+                <td>{experiment.local_validation_accuracy != null ? formatPercent(experiment.local_validation_accuracy) : "–"}</td>
                 <td>
                   {experiment.architecture ?? "–"}
                   {experiment.parameter_count ? ` (${experiment.parameter_count.toLocaleString()} params)` : ""}

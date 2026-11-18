@@ -32,6 +32,7 @@ from app.services.supervisor_policy import (
     PRUNE_MIN_FINE_TUNE_ROUNDS,
     PRUNE_RATIO,
     PRUNE_RETRY_RATIO,
+    TOPOLOGY_SWEEP_ROUNDS,
     Decision,
     DecisionError,
     decision_messages,
@@ -703,7 +704,7 @@ class Supervisor:
             action = {
                 "action": "optimize_topology",
                 "parameters": {
-                    "rounds": int(goal["rounds"]),
+                    "rounds": min(TOPOLOGY_SWEEP_ROUNDS, int(goal["rounds"])),
                     "epochs": int(goal["local_epochs"]),
                     "seeds": [int(goal["seed"])],
                     "alphas": [0.3],

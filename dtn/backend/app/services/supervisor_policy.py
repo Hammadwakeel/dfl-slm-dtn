@@ -51,6 +51,9 @@ PRUNE_MAX_ACCURACY_DROP = 0.02
 PRUNE_MIN_FINE_TUNE_ROUNDS = 5
 # A rejected 30% prune is retried once at this gentler ratio.
 PRUNE_RETRY_RATIO = 0.15
+# The topology sweep trains every candidate topology; a short screening run ranks
+# them at a fraction of the cost (5 topologies x 10 rounds took ~55 minutes).
+TOPOLOGY_SWEEP_ROUNDS = 4
 MAX_STEP_FAILURES = 2
 
 STEP_TOOLS: dict[str, dict[str, Any]] = {

@@ -812,3 +812,16 @@ def test_runs_start_by_recycling_bloated_workers_and_wait_for_them(sessions) -> 
     # Recycling happens once per run, then the run proceeds normally.
     assert cluster.recycle_requests == 1
     assert finished["status"] == "completed"
+
+
+def test_topology_sweep_is_a_short_screening_run(sessions) -> None:
+    cluster = FakeCluster()
+    slm = FakeSLM([
+        tool_call("optimize_topology", {}, "Compare peer topologies on the non-IID shards."),
+        tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "Done."}, "Done."),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
+    sweep = next(action for action in cluster.actions if action["action"] == "optimize_topology")
+    # Every candidate topology is trained, so the sweep screens with few rounds.
+    assert sweep["parameters"]["rounds"] == 4

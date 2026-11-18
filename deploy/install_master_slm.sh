@@ -176,6 +176,21 @@ set -a
 # Load the protected local environment only into this health-check process.
 . /etc/dfl-slm-master.env
 set +a
-"$app_root/master/venv/bin/python" -c 'import json, os, urllib.request; r=urllib.request.Request("http://127.0.0.1:5003/status", headers={"Authorization":"Bearer "+os.environ["DFL_API_TOKEN"]}); d=json.load(urllib.request.urlopen(r, timeout=8)); assert d["node_id"] == "master" and d["ollama"]["model_available"]'
+# Right after a restart /status can exceed a single short timeout while Ollama warms
+# up (a deploy on 2026-11-19 failed here although the service was healthy), so retry.
+"$app_root/master/venv/bin/python" -c '
+import json, os, time, urllib.request
+request = urllib.request.Request("http://127.0.0.1:5003/status", headers={"Authorization": "Bearer " + os.environ["DFL_API_TOKEN"]})
+for attempt in range(6):
+    try:
+        status = json.load(urllib.request.urlopen(request, timeout=20))
+        if status["node_id"] == "master" and status["ollama"]["model_available"]:
+            break
+    except Exception:
+        pass
+    time.sleep(5)
+else:
+    raise SystemExit("Master /status health check failed after 6 attempts")
+'
 printf 'Installed %s on TCP/5003; %s remains active on TCP/5002\n' "$service_name" "$status_service"
 systemctl --no-pager --full status "$service_name"

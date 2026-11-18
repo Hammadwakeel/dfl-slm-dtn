@@ -678,6 +678,10 @@ class Supervisor:
             else:
                 topology = goal["topology"]
             rounds = int(arguments.get("rounds", goal["rounds"]))
+            if step == "train_final":
+                # Every run starts from the installed initial weights, so a final run
+                # shorter than the goal's training length can only do worse.
+                rounds = max(rounds, int(goal["rounds"]))
             epochs = int(arguments.get("local_epochs", goal["local_epochs"]))
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
             if architecture:

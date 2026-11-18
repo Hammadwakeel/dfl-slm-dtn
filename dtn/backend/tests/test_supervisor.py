@@ -312,7 +312,7 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert names[retrain_index - 1] == "create_initial_model"
     assert cluster.actions[retrain_index - 1]["parameters"]["architecture"] == NAS_ARCHITECTURE
     assert cluster.actions[retrain_index]["parameters"]["architecture"] == NAS_ARCHITECTURE
-    assert cluster.actions[retrain_index]["parameters"]["rounds"] == 4
+    assert cluster.actions[retrain_index]["parameters"]["rounds"] == 10  # never shorter than the goal (10 rounds)
     # The SLM chose the aggregation rule; synchronization comes from the goal.
     assert cluster.actions[retrain_index]["parameters"]["aggregation"] == "metropolis"
     assert cluster.actions[retrain_index]["parameters"]["sync_mode"] == "semi_sync"

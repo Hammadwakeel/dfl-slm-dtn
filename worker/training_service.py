@@ -1891,7 +1891,13 @@ class WorkerTrainer:
                 "run_id": run_id,
                 "round": round_index + 1,
                 "topology": topology,
-                "architecture": self._architecture,
+                # The model that actually trained: an installed initial model takes
+                # precedence over the configured architecture, so report both.
+                "architecture": self._run_architectures.get(run_id, self._architecture),
+                "requested_architecture": self._architecture,
+                "parameter_count": (
+                    int(model.count_params()) if hasattr(model, "count_params") else None
+                ),
                 "dataset_split": self.dataset_split,
                 "dataset_name": self.dataset_name,
                 "local_epochs": epochs,

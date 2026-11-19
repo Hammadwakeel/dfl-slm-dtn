@@ -1,6 +1,7 @@
 """Digital Twin Network FastAPI application factory."""
 
 import logging
+from urllib.parse import quote
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -206,7 +207,11 @@ def create_app(
         app.state.supervisor = Supervisor(
             sessions,
             dispatch=supervisor_dispatch,
-            master_results=lambda: _forward(resolved_settings, "/results"),
+            master_results=lambda group_id=None: _forward(
+                resolved_settings,
+                "/results",
+                query=(f"?group_id={quote(group_id, safe='')}" if group_id else "?limit=1") + "&compact=1",
+            ),
             model_call=supervisor_model_call,
             memory_cleanup=supervisor_memory_cleanup,
             global_evaluate=lambda dataset_name, run_id=None: evaluate_newest_models(

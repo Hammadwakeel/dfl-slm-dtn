@@ -144,6 +144,33 @@ def _rank_by_global_validation(measured: list[dict[str, Any]]) -> None:
         candidate["ranking_metric"] = "global_validation_accuracy"
 
 
+RESULTS_GROUP_LIMIT = 20
+# Per-worker fields that repeat in every round (the ~1 kB architecture, confusion
+# matrices, per-class arrays). A compact view keeps them only in each run's final
+# round, which is what reports and the dashboard read; scalar metrics stay in all.
+HEAVY_ROUND_FIELDS = (
+    "architecture",
+    "requested_architecture",
+    "validation_confusion_matrix_counts",
+    "validation_confusion_matrix_row_normalized_percent",
+    "validation_per_class_recall",
+    "validation_per_class_precision",
+    "validation_per_class_f1",
+    "global_validation_per_class_recall",
+)
+
+
+def _compact_group(group: dict[str, Any]) -> dict[str, Any]:
+    for run in group.get("runs") or []:
+        rounds = run.get("rounds") if isinstance(run, dict) else None
+        for round_row in (rounds or [])[:-1]:
+            for metrics in (round_row.get("workers") or {}).values():
+                if isinstance(metrics, dict):
+                    for field in HEAVY_ROUND_FIELDS:
+                        metrics.pop(field, None)
+    return group
+
+
 class TrainingError(RuntimeError):
     pass
 
@@ -1176,7 +1203,20 @@ class TrainingCoordinator:
             "cancel_errors": cancel_errors,
         }
 
-    def results(self) -> dict[str, Any]:
+    def results(
+        self,
+        *,
+        group_id: str | None = None,
+        limit: int = RESULTS_GROUP_LIMIT,
+        compact: bool = False,
+    ) -> dict[str, Any]:
+        """Configuration, active group and the newest ``limit`` groups (or one group).
+
+        A topology sweep stores every round of 15 runs, so twenty groups reached
+        ~40 MB and took ~90 s to serve; pollers ask for one group or a small limit.
+        """
+        if not 1 <= limit <= RESULTS_GROUP_LIMIT:
+            raise ValueError(f"limit must be between 1 and {RESULTS_GROUP_LIMIT}")
         with self._lock:
             worker_ids = [worker.node_id for worker in self.config.workers]
             ring = worker_ids + worker_ids[:1]
@@ -1205,7 +1245,16 @@ class TrainingCoordinator:
                     "chain": chain,
                     "star": [[hub, worker_id] for worker_id in worker_ids[1:]],
                 },
-                "groups": json.loads(json.dumps(self._groups[-20:])),
+                "groups": [
+                    _compact_group(group) if compact else group
+                    for group in json.loads(
+                        json.dumps(
+                            [item for item in self._groups if item["group_id"] == group_id]
+                            if group_id is not None
+                            else self._groups[-limit:]
+                        )
+                    )
+                ],
             }
 
     def delete_group(self, group_id: str) -> dict[str, Any]:

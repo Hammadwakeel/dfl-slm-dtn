@@ -1312,7 +1312,17 @@ def create_app(
     def get_results() -> tuple[Any, int] | Any:
         if training_coordinator is None:
             return jsonify({"error": "Worker training is not configured"}), 503
-        return jsonify(training_coordinator.results())
+        group_id = request.args.get("group_id")
+        if group_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", group_id):
+            return jsonify({"error": "Invalid group_id"}), 400
+        try:
+            limit = int(request.args.get("limit", "20"))
+            compact = request.args.get("compact", "0") == "1"
+            return jsonify(
+                training_coordinator.results(group_id=group_id, limit=limit, compact=compact)
+            )
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
 
     @app.put("/cluster/workers")
     def configure_cluster_workers() -> tuple[Any, int] | Any:

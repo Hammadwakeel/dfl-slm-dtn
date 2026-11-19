@@ -111,7 +111,8 @@ class Supervisor:
         sessions: sessionmaker[Session],
         *,
         dispatch: Dispatch,
-        master_results: Callable[[], dict[str, Any]],
+        # Called with a group id while monitoring it, without one for the active-group check.
+        master_results: Callable[..., dict[str, Any]],
         model_call: ModelCall,
         memory_cleanup: Callable[..., dict[str, Any]],
         global_evaluate: Callable[..., dict[str, Any]] | None = None,
@@ -820,7 +821,7 @@ class Supervisor:
         active = state.get("active") or {}
         group_id = active.get("group_id")
         try:
-            results = self._master_results()
+            results = self._master_results(group_id) if group_id else self._master_results()
         except Exception as error:  # noqa: BLE001
             self._wait(run_id, state, f"SLM master is unreachable while monitoring: {error}")
             return

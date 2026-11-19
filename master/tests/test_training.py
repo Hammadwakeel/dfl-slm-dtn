@@ -1550,3 +1550,30 @@ def test_federated_nas_options_are_validated(tmp_path: Path) -> None:
         coordinator.start_dataset_nas(
             dataset_name="cifar10", objective="federated", seed_architectures=[{"id": "b1_c8_k3"}]
         )
+
+
+def test_results_can_return_one_group_or_the_newest_few(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    for index in range(25):
+        coordinator._groups.append({"group_id": f"group-{index}", "status": "completed", "runs": []})
+    assert [g["group_id"] for g in coordinator.results()["groups"]] == [f"group-{i}" for i in range(5, 25)]
+    assert [g["group_id"] for g in coordinator.results(limit=2)["groups"]] == ["group-23", "group-24"]
+    # A single group is found even when it is older than the newest twenty.
+    assert [g["group_id"] for g in coordinator.results(group_id="group-1")["groups"]] == ["group-1"]
+    assert coordinator.results(group_id="missing")["groups"] == []
+    with pytest.raises(ValueError, match="limit"):
+        coordinator.results(limit=0)
+
+
+def test_compact_results_keep_heavy_worker_fields_only_in_the_final_round(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    heavy = {"architecture": {"id": "x"}, "validation_confusion_matrix_counts": [[1]], "validation_accuracy": 0.5}
+    coordinator._groups.append(
+        {"group_id": "g", "status": "completed", "runs": [{"rounds": [{"workers": {"w1": dict(heavy)}} for _ in range(3)]}]}
+    )
+    compact = coordinator.results(group_id="g", compact=True)["groups"][0]["runs"][0]["rounds"]
+    assert [sorted(row["workers"]["w1"]) for row in compact[:2]] == [["validation_accuracy"]] * 2
+    assert compact[-1]["workers"]["w1"] == heavy
+    full = coordinator.results(group_id="g")["groups"][0]["runs"][0]["rounds"]
+    assert all(row["workers"]["w1"] == heavy for row in full)
+    assert coordinator._groups[0]["runs"][0]["rounds"][0]["workers"]["w1"] == heavy  # stored data untouched

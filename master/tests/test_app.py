@@ -772,13 +772,16 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
         def stop_training(self):
             return {"accepted": True}
 
-        def results(self):
+        def results(self, **filters):
+            self.result_filters.append(filters)
             return {"groups": [{"status": "completed"}]}
 
+    coordinator = FakeCoordinator()
+    coordinator.result_filters = []
     app = create_app(
         config(tmp_path),
         memory_reader=memory,
-        training_coordinator=FakeCoordinator(),
+        training_coordinator=coordinator,
     )
     client = app.test_client()
     headers = {"Authorization": "Bearer slm-test-token-that-is-at-least-32-characters"}
@@ -847,6 +850,15 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
     assert results.status_code == 200
     assert results.get_json()["result"]["data"]["groups"][0]["status"] == "completed"
     assert client.get("/results", headers=headers).status_code == 200
+    assert client.get("/results?group_id=mesh-1-abc", headers=headers).status_code == 200
+    assert client.get("/results?limit=2", headers=headers).status_code == 200
+    assert client.get("/results?group_id=../etc", headers=headers).status_code == 400
+    assert client.get("/results?limit=abc", headers=headers).status_code == 400
+    assert coordinator.result_filters[-3:] == [
+        {"group_id": None, "limit": 20, "compact": False},
+        {"group_id": "mesh-1-abc", "limit": 20, "compact": False},
+        {"group_id": None, "limit": 2, "compact": False},
+    ]
 
 
 def test_optimizer_action_defaults_to_only_dirichlet_alpha_03(tmp_path: Path) -> None:

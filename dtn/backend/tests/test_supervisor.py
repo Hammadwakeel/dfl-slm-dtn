@@ -165,6 +165,7 @@ class FakeCluster:
 
     def __init__(self) -> None:
         self.actions: list[dict[str, Any]] = []
+        self.result_queries: list[str] = []
         self.groups: list[dict[str, Any]] = []
         self.accuracy = {"baseline_training": 0.90, "train_final": 0.96}
         self.fail_next: dict[str, str] = {}
@@ -223,7 +224,9 @@ class FakeCluster:
             "result": {"action": action, "result": {"available": True, "data": {"accepted": True, "group_id": group_id}}},
         }
 
-    def results(self) -> dict[str, Any]:
+    def results(self, group_id: str | None = None) -> dict[str, Any]:
+        if group_id is not None:
+            self.result_queries.append(group_id)
         # Every running experiment finishes when the supervisor next looks at it.
         for group in self.groups:
             if group["status"] != "running" or group.get("_seen") is None:
@@ -374,6 +377,8 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert cluster.actions[retrain_index]["parameters"]["sync_deadline_seconds"] == 300
     baseline = next(action for action in cluster.actions if action["action"] == "start_training")
     assert baseline["parameters"]["aggregation"] == "fedavg"
+    # Monitoring fetches only the experiment it watches, never all master groups.
+    assert cluster.result_queries and set(cluster.result_queries) <= {group["group_id"] for group in cluster.groups}
     # MNIST (the default goal) trains on raw images in every training step.
     assert {a["parameters"]["augmentation"] for a in cluster.actions if a["action"] == "start_training"} == {"none"}
     # Every SLM decision received only the compact allowed tool set.

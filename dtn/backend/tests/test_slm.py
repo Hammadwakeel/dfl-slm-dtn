@@ -136,16 +136,20 @@ def test_experiment_results_are_forwarded(
 
     monkeypatch.setattr(slm, "_forward", fake_forward)
     results = client.get("/api/slm/results", headers=auth_headers)
+    one = client.get("/api/slm/results?group_id=mesh-1795-abc", headers=auth_headers)
+    few = client.get("/api/slm/results?limit=3", headers=auth_headers)
+    bad = client.get("/api/slm/results?group_id=../x", headers=auth_headers)
 
-    assert results.status_code == 200
+    assert results.status_code == one.status_code == few.status_code == 200
+    assert bad.status_code == 422
+    master = ("http://127.0.0.1:5003", "test-master-slm-token-that-is-long-and-random", "/results", None)
+    full = client.get("/api/slm/results?limit=1&compact=false", headers=auth_headers)
+    assert full.status_code == 200
     assert forwarded == [
-        (
-            "http://127.0.0.1:5003",
-            "test-master-slm-token-that-is-long-and-random",
-            "/results",
-            None,
-            "",
-        ),
+        (*master, "?limit=20&compact=1"),
+        (*master, "?group_id=mesh-1795-abc&compact=1"),
+        (*master, "?limit=3&compact=1"),
+        (*master, "?limit=1&compact=0"),
     ]
 
 def test_delete_experiment_result_uses_authenticated_master_proxy(

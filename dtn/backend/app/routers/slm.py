@@ -182,8 +182,20 @@ def logs(
 
 
 @router.get("/results")
-def results(settings: Settings = Depends(get_settings)) -> dict[str, object]:
-    return _forward(settings, "/results")
+def results(
+    group_id: str | None = Query(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
+    limit: int = Query(default=20, ge=1, le=20),
+    compact: bool = Query(default=True),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Master results; ask for one group_id or a small limit (all 20 groups can be ~40 MB).
+
+    compact (default) keeps the per-worker architecture, confusion matrices and
+    per-class arrays only in each run's final round; compact=false returns them all.
+    """
+    query = f"?group_id={quote(group_id, safe='')}" if group_id else f"?limit={limit}"
+    query += "&compact=1" if compact else "&compact=0"
+    return _forward(settings, "/results", query=query)
 
 
 @router.delete("/results/{group_id}")

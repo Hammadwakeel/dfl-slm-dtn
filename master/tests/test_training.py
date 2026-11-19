@@ -1603,3 +1603,46 @@ def test_run_results_wait_out_a_long_wifi_drop_but_not_forever(tmp_path: Path, m
     coordinator._get_json = always_down
     with pytest.raises(TrainingError, match="No route"):
         coordinator._get_run_results(worker, "run-1")
+
+
+def test_undelivered_worker_requests_are_resent_but_maybe_delivered_ones_are_not(monkeypatch) -> None:
+    from urllib.error import URLError
+
+    from master import training as training_module
+
+    worker = TrainingWorker("worker2", "http://127.0.0.1:1", "x" * 32)
+    slept, calls = [], []
+    monkeypatch.setattr(training_module.time, "sleep", slept.append)
+
+    class Response:
+        headers = {}
+
+        def read(self):
+            return b'{"accepted": true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def unreachable_twice(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) <= 2:
+            raise URLError(OSError(113, "No route to host"))
+        return Response()
+
+    monkeypatch.setattr(training_module, "urlopen", unreachable_twice)
+    body, _ = TrainingCoordinator._request(worker, "/v1/nas/search", payload={"seed": 1})
+    assert body == b'{"accepted": true}' and len(calls) == 3 and slept == [2, 5]
+
+    calls.clear()
+
+    def reset(request, timeout):
+        calls.append(request.full_url)
+        raise URLError(ConnectionResetError(104, "Connection reset by peer"))
+
+    monkeypatch.setattr(training_module, "urlopen", reset)
+    with pytest.raises(TrainingError, match="reset"):
+        TrainingCoordinator._request(worker, "/v1/start", payload={"run_id": "r"})
+    assert len(calls) == 1  # a started run must not be started twice

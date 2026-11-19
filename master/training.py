@@ -146,6 +146,10 @@ def _rank_by_global_validation(measured: list[dict[str, Any]]) -> None:
 
 RESULTS_GROUP_LIMIT = 20
 RUN_RESULTS_RETRY_DELAYS_SECONDS = (1, 3, 5, 10, 20)
+# Errors raised before a TCP connection exists (the Wi-Fi cluster drops ARP/routes
+# for a few seconds under load): the request was never delivered, so it is resent.
+UNDELIVERED_REQUEST_ERRORS = ("no route to host", "network is unreachable", "connection refused")
+UNDELIVERED_REQUEST_RETRY_DELAYS_SECONDS = (2, 5, 10, 20)
 # Per-worker fields that repeat in every round (the ~1 kB architecture, confusion
 # matrices, per-class arrays). A compact view keeps them only in each run's final
 # round, which is what reports and the dashboard read; scalar metrics stay in all.
@@ -2636,16 +2640,38 @@ class TrainingCoordinator:
             },
             method=method or ("POST" if body is not None else "GET"),
         )
-        try:
-            with urlopen(request, timeout=timeout) as response:
-                return response.read(), dict(response.headers.items())
-        except HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace").strip()[:500]
-            raise TrainingError(
-                f"{worker.node_id} returned HTTP {error.code} for {path}: {detail}"
-            ) from error
-        except (URLError, TimeoutError, OSError) as error:
-            raise TrainingError(f"Could not reach {worker.node_id} for {path}: {error}") from error
+        delays = UNDELIVERED_REQUEST_RETRY_DELAYS_SECONDS
+        for attempt in range(len(delays) + 1):
+            try:
+                with urlopen(request, timeout=timeout) as response:
+                    return response.read(), dict(response.headers.items())
+            except HTTPError as error:
+                detail = error.read().decode("utf-8", errors="replace").strip()[:500]
+                raise TrainingError(
+                    f"{worker.node_id} returned HTTP {error.code} for {path}: {detail}"
+                ) from error
+            except (URLError, TimeoutError, OSError) as error:
+                # These fail before a connection exists, so the request never reached
+                # the worker and resending is safe even for a POST that starts work.
+                # (Timeouts and resets may have been delivered and are not retried.)
+                undelivered = any(
+                    marker in str(error).lower() for marker in UNDELIVERED_REQUEST_ERRORS
+                )
+                if not undelivered or attempt == len(delays):
+                    raise TrainingError(
+                        f"Could not reach {worker.node_id} for {path}: {error}"
+                    ) from error
+                LOGGER.warning(
+                    "%s is unreachable for %s (%s); retry %s/%s in %s seconds",
+                    worker.node_id,
+                    path,
+                    error,
+                    attempt + 1,
+                    len(delays),
+                    delays[attempt],
+                )
+                time.sleep(delays[attempt])
+        raise AssertionError("unreachable")
 
     def _delete(
         self,

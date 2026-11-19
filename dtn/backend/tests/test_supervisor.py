@@ -426,6 +426,19 @@ def test_transient_experiment_failure_cleans_memory_and_retries_once(sessions) -
     assert any(event["event_type"] == "remediation" for event in finished["events"])
 
 
+def test_a_coordinator_restart_mid_training_is_retried_once(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.fail_next["baseline_training"] = (
+        "Training was interrupted because the master coordinator restarted before this group completed."
+    )
+    cluster.accuracy["baseline_training"] = 0.97
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal())["id"])
+
+    assert finished["status"] == "completed"
+    assert [a["action"] for a in cluster.actions].count("start_training") == 2
+
+
 def test_low_memory_triggers_cleanup_before_admission(sessions) -> None:
     with sessions.begin() as session:
         device = session.get(Device, "worker2")

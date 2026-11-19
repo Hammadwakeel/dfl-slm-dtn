@@ -567,7 +567,9 @@ def decision_messages(state_json: dict[str, Any]) -> list[dict[str, str]]:
 
 TRANSIENT_ERROR = re.compile(
     r"timed? ?out|timeout|memory|oom|resource exhausted|connection|unreachable|"
-    r"reset by peer|refused|temporarily|busy|503|502",
+    r"reset by peer|refused|temporarily|busy|503|502|"
+    # A coordinator or worker service restart interrupts the group, not the method.
+    r"interrupted|restarted",
     re.IGNORECASE,
 )
 

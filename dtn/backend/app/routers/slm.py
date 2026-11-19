@@ -6,6 +6,8 @@ agentic operation is handled by the server-side supervisor (app.services.supervi
 
 import json
 import logging
+import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import ProxyHandler, Request as UrlRequest, build_opener
@@ -181,6 +183,31 @@ def logs(
     return _forward(settings, "/logs", query=f"?limit={limit}")
 
 
+# The dashboard polls results every few seconds from every open tab, and one
+# master read serializes megabytes on a Jetson behind Wi-Fi. Overlapping polls
+# piled up (5 concurrent reads kept the master at 100% CPU and ~5 MB/s uplink,
+# congesting the whole cluster network), so reads are single-flight and cached.
+RESULTS_CACHE_SECONDS = 10.0
+_RESULTS_CACHE: dict[tuple[str, str], tuple[float, dict[str, object]]] = {}
+_RESULTS_LOCK = threading.Lock()
+
+
+def _cached_results(settings: Settings, query: str) -> dict[str, object]:
+    key = (settings.master_slm_url, query)
+    with _RESULTS_LOCK:
+        cached = _RESULTS_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < RESULTS_CACHE_SECONDS:
+            return cached[1]
+        result = _forward(settings, "/results", query=query)
+        _RESULTS_CACHE[key] = (time.monotonic(), result)
+        return result
+
+
+def clear_results_cache() -> None:
+    with _RESULTS_LOCK:
+        _RESULTS_CACHE.clear()
+
+
 @router.get("/results")
 def results(
     group_id: str | None = Query(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"),
@@ -195,7 +222,7 @@ def results(
     """
     query = f"?group_id={quote(group_id, safe='')}" if group_id else f"?limit={limit}"
     query += "&compact=1" if compact else "&compact=0"
-    return _forward(settings, "/results", query=query)
+    return _cached_results(settings, query)
 
 
 @router.delete("/results/{group_id}")
@@ -203,8 +230,10 @@ def delete_result_group(
     group_id: str,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    return _forward(
+    deleted = _forward(
         settings,
         f"/results/{quote(group_id, safe='')}",
         method="DELETE",
     )
+    clear_results_cache()
+    return deleted

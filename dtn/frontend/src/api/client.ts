@@ -1226,8 +1226,11 @@ export async function sendSlmCommand(
   return response.json() as Promise<SlmCommandResult>;
 }
 
+export const EXPERIMENT_RESULTS_LIMIT = 10;
+
 export async function getExperimentResults(token: string): Promise<ExperimentResults> {
-  const response = await fetch(`${apiBase}/api/slm/results`, {
+  // The newest groups in compact form: all twenty with every round can be tens of MB.
+  const response = await fetch(`${apiBase}/api/slm/results?limit=${EXPERIMENT_RESULTS_LIMIT}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok) throw new Error(`Could not load experiment results (HTTP ${response.status}).`);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -10,6 +10,8 @@ import {
 } from "./api/client";
 import type { DeviceEvent, ExperimentGroup, ExperimentResults, NASArchitecture, NASCandidate, NASCustomArchitecture, TopologyCandidate, TrainingTopology, WorkerRoundMetrics } from "./api/client";
 import type { Device } from "./types";
+
+const EXPERIMENT_POLL_MS = 10000;
 import DeviceCard from "./components/DeviceCard";
 import DatabaseStatusBot from "./components/DatabaseStatusBot";
 import WorkerMemoryCleanupControl from "./components/WorkerMemoryCleanupControl";
@@ -104,12 +106,19 @@ export default function App() {
     }
   }, []);
 
+  // One results read at a time: a slow read used to overlap the next poll and
+  // pile up requests on the master.
+  const experimentsInFlight = useRef(false);
   const refreshExperiments = useCallback(async (activeToken: string) => {
+    if (experimentsInFlight.current) return;
+    experimentsInFlight.current = true;
     try {
       setExperimentResults(await getExperimentResults(activeToken));
       setExperimentError("");
     } catch (cause) {
       setExperimentError(cause instanceof Error ? cause.message : "Could not load experiment results.");
+    } finally {
+      experimentsInFlight.current = false;
     }
   }, []);
 
@@ -169,7 +178,7 @@ export default function App() {
     // This starts an asynchronous external API refresh, not a synchronous derived-state update.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshExperiments(token);
-    const timer = window.setInterval(() => void refreshExperiments(token), 3000);
+    const timer = window.setInterval(() => void refreshExperiments(token), EXPERIMENT_POLL_MS);
     return () => window.clearInterval(timer);
   }, [token, refreshExperiments]);
 

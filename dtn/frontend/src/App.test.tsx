@@ -64,7 +64,7 @@ describe("Dashboard", () => {
       let status = 200;
       if (url.endsWith("/api/datasets")) data = datasets;
       else if (url.endsWith("/api/autonomy/state")) data = { stop_requested: false, loops: [] };
-      else if (url.endsWith("/api/slm/results")) {
+      else if (url.includes("/api/slm/results?limit=")) {
         data = {
           configuration: { rounds: 1, epochs: 1, topology: "ring", dataset_split: "iid" },
           active_group_id: null,
@@ -123,7 +123,7 @@ describe("Dashboard", () => {
     const allNodes = [...nodes, additionalWorker];
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      const data = url.endsWith("/api/slm/results")
+      const data = url.includes("/api/slm/results?limit=")
         ? {
             configuration: { rounds: 1, epochs: 1, topology: "ring", dataset_split: "iid" },
             active_group_id: null,
@@ -222,7 +222,7 @@ describe("Dashboard", () => {
       const url = String(input);
       const data = url.endsWith("/api/devices/memory/cleanup")
         ? cleanupReport
-        : url.endsWith("/api/slm/results")
+        : url.includes("/api/slm/results?limit=")
           ? {
               configuration: { rounds: 1, epochs: 1, topology: "ring", dataset_split: "iid" },
               active_group_id: null,
@@ -311,7 +311,7 @@ describe("Dashboard", () => {
     };
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      const data = url.endsWith("/api/slm/results")
+      const data = url.includes("/api/slm/results?limit=")
         ? experimentResults
         : url.endsWith("/api/apg/runs")
           ? { runs: [], jobs: [], verdicts: [] }

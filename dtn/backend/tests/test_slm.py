@@ -135,7 +135,10 @@ def test_experiment_results_are_forwarded(
         return {"groups": []}
 
     monkeypatch.setattr(slm, "_forward", fake_forward)
+    slm.clear_results_cache()
     results = client.get("/api/slm/results", headers=auth_headers)
+    again = client.get("/api/slm/results", headers=auth_headers)  # served from the cache
+    assert again.status_code == 200
     one = client.get("/api/slm/results?group_id=mesh-1795-abc", headers=auth_headers)
     few = client.get("/api/slm/results?limit=3", headers=auth_headers)
     bad = client.get("/api/slm/results?group_id=../x", headers=auth_headers)
@@ -174,3 +177,30 @@ def test_delete_experiment_result_uses_authenticated_master_proxy(
 
     assert response.status_code == 200
     assert forwarded == {"path": "/results/nas-result", "method": "DELETE"}
+
+
+def test_results_reads_are_cached_and_dropped_after_a_delete(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    from app.routers import slm
+
+    calls = []
+
+    def fake_forward(settings, path, *, payload=None, query="", method=None):
+        calls.append((path, method))
+        return {"groups": [], "deleted": True}
+
+    monkeypatch.setattr(slm, "_forward", fake_forward)
+    slm.clear_results_cache()
+    for _ in range(3):
+        assert client.get("/api/slm/results?limit=2", headers=auth_headers).status_code == 200
+    assert calls == [("/results", None)]
+    assert client.delete("/api/slm/results/group-1", headers=auth_headers).status_code == 200
+    client.get("/api/slm/results?limit=2", headers=auth_headers)
+    assert calls == [("/results", None), ("/results/group-1", "DELETE"), ("/results", None)]
+    monkeypatch.setattr(slm.time, "monotonic", lambda: 10_000_000.0)  # cache expired
+    client.get("/api/slm/results?limit=2", headers=auth_headers)
+    assert calls[-1] == ("/results", None) and len(calls) == 4
+

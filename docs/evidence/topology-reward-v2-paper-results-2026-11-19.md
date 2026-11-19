@@ -167,6 +167,8 @@ shared-accuracy order: mesh > bidirectional ring > directed ring > star > chain
 Ungated weight sensitivity (969 weight vectors): mesh 55.9%, directed ring 44.1%
 Gated selection by threshold: 0.4: mesh, 0.45: mesh, 0.5: mesh, 0.55: mesh, 0.6: mesh, 0.65: mesh*, 0.7: mesh*, 0.75: mesh*, 0.8: mesh*, 0.85: mesh*, 0.9: mesh*, 0.95: mesh* (* no candidate passes; reward fallback)
 
+Re-checked under `95c8027` (when no topology passes, only topologies whose weakest worker is within 0.05 of the best stay in the pool): the selection is still **mesh** at every threshold, because mesh's weakest worker (65.5%) is 20 points above the next topology (bidirectional ring, 45.3%). The method is then reported as `relative_quality_gated_reward_v2`.
+
 | Round | 1 | 4 | 7 | 10 | 13 | 16 | 19 | 22 | 25 | 28 | 30 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | directed ring mean | 0.203 | 0.359 | 0.392 | 0.424 | 0.435 | 0.445 | 0.448 | 0.464 | 0.471 | 0.475 | 0.478 |
@@ -241,7 +243,7 @@ Gated selection by threshold: 0.4: bidirectional ring, 0.45: bidirectional ring,
 - **Default weights are not uniquely decisive.**
   - Over all 969 weight vectors on a 0.05 grid with quality weight ≥ 0.2, the ungated reward picks mesh in 64.8% of vectors on MNIST α = 0.1, 40.1% on α = 0.3, 24.4% on α = 0.5 and 55.9% on CIFAR-10. The rest go to sparser topologies, which win when bandwidth or wait weights are high.
   - Report the gate threshold and the weights as design choices, and include the threshold sweep. The gated selection is mesh for every threshold on MNIST α = 0.1, for thresholds ≥ 0.90 on MNIST α = 0.3, and for thresholds ≤ 0.60 on CIFAR-10 (where it is the only topology that passes). On MNIST α = 0.5 it is the directed ring for every threshold up to 0.90, and the bidirectional ring at 0.95.
-- **The 90% gate is MNIST-scaled.** On CIFAR-10 no topology reaches it with this model and budget, so the selection there comes from the reward fallback. A dataset-relative gate, or one set from a centralised reference, would be more principled.
+- **The 90% gate is MNIST-scaled.** On CIFAR-10 no topology reaches it with this model and budget, so the selection there comes from the fallback: the highest reward in this sweep and, since `95c8027`, a gate relative to the best weakest worker, which keeps only mesh and gives the same selection. A dataset-relative gate, or one set from a centralised reference, would be more principled.
 - **Model capacity limits CIFAR-10 accuracy.** A 62k-parameter CNN trained for 30 rounds × 2 epochs reaches 65.5% even with full mixing. The ranking result does not depend on reaching state-of-the-art accuracy, but absolute CIFAR-10 numbers should not be compared with centralised baselines.
 - **Fixed initialization across seeds.** Seeds vary data order and timing, not the initial weights, so the standard deviations understate initialization variance.
 - **Population std over 3 seeds.** Confidence intervals would need more seeds.

@@ -151,6 +151,7 @@
         "head_units": {"type": "integer", "minimum": 0, "maximum": 8192},
         "dropout": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
         "attention": {"type": "boolean"},
+        "convs_per_block": {"type": "integer", "minimum": 1, "maximum": 2},
         "layers": {
           "type": "array",
           "minItems": 2,
@@ -468,7 +469,18 @@
                   "minimum": 90,
                   "maximum": 600
                 },
-                "smoke_test": {"type": "boolean"}
+                "smoke_test": {"type": "boolean"},
+                "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+                "objective": {"enum": ["local", "federated"]},
+                "search_space": {"enum": ["compact", "extended"]},
+                "augmentation": {"enum": ["none", "flip_shift"]},
+                "seed_architectures": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "items": {"$ref": "#/$defs/modelArchitecture"}
+                },
+                "federated_rounds": {"type": "integer", "minimum": 1, "maximum": 20},
+                "federated_epochs": {"type": "integer", "minimum": 1, "maximum": 5}
               },
               "required": ["enabled"],
               "additionalProperties": false

@@ -34,6 +34,8 @@ class GoalRequest(BaseModel):
     seed: int = Field(2026, ge=0, le=4_294_967_295)
     # None = dataset default (flip_shift for CIFAR-10, none for MNIST).
     augmentation: Literal["none", "flip_shift"] | None = None
+    # v2: shared-split objective, extended CIFAR-10 space, federated finalist check.
+    nas_version: Literal["v1", "v2"] = "v2"
 
 
 class StopRequest(BaseModel):

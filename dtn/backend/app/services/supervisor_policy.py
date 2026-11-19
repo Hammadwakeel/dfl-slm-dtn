@@ -188,6 +188,37 @@ def default_goal(**overrides: Any) -> dict[str, Any]:
 DEFAULT_AUGMENTATION = {"mnist": "none", "cifar10": "flip_shift"}
 
 
+# NAS v2 scores candidates on the shared validation split, searches a larger space
+# on CIFAR-10, and keeps a design only if it beats the deployed baseline in a short
+# federated check; v1 is the former local-objective search (kept for ablations).
+NAS_VERSIONS = ("v1", "v2")
+NAS_FEDERATED_ROUNDS = 5
+NAS_FEDERATED_EPOCHS = 2
+
+
+def nas_parameters(goal: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """enable_nas parameters for the goal's NAS version."""
+    parameters: dict[str, Any] = {
+        "enabled": True,
+        "dataset_name": goal["dataset"],
+        "search_time_limit_seconds": int(goal["nas_budget_seconds"]),
+        "seed": int(goal["seed"]),
+    }
+    if goal.get("nas_version", "v2") == "v1":
+        return parameters
+    parameters.update(
+        objective="federated",
+        search_space="extended" if goal["dataset"] == "cifar10" else "compact",
+        augmentation=run_augmentation(goal),
+        federated_rounds=NAS_FEDERATED_ROUNDS,
+        federated_epochs=NAS_FEDERATED_EPOCHS,
+    )
+    baseline = state.get("baseline_architecture")
+    if is_custom_architecture(baseline):
+        parameters["seed_architectures"] = [baseline]
+    return parameters
+
+
 def run_augmentation(goal: dict[str, Any]) -> str:
     """The augmentation every training of this goal uses (goal override, else dataset default)."""
     return goal.get("augmentation") or DEFAULT_AUGMENTATION.get(goal["dataset"], "none")

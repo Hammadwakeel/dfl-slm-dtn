@@ -27,4 +27,5 @@ def test_isolated_search_passes_fidelity_epochs_without_architectures(monkeypatc
             epochs=3,
         )
     command = captured[0]
-    assert command[-2:] == ["3", "null"]
+    # Fidelity, architectures, then the search options (augmentation).
+    assert command[-3:] == ["3", "null", '{"augmentation":"none"}']

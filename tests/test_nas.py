@@ -556,3 +556,117 @@ def test_dataset_architecture_parameters_use_grayscale_input_channels() -> None:
         "b1_c8_k3", 10, input_channels=1
     )
     assert rgb_parameters - grayscale_parameters == 3 * 3 * 2 * 8
+
+
+def test_extended_population_has_vgg_anchor_and_stays_under_its_cap() -> None:
+    from common.dataset_nas import (
+        EXTENDED_INITIAL_POPULATION_SIZE,
+        EXTENDED_MAX_PARAMETERS,
+        EXTENDED_OFFSPRING,
+        extended_initial_population,
+        mutate_extended_population,
+    )
+
+    for seed in (17, 42, 2026):
+        population = extended_initial_population(seed=seed, input_shape=(32, 32, 3), num_classes=10)
+        ids = [candidate["id"] for candidate in population]
+        assert len(ids) == len(set(ids)) == EXTENDED_INITIAL_POPULATION_SIZE
+        assert ids[:2] == ["nas-d3-w32x64x128-k3-conv-h64-drop20-c2", "nas-d3-w32x64x64-k3-conv-h64-drop20"]
+        for candidate in population:
+            design, parameters = validate_model_design(candidate, (32, 32, 3), 10)
+            assert parameters == candidate["parameter_count"] <= EXTENDED_MAX_PARAMETERS
+            convs = sum(layer["type"] == "conv2d" for layer in design["layers"])
+            assert convs == len(candidate["channel_schedule"]) * candidate.get("convs_per_block", 1)
+        seed_design = {"id": "seed-baseline", "model_type": "custom", "layers": population[0]["layers"]}
+        evolved = mutate_extended_population(
+            [population[0], seed_design], seed=seed + 2, input_shape=(32, 32, 3), num_classes=10
+        )
+        assert evolved[:2] == [population[0], seed_design]  # an external seed is kept, not mutated
+        assert len(evolved) == 2 + EXTENDED_OFFSPRING
+        assert len({candidate["id"] for candidate in evolved}) == len(evolved)
+    with pytest.raises(ValueError, match="searched parent"):
+        mutate_extended_population([seed_design], seed=1, input_shape=(32, 32, 3), num_classes=10)
+
+
+def test_single_conv_designs_keep_their_v1_form() -> None:
+    from common.dataset_nas import build_dataset_architecture
+
+    single = build_dataset_architecture(
+        input_shape=(28, 28, 1), num_classes=10, channels=(32, 64), kernel_size=3,
+        block_type="conv2d", head_units=64, dropout=0.2,
+    )
+    assert "convs_per_block" not in single and not single["id"].endswith("-c2")
+
+
+def test_aggregation_reports_shared_split_accuracy_and_weakest_worker() -> None:
+    architecture = initial_population(seed=3, input_shape=(28, 28, 1), num_classes=10, size=2)[0]
+    rows = [
+        {
+            "node_id": f"worker{index}",
+            "candidates": [
+                {
+                    "node_id": f"worker{index}",
+                    "architecture": architecture,
+                    "parameter_count": architecture["parameter_count"],
+                    "validation_accuracy": 0.9,
+                    "validation_macro_precision": 0.5,
+                    "validation_macro_recall": 0.5,
+                    "validation_macro_f1": 0.5,
+                    "global_validation_accuracy": accuracy,
+                    "global_validation_macro_f1": accuracy - 0.1,
+                    "elapsed_seconds": 1.0,
+                    "peak_rss_mb": 900.0,
+                }
+            ],
+        }
+        for index, accuracy in enumerate((0.4, 0.6), start=1)
+    ]
+    [candidate] = aggregate_worker_candidates(rows, worker_count=2)
+    assert candidate["global_validation_accuracy"] == pytest.approx(0.5)
+    assert candidate["global_validation_macro_f1"] == pytest.approx(0.4)
+    assert candidate["global_validation_min_accuracy"] == pytest.approx(0.4)
+    assert candidate["validation_accuracy"] == pytest.approx(0.9)  # local metric untouched here
+
+
+@pytest.mark.parametrize("augmentation", ["none", "flip_shift"])
+def test_dataset_search_scores_candidates_on_the_shared_split(monkeypatch, augmentation) -> None:
+    import tensorflow as tf
+
+    from common.dataset_nas import build_dataset_architecture
+
+    monkeypatch.setattr(nas_search, "_available_system_memory_mb", lambda: 100_000.0)
+    monkeypatch.setattr(tf.config, "list_physical_devices", lambda kind=None: [SimpleNamespace(name="GPU:0")])
+    monkeypatch.setattr(nas_search, "_rss_mb", lambda: 500.0)  # /proc is Linux-only
+    rng = np.random.default_rng(0)
+    images = rng.random((40, 8, 8, 3), dtype=np.float32)
+    labels = np.tile(np.arange(2, dtype=np.int64), 20)
+    global_images = rng.random((10, 8, 8, 3), dtype=np.float32)
+    global_labels = np.tile(np.arange(2, dtype=np.int64), 5)
+    candidate = build_dataset_architecture(
+        input_shape=(8, 8, 3), num_classes=2, channels=(16, 16), kernel_size=3,
+        block_type="conv2d", head_units=0, dropout=0.0,
+    )
+    result = nas_search.search_dataset_architectures(
+        images,
+        labels,
+        ["a", "b"],
+        seed=5,
+        time_limit_seconds=120,
+        node_id="worker1",
+        logger=lambda *_args, **_kwargs: None,
+        architectures=[candidate],
+        reuse_tensorflow_runtime=True,
+        global_validation=(global_images, global_labels),
+        augmentation=augmentation,
+    )
+    [row] = result["candidates"]
+    assert result["augmentation"] == augmentation
+    assert result["global_validation_samples"] == 10
+    assert row["global_validation_samples"] == 10
+    assert 0.0 <= row["global_validation_accuracy"] <= 1.0
+    assert 0.0 <= row["global_validation_macro_f1"] <= 1.0
+    with pytest.raises(ValueError, match="augmentation"):
+        nas_search.search_dataset_architectures(
+            images, labels, ["a", "b"], seed=5, time_limit_seconds=120, node_id="worker1",
+            logger=lambda *_a, **_k: None, architectures=[candidate], augmentation="mixup",
+        )

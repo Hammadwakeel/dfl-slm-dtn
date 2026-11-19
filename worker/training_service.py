@@ -628,6 +628,49 @@ def install_initial_model(
     return metadata
 
 
+PEER_SEND_ATTEMPTS = 3
+PEER_SEND_BACKOFF_SECONDS = (1.0, 3.0)
+
+
+def _send_with_retry(
+    request: Request,
+    *,
+    timeout: float,
+    peer_id: str,
+    cancel_event: threading.Event | None = None,
+) -> int:
+    """POST peer weights, retrying transient failures; returns the attempts used.
+
+    A dropped connection (reset, timeout) or a 5xx answer is retried with a short
+    backoff; the receiver acknowledges an identical re-upload, so a retry after a
+    lost response is safe. 4xx answers (auth, signature, architecture) fail at once.
+    """
+    for attempt in range(1, PEER_SEND_ATTEMPTS + 1):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                if response.status != HTTPStatus.ACCEPTED:
+                    raise RuntimeError(f"Peer {peer_id} returned HTTP {response.status}")
+            return attempt
+        except HTTPError as error:
+            if error.code < 500 or attempt == PEER_SEND_ATTEMPTS:
+                raise
+            failure: Exception = error
+        except (URLError, TimeoutError, OSError) as error:
+            if attempt == PEER_SEND_ATTEMPTS:
+                raise
+            failure = error
+        _log_event(
+            "peer_send_retry",
+            peer_id=peer_id,
+            attempt=attempt,
+            error=f"{type(failure).__name__}: {failure}"[:300],
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("Training was cancelled during peer exchange")
+        time.sleep(PEER_SEND_BACKOFF_SECONDS[min(attempt - 1, len(PEER_SEND_BACKOFF_SECONDS) - 1)])
+    raise RuntimeError("unreachable")
+
+
 def _augmented_dataset(
     images: np.ndarray,
     labels: np.ndarray,
@@ -962,6 +1005,9 @@ class WorkerTrainer:
         self._measure_peers = False
         # Run-level augmentation override (None = use the architecture's setting).
         self._augmentation: str | None = None
+        # Build the configured architecture from its seed instead of the installed
+        # initial model (NAS v2 federated candidate check).
+        self._fresh_model = False
         self._arrivals: dict[tuple[str, int], dict[str, float]] = {}
 
     def configure_peers(self, peers: tuple[Peer, ...]) -> dict[str, Any]:
@@ -1256,9 +1302,12 @@ class WorkerTrainer:
         learned_senders: dict[str, list[str]] | None = None,
         measure_peers: bool = False,
         augmentation: str | None = None,
+        fresh_model: bool = False,
     ) -> dict[str, Any]:
         if not isinstance(measure_peers, bool):
             raise ValueError("measure_peers must be a boolean")
+        if not isinstance(fresh_model, bool):
+            raise ValueError("fresh_model must be a boolean")
         if augmentation is not None and augmentation not in AUGMENTATIONS:
             raise ValueError(f"augmentation must be one of {', '.join(AUGMENTATIONS)}")
         senders_map = _validate_learned_senders(learned_senders) if topology == "learned" else {}
@@ -1351,6 +1400,7 @@ class WorkerTrainer:
             self._learned_senders = senders_map
             self._measure_peers = measure_peers
             self._augmentation = augmentation
+            self._fresh_model = fresh_model
         return {
             "rounds": rounds,
             "epochs": epochs,
@@ -1366,6 +1416,7 @@ class WorkerTrainer:
             "learned_senders": {key: list(value) for key, value in senders_map.items()},
             "measure_peers": measure_peers,
             "augmentation": augmentation,
+            "fresh_model": fresh_model,
         }
 
     def _measure_peer_models(
@@ -1457,11 +1508,15 @@ class WorkerTrainer:
         else:
             if self._dataset_class_names is None:
                 raise RuntimeError("Dataset class metadata is unavailable")
-            model, installed_architecture = _load_installed_dataset_initial_model(
-                self.config,
-                self.dataset_name,
-                input_shape=tuple(int(value) for value in self.images.shape[1:]),
-                class_names=self._dataset_class_names,
+            model, installed_architecture = (
+                None
+                if self._fresh_model
+                else _load_installed_dataset_initial_model(
+                    self.config,
+                    self.dataset_name,
+                    input_shape=tuple(int(value) for value in self.images.shape[1:]),
+                    class_names=self._dataset_class_names,
+                )
             ) or (None, None)
             if model is None:
                 if self._architecture.get("model_type") in {"custom", "pretrained_deit"}:
@@ -1681,6 +1736,13 @@ class WorkerTrainer:
                     )
             senders = self._incoming.setdefault(key, {})
             if sender in senders:
+                # A sender retries when the connection drops after the upload; the
+                # identical model is acknowledged again, a different one is an error.
+                stored = senders[sender][0]
+                if len(stored) == len(weights) and all(
+                    np.array_equal(left, right) for left, right in zip(stored, weights)
+                ):
+                    return True
                 raise ValueError("Duplicate weights received from a peer for this round")
             senders[sender] = (weights, sample_count, len(payload))
             self._arrivals.setdefault(key, {})[sender] = time.monotonic()
@@ -1846,9 +1908,12 @@ class WorkerTrainer:
                     method="POST",
                 )
                 try:
-                    with urlopen(request, timeout=self.config.peer_timeout_seconds) as response:
-                        if response.status != HTTPStatus.ACCEPTED:
-                            raise RuntimeError(f"Peer {peer_id} returned HTTP {response.status}")
+                    attempts = _send_with_retry(
+                        request,
+                        timeout=self.config.peer_timeout_seconds,
+                        peer_id=peer_id,
+                        cancel_event=self._cancel,
+                    )
                     sent_bytes += len(payload)
                     _log_event(
                         "peer_weights_sent",
@@ -1857,6 +1922,7 @@ class WorkerTrainer:
                         peer_id=peer_id,
                         bytes_sent=len(payload),
                         transfer_seconds=round(time.perf_counter() - transfer_started, 3),
+                        attempts=attempts,
                     )
                 except (HTTPError, URLError, TimeoutError, OSError) as error:
                     raise RuntimeError(f"Peer exchange with {peer_id} failed: {error}") from error
@@ -2365,6 +2431,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     learned_senders=payload.get("learned_senders"),
                     measure_peers=payload.get("measure_peers", False),
                     augmentation=payload.get("augmentation"),
+                    fresh_model=payload.get("fresh_model", False),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})
@@ -2565,6 +2632,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                         raise ValueError("NAS smoke_test must be a boolean")
                     architectures = payload.get("architectures")
                     epochs = payload.get("epochs", 1)
+                    search_augmentation = payload.get("augmentation", "none")
                     if smoke_test:
                         architectures = [
                             smoke_test_architecture(
@@ -2593,6 +2661,8 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                                 cancel_event=nas_cancel_event,
                                 reuse_tensorflow_runtime=True,
                                 memory_constrained=dataset_name == "cifar10",
+                                global_validation=load_global_validation(dataset_path),
+                                augmentation=search_augmentation,
                             )
                         finally:
                             del images, labels, shard_classes
@@ -2613,6 +2683,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                             architectures=architectures,
                             epochs=epochs,
                             cancel_event=nas_cancel_event,
+                            augmentation=search_augmentation,
                         )
                     if result.get("dataset_classes") != class_names:
                         raise ValueError("NAS result classes do not match the dataset shard")

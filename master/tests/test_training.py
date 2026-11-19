@@ -1400,3 +1400,153 @@ def test_topology_summary_rescores_history_with_the_groups_own_reward_config(tmp
     group["reward_config"] = coordinator.reward_config.as_dict()
     (current,) = coordinator._summarize_topology_candidates(group, [{"topology": "mesh", "alpha": 0.3}])
     assert current["reward_version"] == 2
+
+
+CIFAR_CLASSES = [f"class{index}" for index in range(10)]
+
+
+def _small_cnn_seed() -> dict:
+    return {
+        "id": "baseline-cnn",
+        "model_type": "custom",
+        "layers": [
+            {"type": "conv2d", "filters": 8, "kernel_size": 3},
+            {"type": "batch_normalization"},
+            {"type": "max_pooling2d", "pool_size": 2},
+            {"type": "global_average_pooling2d"},
+            {"type": "dense", "units": 10, "activation": "linear"},
+        ],
+        "training": {"optimizer": "adam", "learning_rate": 0.001, "batch_size": 8},
+        # Report metadata from the installed model is accepted and stripped.
+        "dataset_name": "cifar10",
+        "input_shape": [32, 32, 3],
+        "classes": CIFAR_CLASSES,
+        "num_classes": 10,
+    }
+
+
+def _run_federated_nas(tmp_path: Path, federated_scores: dict) -> tuple[dict, list, list]:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    calls, federated_runs = [], []
+
+    def fake_post(worker, path, payload, timeout):
+        calls.append(payload)
+        candidates = []
+        for architecture in payload["architectures"]:
+            vgg = architecture["id"].endswith("-c2")
+            candidates.append(
+                {
+                    "node_id": worker.node_id,
+                    "architecture": architecture,
+                    "parameter_count": architecture["parameter_count"],
+                    # A tiny model wins on the non-IID local slice ...
+                    "validation_accuracy": 0.9 if architecture["parameter_count"] < 20_000 else 0.6,
+                    "validation_macro_precision": 0.5,
+                    "validation_macro_recall": 0.5,
+                    "validation_macro_f1": 0.5,
+                    # ... while the VGG-style anchor generalizes on the shared split.
+                    "global_validation_accuracy": 0.5 if vgg else 0.3,
+                    "global_validation_macro_f1": 0.45 if vgg else 0.25,
+                    "elapsed_seconds": 1.0,
+                    "peak_rss_mb": 1000.0,
+                }
+            )
+        return {
+            "node_id": worker.node_id,
+            "dataset_name": "cifar10",
+            "dataset_classes": CIFAR_CLASSES,
+            "dataset_image_shape": [32, 32, 3],
+            "elapsed_seconds": 4.0,
+            "peak_rss_mb": 1000.0,
+            "fidelity_epochs": payload["epochs"],
+            "candidates": candidates,
+        }
+
+    def run_workers(operation, *, on_result=None):
+        results = []
+        for worker in coordinator.config.workers:
+            result = operation(worker)
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+        return results
+
+    def fake_distributed(group_id, run_group, run):
+        federated_runs.append(run_group)
+        architecture_id = run_group["architecture"]["id"]
+        score = next((value for key, value in federated_scores.items() if key in architecture_id), 0.4)
+        run["rounds"] = [
+            {
+                "workers": {
+                    worker.node_id: {"global_validation_accuracy": score, "validation_accuracy": 0.8}
+                    for worker in coordinator.config.workers
+                }
+            }
+        ]
+
+    coordinator._parallel_workers = run_workers
+    coordinator._post = fake_post
+    coordinator._run_distributed_seed = fake_distributed
+    accepted = coordinator.start_dataset_nas(
+        dataset_name="cifar10",
+        search_time_limit_seconds=600,
+        seed=17,
+        objective="federated",
+        search_space="extended",
+        augmentation="flip_shift",
+        seed_architectures=[_small_cnn_seed()],
+    )
+    assert accepted["seed_architecture_ids"] == ["seed-baseline-cnn"]
+    deadline = time.monotonic() + 5
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    group = next(g for g in coordinator.results()["groups"] if g["group_id"] == accepted["group_id"])
+    return group, calls, federated_runs
+
+
+def test_federated_nas_ranks_on_shared_split_and_keeps_the_best_federated_design(tmp_path: Path) -> None:
+    group, calls, federated_runs = _run_federated_nas(tmp_path, {"-c2": 0.62, "seed-": 0.55})
+
+    assert group["status"] == "completed", group.get("error")
+    first = group["nas_generations"][0]["candidates"]
+    # The seed is measured in the first generation next to the extended anchors.
+    assert any(row["architecture"]["id"] == "seed-baseline-cnn" for row in first)
+    assert all(row["ranking_metric"] == "global_validation_accuracy" for row in first)
+    assert all(row["validation_accuracy"] == row["global_validation_accuracy"] for row in first)
+    assert all(payload["augmentation"] == "flip_shift" for payload in calls)
+    assert [payload["epochs"] for payload in calls][-1] == 2
+    # Finalists (two searched designs + the seed) train with real averaging from scratch.
+    assert len(federated_runs) == 3
+    assert all(
+        run["topology"] == "mesh" and run["fresh_model"] and run["augmentation"] == "flip_shift"
+        for run in federated_runs
+    )
+    selection = group["selection"]
+    assert selection["method"] == "pareto_evolutionary_multifidelity_federated"
+    assert group["selected_architecture"]["id"].endswith("-c2")
+    assert selection["selected_candidate"]["federated_global_validation_accuracy"] == pytest.approx(0.62)
+    assert {row["architecture_id"] for row in selection["federated_stage"]} >= {"seed-baseline-cnn"}
+    assert "nas_seed" not in group["selected_architecture"]
+
+
+def test_federated_nas_returns_the_seed_when_nothing_federates_better(tmp_path: Path) -> None:
+    group, _calls, _runs = _run_federated_nas(tmp_path, {"seed-": 0.66, "-c2": 0.60})
+
+    assert group["status"] == "completed", group.get("error")
+    assert group["selected_architecture"]["id"] == "seed-baseline-cnn"
+    assert group["selected_architecture"]["dataset_name"] == "cifar10"
+    assert group["selection"]["selected_candidate"]["mean_validation_accuracy"] == pytest.approx(0.66)
+
+
+def test_federated_nas_options_are_validated(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    with pytest.raises(ValueError, match="objective"):
+        coordinator.start_dataset_nas(dataset_name="cifar10", objective="global")
+    with pytest.raises(ValueError, match="federated"):
+        coordinator.start_dataset_nas(dataset_name="cifar10", seed_architectures=[_small_cnn_seed()])
+    with pytest.raises(ValueError, match="extended"):
+        coordinator.start_dataset_nas(dataset_name="cats", search_space="extended")
+    with pytest.raises(ValueError, match="custom"):
+        coordinator.start_dataset_nas(
+            dataset_name="cifar10", objective="federated", seed_architectures=[{"id": "b1_c8_k3"}]
+        )

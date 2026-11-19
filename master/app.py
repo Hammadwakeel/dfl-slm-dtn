@@ -832,6 +832,19 @@ def _execute_action(
                         600,
                     ),
                     smoke_test=parameters.get("smoke_test", False),
+                    **{
+                        key: parameters[key]
+                        for key in (
+                            "seed",
+                            "objective",
+                            "search_space",
+                            "augmentation",
+                            "seed_architectures",
+                            "federated_rounds",
+                            "federated_epochs",
+                        )
+                        if key in parameters
+                    },
                 ),
             }
         if name == "run_hpo":

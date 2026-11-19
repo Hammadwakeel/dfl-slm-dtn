@@ -46,6 +46,7 @@ from app.services.supervisor_policy import (
     new_state,
     parse_decision,
     prompt_state,
+    nas_parameters,
     rule_decision,
     run_augmentation,
     summarize_group,
@@ -644,14 +645,7 @@ class Supervisor:
     ) -> tuple[str, dict[str, Any]]:
         reason = f"Supervisor step {step}"
         if step == "run_nas":
-            action = {
-                "action": "enable_nas",
-                "parameters": {
-                    "enabled": True,
-                    "dataset_name": goal["dataset"],
-                    "search_time_limit_seconds": int(goal["nas_budget_seconds"]),
-                },
-            }
+            action = {"action": "enable_nas", "parameters": nas_parameters(goal, state)}
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
             return _group_id(data), {}
         if step == "run_hpo":

@@ -30,6 +30,14 @@ KERNEL_CHOICES = (3, 5)
 HEAD_CHOICES = (0, 64)
 DROPOUT_CHOICES = (0.0, 0.2, 0.35)
 BLOCK_CHOICES = ("conv2d", "separable_conv2d")
+# Extended CIFAR-10 space (NAS v2). The compact space above never contained the
+# VGG-style models that federate well on CIFAR-10 (a 6-conv baseline reached 0.67
+# while the compact search kept returning ~3k-parameter models), so v2 adds
+# double-conv blocks and 128 channels under a larger parameter cap.
+EXTENDED_CHANNELS = (32, 64, 128)
+EXTENDED_MAX_PARAMETERS = 400_000
+CONVS_PER_BLOCK_CHOICES = (1, 2)
+ALL_CHANNEL_CHOICES = (16, 32, 64, 128)
 
 
 def _candidate_id(
@@ -39,6 +47,7 @@ def _candidate_id(
     head_units: int,
     dropout: float,
     attention: bool,
+    convs_per_block: int = 1,
 ) -> str:
     width_key = "x".join(str(width) for width in channels)
     dropout_key = str(int(dropout * 100))
@@ -47,6 +56,8 @@ def _candidate_id(
         f"{'sep' if block_type == 'separable_conv2d' else 'conv'}-"
         f"h{head_units}-drop{dropout_key}"
     )
+    if convs_per_block != 1:
+        candidate_id = f"{candidate_id}-c{convs_per_block}"
     return f"{candidate_id}-attn" if attention else candidate_id
 
 
@@ -60,10 +71,13 @@ def build_dataset_architecture(
     head_units: int,
     dropout: float,
     attention: bool = False,
+    convs_per_block: int = 1,
 ) -> dict[str, Any]:
     if not 2 <= len(channels) <= MAX_BLOCKS:
         raise ValueError(f"Dataset NAS depth must be between 2 and {MAX_BLOCKS}")
-    if any(width not in CHANNEL_CHOICES for width in channels):
+    if convs_per_block not in CONVS_PER_BLOCK_CHOICES:
+        raise ValueError("Dataset NAS convolutions per block must be 1 or 2")
+    if any(width not in ALL_CHANNEL_CHOICES for width in channels):
         raise ValueError("Dataset NAS channel widths are not in the supported search space")
     if kernel_size not in KERNEL_CHOICES or block_type not in BLOCK_CHOICES:
         raise ValueError("Dataset NAS kernel or block type is unsupported")
@@ -74,17 +88,18 @@ def build_dataset_architecture(
 
     layers: list[dict[str, Any]] = []
     for width in channels:
-        layers.append(
-            {
-                "type": block_type,
-                "filters": width,
-                "kernel_size": kernel_size,
-                "strides": 1,
-                "padding": "same",
-                "activation": "relu",
-            }
-        )
-        layers.append({"type": "batch_normalization"})
+        for _ in range(convs_per_block):
+            layers.append(
+                {
+                    "type": block_type,
+                    "filters": width,
+                    "kernel_size": kernel_size,
+                    "strides": 1,
+                    "padding": "same",
+                    "activation": "relu",
+                }
+            )
+            layers.append({"type": "batch_normalization"})
         layers.append({"type": "max_pooling2d", "pool_size": 2})
     if attention:
         layers.extend(
@@ -120,6 +135,7 @@ def build_dataset_architecture(
             head_units,
             dropout,
             attention,
+            convs_per_block,
         ),
         "model_type": "custom",
         "blocks": len(channels),
@@ -137,6 +153,9 @@ def build_dataset_architecture(
             "batch_size": 32,
         },
     }
+    if convs_per_block != 1:
+        # Recorded only for double-conv blocks so v1 designs keep their exact form.
+        architecture["convs_per_block"] = convs_per_block
     _, parameter_count = validate_model_design(
         architecture,
         input_shape,
@@ -367,6 +386,145 @@ def mutate_population(
     return [*parents, *offspring]
 
 
+EXTENDED_INITIAL_POPULATION_SIZE = 6
+EXTENDED_OFFSPRING = 2
+EXTENDED_DROPOUT = (0.0, 0.2, 0.35)
+
+
+def _extended_candidate(
+    *,
+    input_shape: tuple[int, int, int],
+    num_classes: int,
+    channels: tuple[int, ...],
+    convs_per_block: int,
+    head_units: int,
+    dropout: float,
+) -> dict[str, Any]:
+    if any(width not in EXTENDED_CHANNELS for width in channels):
+        raise ValueError("Extended NAS widths must come from the extended channel set")
+    candidate = build_dataset_architecture(
+        input_shape=input_shape,
+        num_classes=num_classes,
+        channels=tuple(sorted(channels)),
+        kernel_size=3,
+        block_type="conv2d",
+        head_units=head_units,
+        dropout=dropout,
+        convs_per_block=convs_per_block,
+    )
+    if int(candidate["parameter_count"]) > EXTENDED_MAX_PARAMETERS:
+        raise ValueError(
+            f"{candidate['id']} exceeds the {EXTENDED_MAX_PARAMETERS:,}-parameter extended cap"
+        )
+    return candidate
+
+
+def extended_initial_population(
+    *,
+    seed: int,
+    input_shape: tuple[int, int, int],
+    num_classes: int,
+    size: int = EXTENDED_INITIAL_POPULATION_SIZE,
+) -> list[dict[str, Any]]:
+    """First NAS v2 generation: two known-good anchors plus random extended designs.
+
+    The anchors are a VGG-style double-conv CNN and the fixed 3-block CNN of the
+    topology sweeps, so the search always measures at least one strong design.
+    """
+    if not 2 <= size <= 8:
+        raise ValueError("Extended NAS population size must be between 2 and 8")
+    rng = random.Random(seed)
+    population: dict[str, dict[str, Any]] = {}
+    for channels, convs, head, dropout in (((32, 64, 128), 2, 64, 0.2), ((32, 64, 64), 1, 64, 0.2)):
+        anchor = _extended_candidate(
+            input_shape=input_shape,
+            num_classes=num_classes,
+            channels=channels,
+            convs_per_block=convs,
+            head_units=head,
+            dropout=dropout,
+        )
+        population[anchor["id"]] = anchor
+    for _ in range(size * 100):
+        if len(population) >= size:
+            break
+        depth = rng.randint(2, MAX_BLOCKS)
+        try:
+            candidate = _extended_candidate(
+                input_shape=input_shape,
+                num_classes=num_classes,
+                channels=tuple(rng.choices(EXTENDED_CHANNELS, k=depth)),
+                convs_per_block=rng.choice(CONVS_PER_BLOCK_CHOICES),
+                head_units=rng.choice(HEAD_CHOICES),
+                dropout=rng.choice(EXTENDED_DROPOUT),
+            )
+        except ValueError:
+            continue
+        population.setdefault(candidate["id"], candidate)
+    if len(population) != size:
+        raise ValueError("Could not generate enough unique extended NAS architectures")
+    return list(population.values())
+
+
+def mutate_extended_population(
+    parents: list[dict[str, Any]],
+    *,
+    seed: int,
+    input_shape: tuple[int, int, int],
+    num_classes: int,
+    size: int = EXTENDED_OFFSPRING,
+) -> list[dict[str, Any]]:
+    """Parents plus ``size`` one-step mutations (width, depth, convs, head, dropout).
+
+    Only searched designs (with a channel schedule) are mutated; an external seed
+    architecture such as the deployed baseline can still be a parent and is kept.
+    """
+    mutable = [parent for parent in parents if parent.get("channel_schedule")]
+    if not mutable:
+        raise ValueError("Extended NAS evolution needs at least one searched parent")
+    rng = random.Random(seed)
+    parent_ids = {parent["id"] for parent in parents}
+    offspring: dict[str, dict[str, Any]] = {}
+    for _ in range(size * 200):
+        if len(offspring) >= size:
+            break
+        parent = rng.choice(mutable)
+        channels = [int(width) for width in parent["channel_schedule"]]
+        convs = int(parent.get("convs_per_block", 1))
+        head = int(parent["head_units"])
+        dropout = float(parent["dropout"])
+        mutation = rng.randrange(5)
+        if mutation == 0:
+            channels[rng.randrange(len(channels))] = rng.choice(EXTENDED_CHANNELS)
+        elif mutation == 1:
+            if len(channels) < MAX_BLOCKS and (len(channels) == 2 or rng.random() < 0.5):
+                channels.append(rng.choice(EXTENDED_CHANNELS))
+            else:
+                channels.pop(rng.randrange(len(channels)))
+        elif mutation == 2:
+            convs = 2 if convs == 1 else 1
+        elif mutation == 3:
+            head = 0 if head else 64
+        else:
+            dropout = rng.choice([value for value in EXTENDED_DROPOUT if value != dropout])
+        try:
+            candidate = _extended_candidate(
+                input_shape=input_shape,
+                num_classes=num_classes,
+                channels=tuple(channels),
+                convs_per_block=convs,
+                head_units=head,
+                dropout=dropout,
+            )
+        except ValueError:
+            continue
+        if candidate["id"] not in parent_ids:
+            offspring.setdefault(candidate["id"], candidate)
+    if len(offspring) != size:
+        raise ValueError("Could not generate enough unique extended NAS offspring")
+    return [*parents, *offspring.values()]
+
+
 def aggregate_worker_candidates(
     worker_results: list[dict[str, Any]],
     *,
@@ -393,6 +551,18 @@ def aggregate_worker_candidates(
         ):
             metrics[name] = sum(float(row[name]) for row in rows) / len(rows)
         metrics["peak_rss_mb"] = max(float(row["peak_rss_mb"]) for row in rows)
+        # Accuracy on the shared class-balanced split (NAS v2 objective), when every
+        # worker measured it; the weakest worker shows how evenly a design learns.
+        if all(isinstance(row.get("global_validation_accuracy"), (int, float)) for row in rows):
+            metrics["global_validation_accuracy"] = sum(
+                float(row["global_validation_accuracy"]) for row in rows
+            ) / len(rows)
+            metrics["global_validation_macro_f1"] = sum(
+                float(row["global_validation_macro_f1"]) for row in rows
+            ) / len(rows)
+            metrics["global_validation_min_accuracy"] = min(
+                float(row["global_validation_accuracy"]) for row in rows
+            )
         architecture = rows[0]["architecture"]
         if any(row["architecture"] != architecture for row in rows[1:]):
             raise ValueError(f"NAS workers returned inconsistent architecture {candidate_id}")

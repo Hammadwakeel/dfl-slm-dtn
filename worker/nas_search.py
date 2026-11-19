@@ -244,6 +244,41 @@ def load_dataset_shard(path: str | Path) -> tuple[np.ndarray, np.ndarray, list[s
     return images, labels, classes
 
 
+SEARCH_AUGMENTATIONS = ("none", "flip_shift")
+GLOBAL_VALIDATION_FILE_NAME = "global_validation.npz"
+
+
+def _accuracy_and_macro_f1(
+    truth: np.ndarray, predictions: np.ndarray, class_count: int
+) -> dict[str, float]:
+    confusion = np.zeros((class_count, class_count), dtype=np.int64)
+    np.add.at(confusion, (truth, predictions), 1)
+    true_positive = np.diag(confusion).astype(np.float64)
+    predicted = confusion.sum(axis=0)
+    actual = confusion.sum(axis=1)
+    precision = np.divide(true_positive, predicted, out=np.zeros_like(true_positive), where=predicted > 0)
+    recall = np.divide(true_positive, actual, out=np.zeros_like(true_positive), where=actual > 0)
+    f1 = np.divide(
+        2 * precision * recall,
+        precision + recall,
+        out=np.zeros_like(precision),
+        where=(precision + recall) > 0,
+    )
+    return {"accuracy": float(np.mean(truth == predictions)), "macro_f1": float(np.mean(f1))}
+
+
+def load_search_global_validation(dataset_directory: str | Path) -> tuple[np.ndarray, np.ndarray] | None:
+    """The dataset's shared class-balanced validation split, when installed."""
+    path = Path(dataset_directory) / GLOBAL_VALIDATION_FILE_NAME
+    if not path.is_file() or path.is_symlink():
+        return None
+    with np.load(path, allow_pickle=False) as split:
+        return (
+            np.asarray(split["images"], dtype=np.float32),
+            np.asarray(split["labels"], dtype=np.int64).reshape(-1),
+        )
+
+
 def _build_dataset_candidate(
     *,
     input_shape: tuple[int, int, int],
@@ -289,11 +324,15 @@ def search_dataset_architectures(
     cancel_event: threading.Event | None = None,
     reuse_tensorflow_runtime: bool = False,
     memory_constrained: bool = False,
+    global_validation: tuple[np.ndarray, np.ndarray] | None = None,
+    augmentation: str = "none",
 ) -> dict[str, Any]:
     if not 30 <= time_limit_seconds <= MAX_SEARCH_SECONDS:
         raise ValueError(f"Search time limit must be between 30 and {MAX_SEARCH_SECONDS} seconds")
     if not isinstance(seed, int) or not 0 <= seed <= 2**32 - 1:
         raise ValueError("Dataset NAS seed is out of range")
+    if augmentation not in SEARCH_AUGMENTATIONS:
+        raise ValueError(f"Dataset NAS augmentation must be one of {', '.join(SEARCH_AUGMENTATIONS)}")
     if (
         images.ndim != 4
         or images.shape[0] != labels.size
@@ -377,14 +416,27 @@ def search_dataset_architectures(
         buffer_size=shuffle_buffer_size,
         seed=seed,
         reshuffle_each_iteration=True,
-    ).batch(train_batch_size)
-    training_data = training_data.map(
-        lambda batch_images, batch_labels: (
-            tf.cast(batch_images, tf.float32),
-            batch_labels,
-        ),
-        num_parallel_calls=1,
     )
+    if augmentation == "flip_shift":
+        # Same recipe as federated training (random flip, shift of up to 4 px), so
+        # candidates are ranked under the conditions they will be trained in.
+        height, width, channel_count = (int(value) for value in images.shape[1:])
+
+        def augment(image: Any, label: Any) -> tuple[Any, Any]:
+            image = tf.image.random_flip_left_right(tf.cast(image, tf.float32))
+            padded = tf.pad(image, [[4, 4], [4, 4], [0, 0]], mode="REFLECT")
+            return tf.image.random_crop(padded, [height, width, channel_count]), label
+
+        training_data = training_data.map(augment, num_parallel_calls=1).batch(train_batch_size)
+    else:
+        training_data = training_data.batch(train_batch_size)
+        training_data = training_data.map(
+            lambda batch_images, batch_labels: (
+                tf.cast(batch_images, tf.float32),
+                batch_labels,
+            ),
+            num_parallel_calls=1,
+        )
     dataset_options = tf.data.Options()
     dataset_options.threading.private_threadpool_size = 1
     dataset_options.threading.max_intra_op_parallelism = 1
@@ -531,6 +583,15 @@ def search_dataset_architectures(
                 f"the {rss_cap_mb:.0f} MiB RSS cap"
             )
         accuracy = float(np.mean(logits.argmax(axis=1) == labels[validation_indices]))
+        global_metrics: dict[str, float] = {}
+        if global_validation is not None:
+            global_images, global_labels = global_validation
+            global_logits = model.predict(
+                global_images, batch_size=validation_batch_size, verbose=0
+            )
+            global_metrics = _accuracy_and_macro_f1(
+                global_labels, global_logits.argmax(axis=1), len(class_names)
+            )
         elapsed_seconds = round(time.perf_counter() - candidate_started, 3)
         candidate_result = {
             "node_id": node_id,
@@ -547,6 +608,15 @@ def search_dataset_architectures(
                 ).numpy().mean()
             ),
             "validation_confusion_matrix": confusion.tolist(),
+            **(
+                {
+                    "global_validation_accuracy": global_metrics["accuracy"],
+                    "global_validation_macro_f1": global_metrics["macro_f1"],
+                    "global_validation_samples": int(global_validation[1].size),
+                }
+                if global_metrics and global_validation is not None
+                else {}
+            ),
             "model_summary": "\n".join(model_summary_lines),
             "fidelity_epochs": epochs,
             "elapsed_seconds": elapsed_seconds,
@@ -568,6 +638,10 @@ def search_dataset_architectures(
         "training_samples": int(train_indices.size),
         "time_limit_seconds": time_limit_seconds,
         "fidelity_epochs": epochs,
+        "augmentation": augmentation,
+        "global_validation_samples": (
+            int(global_validation[1].size) if global_validation is not None else 0
+        ),
         "search_method": "pareto_evolutionary_multifidelity",
         "memory_limit_mb": round(rss_cap_mb, 1),
         "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -639,9 +713,12 @@ def search_dataset_architectures_isolated(
     architectures: list[dict[str, Any]] | None = None,
     epochs: int = 1,
     cancel_event: threading.Event | None = None,
+    augmentation: str = "none",
 ) -> dict[str, Any]:
     if not 30 <= time_limit_seconds <= MAX_SEARCH_SECONDS:
         raise ValueError(f"Search time limit must be between 30 and {MAX_SEARCH_SECONDS} seconds")
+    if augmentation not in SEARCH_AUGMENTATIONS:
+        raise ValueError(f"Dataset NAS augmentation must be one of {', '.join(SEARCH_AUGMENTATIONS)}")
     environment = os.environ.copy()
     for name in (
         "DFL_API_TOKEN",
@@ -673,6 +750,7 @@ def search_dataset_architectures_isolated(
     # Always pass the fidelity: the first generation has no architectures but must
     # still train for the requested epochs (it silently used 1 before).
     command.extend((str(epochs), json.dumps(architectures, separators=(",", ":"))))
+    command.append(json.dumps({"augmentation": augmentation}, separators=(",", ":")))
     if cancel_event is None:
         try:
             completed = subprocess.run(
@@ -773,10 +851,11 @@ def _forward_search_events(output: str | bytes | None, logger: Any) -> dict[str,
 
 
 def main() -> None:
-    if sys.argv[1:2] == ["--dataset-shard"] and len(sys.argv) in {6, 8}:
+    if sys.argv[1:2] == ["--dataset-shard"] and len(sys.argv) in {6, 8, 9}:
         _, _, path, node_id, seed_value, limit_value, *search_options = sys.argv
         epochs = int(search_options[0]) if search_options else 1
-        architectures = json.loads(search_options[1]) if len(search_options) == 2 else None
+        architectures = json.loads(search_options[1]) if len(search_options) >= 2 else None
+        options = json.loads(search_options[2]) if len(search_options) == 3 else {}
         images, labels, class_names = load_dataset_shard(path)
         result = search_dataset_architectures(
             images,
@@ -787,6 +866,8 @@ def main() -> None:
             node_id=node_id,
             architectures=architectures,
             epochs=epochs,
+            global_validation=load_search_global_validation(Path(path).parent),
+            augmentation=options.get("augmentation", "none"),
             logger=lambda event, **details: print(
                 json.dumps({"type": event, **details}, allow_nan=False),
                 flush=True,

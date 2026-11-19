@@ -1901,3 +1901,96 @@ def test_round_without_global_validation_reports_no_global_metrics(tmp_path, mon
     result = trainer.run_round("plain-run", 0, 1, 11, "ring")
 
     assert "global_validation_accuracy" not in result
+
+
+def test_fresh_model_builds_the_configured_design_instead_of_the_installed_one(tmp_path):
+    trainer, dataset_name = _installed_bundle_trainer(tmp_path, None)
+    design = {
+        "id": "nas-finalist",
+        "model_type": "custom",
+        "layers": [
+            {"type": "conv2d", "filters": 4, "kernel_size": 3},
+            {"type": "global_average_pooling2d"},
+            {"type": "dense", "units": 2, "activation": "linear"},
+        ],
+        "training": {"optimizer": "adam", "learning_rate": 0.002, "batch_size": 8},
+    }
+    trainer.configure(
+        rounds=1, epochs=1, topology="ring", dataset_name=dataset_name, architecture=design, fresh_model=True
+    )
+    model = trainer._create_run_model("finalist", 7)
+    audit = trainer._run_model_audits["finalist"]
+    assert audit["initial_model_loaded"] is False
+    assert audit["learning_rate"] == pytest.approx(0.002)
+    assert model.count_params() == 4 * 9 + 4 + 4 * 2 + 2
+
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name)
+    trainer._create_run_model("installed", 7)
+    assert trainer._run_model_audits["installed"]["initial_model_loaded"] is True
+    with pytest.raises(ValueError, match="fresh_model"):
+        trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name, fresh_model="yes")
+
+
+def test_peer_send_retries_transient_failures_but_not_client_errors(monkeypatch):
+    from urllib.error import HTTPError
+    from urllib.request import Request
+
+    attempts = []
+
+    class Accepted:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def flaky(request, timeout):
+        attempts.append(timeout)
+        if len(attempts) < 3:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        return Accepted()
+
+    monkeypatch.setattr(training_service, "urlopen", flaky)
+    monkeypatch.setattr(training_service.time, "sleep", lambda _seconds: None)
+    request = Request("http://127.0.0.1:1/v1/weights", data=b"x", method="POST")
+    assert training_service._send_with_retry(request, timeout=5, peer_id="worker3") == 3
+
+    def rejected(request, timeout):
+        attempts.append("rejected")
+        raise HTTPError(request.full_url, 400, "bad signature", {}, None)
+
+    attempts.clear()
+    monkeypatch.setattr(training_service, "urlopen", rejected)
+    with pytest.raises(HTTPError):
+        training_service._send_with_retry(request, timeout=5, peer_id="worker3")
+    assert attempts == ["rejected"]
+
+    def always_reset(request, timeout):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    monkeypatch.setattr(training_service, "urlopen", always_reset)
+    with pytest.raises(ConnectionResetError):
+        training_service._send_with_retry(request, timeout=5, peer_id="worker3")
+
+
+def test_identical_peer_reupload_is_acknowledged_and_a_different_one_rejected(tmp_path):
+    shard_path = tmp_path / "default_shard.npz"
+    np.savez(shard_path, images=np.zeros((1, 32, 32, 3), dtype=np.uint8), labels=np.array([0]))
+    trainer = WorkerTrainer(
+        WorkerConfig(
+            node_id="worker1",
+            api_token="a" * 48,
+            port=5004,
+            data_path=str(shard_path),
+            peers=(Peer("worker2", "http://127.0.0.1:5005", "b" * 48),),
+            log_path=str(tmp_path / "worker.jsonl"),
+        )
+    )
+    first = serialize_weights([np.ones((2, 2), dtype=np.float32)])
+    other = serialize_weights([np.zeros((2, 2), dtype=np.float32)])
+    assert trainer.accept_peer_weights("retry-run", 0, "worker2", 10, first) is True
+    assert trainer.accept_peer_weights("retry-run", 0, "worker2", 10, first) is True
+    with pytest.raises(ValueError, match="Duplicate"):
+        trainer.accept_peer_weights("retry-run", 0, "worker2", 10, other)

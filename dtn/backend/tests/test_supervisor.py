@@ -14,6 +14,7 @@ from app.services.supervisor_policy import (
     DecisionError,
     allowed_steps,
     default_goal,
+    nas_parameters,
     run_augmentation,
     fallback_decision,
     new_state,
@@ -48,6 +49,24 @@ def test_cifar_trainings_use_flip_shift_and_mnist_trains_on_raw_images() -> None
     assert run_augmentation(default_goal(dataset="cifar10")) == "flip_shift"
     assert run_augmentation(default_goal(dataset="mnist")) == "none"
     assert run_augmentation(default_goal(dataset="cifar10", augmentation="none")) == "none"
+
+
+def test_nas_v2_searches_on_the_shared_split_with_the_baseline_as_seed() -> None:
+    state = new_state()
+    state["baseline_architecture"] = {"model_type": "custom", "layers": CNN_LAYERS}
+    cifar = nas_parameters(default_goal(dataset="cifar10", seed=17), state)
+    assert cifar["objective"] == "federated"
+    assert cifar["search_space"] == "extended"
+    assert cifar["augmentation"] == "flip_shift"
+    assert cifar["seed"] == 17
+    assert cifar["seed_architectures"] == [state["baseline_architecture"]]
+    mnist = nas_parameters(default_goal(), state)
+    assert mnist["search_space"] == "compact" and mnist["augmentation"] == "none"
+    # v1 is the former local-objective search, kept for ablations.
+    v1 = nas_parameters(default_goal(dataset="cifar10", nas_version="v1"), state)
+    assert set(v1) == {"enabled", "dataset_name", "search_time_limit_seconds", "seed"}
+    # A non-custom baseline cannot seed the search.
+    assert "seed_architectures" not in nas_parameters(default_goal(), new_state())
 
 
 def test_trained_configuration_is_not_offered_again() -> None:

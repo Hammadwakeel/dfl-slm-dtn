@@ -40,7 +40,7 @@ WEIGHT_COUNTS = {"conv2d": 2, "separable_conv2d": 3, "dense": 2, "batch_normaliz
 MIN_KEPT_UNITS = 4
 MAX_PRUNE_RATIO = 0.8
 # Descriptive NAS keys that no longer describe a pruned network.
-_STALE_KEYS = ("blocks", "channels", "channel_schedule", "block_type", "kernel_size", "head_units", "dropout", "attention")
+_STALE_KEYS = ("blocks", "channels", "channel_schedule", "block_type", "kernel_size", "head_units", "dropout", "attention", "convs_per_block")
 
 
 class PruningError(ValueError):

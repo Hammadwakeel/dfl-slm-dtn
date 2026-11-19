@@ -75,6 +75,7 @@ class SupervisorError(RuntimeError):
 
 # Time for a restarted worker service to exit, restart and reload TensorFlow
 # before preflight re-checks its readiness.
+WORKER_RESYNC_SECONDS = 60
 WORKER_RECYCLE_WAIT_SECONDS = 45
 
 
@@ -116,6 +117,7 @@ class Supervisor:
         model_call: ModelCall,
         memory_cleanup: Callable[..., dict[str, Any]],
         global_evaluate: Callable[..., dict[str, Any]] | None = None,
+        sync_workers: Callable[[], str | None] | None = None,
         min_free_memory_mb: int = 1200,
         preflight_wait_seconds: float = 600.0,
         tick_seconds: float = 10.0,
@@ -127,6 +129,7 @@ class Supervisor:
         self._model_call = model_call
         self._memory_cleanup = memory_cleanup
         self._global_evaluate = global_evaluate
+        self._sync_workers = sync_workers
         self._min_free_memory_mb = min_free_memory_mb
         self._preflight_wait = timedelta(seconds=preflight_wait_seconds)
         self._tick_seconds = tick_seconds
@@ -441,9 +444,35 @@ class Supervisor:
         deadline = datetime.fromisoformat(state["deadline"])
         return (_as_utc(deadline) - self._clock()).total_seconds() / 60
 
+    def _resync_workers(self, run_id: str, state: dict[str, Any]) -> bool:
+        """Re-register the workers with the master when they are online but not ready.
+
+        Readiness comes from registering the workers with the master; that fails with
+        HTTP 409 while a master group is still running (e.g. at a backend restart),
+        and nothing else retries it. Retry at most once per minute while waiting.
+        """
+        if self._sync_workers is None:
+            return False
+        now = self._clock()
+        last = state.get("last_worker_sync")
+        if last and (now - _as_utc(datetime.fromisoformat(last))).total_seconds() < WORKER_RESYNC_SECONDS:
+            return False
+        state["last_worker_sync"] = now.isoformat()
+        try:
+            error = self._sync_workers()
+        except Exception as exception:  # noqa: BLE001 - reported, the wait continues
+            error = str(exception)
+        if error:
+            self._event(run_id, "warning", f"Worker registration with the master failed: {error[:300]}")
+            return False
+        self._event(run_id, "remediation", "Re-registered the workers with the master; they are ready again.")
+        return True
+
     def _cluster_ready(self, run_id: str, state: dict[str, Any]) -> bool:
         """Admission control before any state-changing step: healthy workers, enough memory."""
         cluster = self._cluster()
+        if cluster["not_ready"] and self._resync_workers(run_id, state):
+            cluster = self._cluster()
         problem = None
         if cluster["workers"] == 0 or cluster["not_ready"]:
             problem = f"Workers not ready for training: {', '.join(cluster['not_ready']) or 'none registered'}"

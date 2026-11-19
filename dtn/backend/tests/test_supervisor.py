@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -326,6 +326,7 @@ def make_supervisor(
     slm: FakeSLM,
     clock: Clock | None = None,
     global_evaluate=None,
+    sync_workers=None,
 ) -> Supervisor:
     return Supervisor(
         sessions,
@@ -334,6 +335,7 @@ def make_supervisor(
         model_call=slm,
         memory_cleanup=cluster.cleanup,
         global_evaluate=global_evaluate,
+        sync_workers=sync_workers,
         clock=clock or Clock(),
         preflight_wait_seconds=600,
     )
@@ -903,3 +905,29 @@ def test_topology_sweep_is_a_short_screening_run(sessions) -> None:
     assert sweep["parameters"]["dataset_name"] == "mnist"
     assert sweep["parameters"]["alphas"] == [0.3]
     assert sweep["parameters"]["augmentation"] == "none"
+
+
+def test_workers_left_unregistered_by_a_failed_sync_are_re_registered(sessions) -> None:
+    # A backend restart while a master group runs leaves every worker not ready (HTTP 409).
+    with sessions.begin() as session:
+        for device in session.scalars(select(Device).where(Device.role == "worker")):
+            device.training_ready = False
+            device.training_error = "Master training peer sync failed (HTTP 409)"
+    calls: list[int] = []
+
+    def sync_workers() -> None:
+        calls.append(1)
+        with sessions.begin() as session:
+            for device in session.scalars(select(Device).where(Device.role == "worker")):
+                device.training_ready = True
+                device.training_error = None
+        return None
+
+    cluster = FakeCluster()
+    cluster.accuracy["baseline_training"] = 0.97
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]), sync_workers=sync_workers)
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal())["id"])
+
+    assert finished["status"] == "completed"
+    assert len(calls) == 1
+    assert any("Re-registered the workers" in event["message"] for event in finished["events"])

@@ -214,6 +214,7 @@ def create_app(
             ),
             model_call=supervisor_model_call,
             memory_cleanup=supervisor_memory_cleanup,
+            sync_workers=lambda: sync_training_registry(resolved_settings, sessions),
             global_evaluate=lambda dataset_name, run_id=None: evaluate_newest_models(
                 app.state.datasets,
                 cluster_nodes(resolved_settings, sessions),

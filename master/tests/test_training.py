@@ -1405,7 +1405,7 @@ def test_topology_summary_rescores_history_with_the_groups_own_reward_config(tmp
 CIFAR_CLASSES = [f"class{index}" for index in range(10)]
 
 
-def _small_cnn_seed() -> dict:
+def _small_cnn_seed(dataset: str = "cifar10") -> dict:
     return {
         "id": "baseline-cnn",
         "model_type": "custom",
@@ -1418,14 +1418,21 @@ def _small_cnn_seed() -> dict:
         ],
         "training": {"optimizer": "adam", "learning_rate": 0.001, "batch_size": 8},
         # Report metadata from the installed model is accepted and stripped.
-        "dataset_name": "cifar10",
-        "input_shape": [32, 32, 3],
+        "dataset_name": dataset,
+        "input_shape": [32, 32, 3] if dataset == "cifar10" else [28, 28, 1],
         "classes": CIFAR_CLASSES,
         "num_classes": 10,
     }
 
 
-def _run_federated_nas(tmp_path: Path, federated_scores: dict) -> tuple[dict, list, list]:
+def _run_federated_nas(
+    tmp_path: Path,
+    federated_scores: dict,
+    *,
+    dataset: str = "cifar10",
+    space: str = "extended",
+) -> tuple[dict, list, list]:
+    shape = [32, 32, 3] if dataset == "cifar10" else [28, 28, 1]
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
     calls, federated_runs = [], []
 
@@ -1453,9 +1460,9 @@ def _run_federated_nas(tmp_path: Path, federated_scores: dict) -> tuple[dict, li
             )
         return {
             "node_id": worker.node_id,
-            "dataset_name": "cifar10",
+            "dataset_name": dataset,
             "dataset_classes": CIFAR_CLASSES,
-            "dataset_image_shape": [32, 32, 3],
+            "dataset_image_shape": shape,
             "elapsed_seconds": 4.0,
             "peak_rss_mb": 1000.0,
             "fidelity_epochs": payload["epochs"],
@@ -1488,13 +1495,13 @@ def _run_federated_nas(tmp_path: Path, federated_scores: dict) -> tuple[dict, li
     coordinator._post = fake_post
     coordinator._run_distributed_seed = fake_distributed
     accepted = coordinator.start_dataset_nas(
-        dataset_name="cifar10",
+        dataset_name=dataset,
         search_time_limit_seconds=600,
         seed=17,
         objective="federated",
-        search_space="extended",
-        augmentation="flip_shift",
-        seed_architectures=[_small_cnn_seed()],
+        search_space=space,
+        augmentation="flip_shift" if dataset == "cifar10" else "none",
+        seed_architectures=[_small_cnn_seed(dataset)],
     )
     assert accepted["seed_architecture_ids"] == ["seed-baseline-cnn"]
     deadline = time.monotonic() + 5
@@ -1646,3 +1653,19 @@ def test_undelivered_worker_requests_are_resent_but_maybe_delivered_ones_are_not
     with pytest.raises(TrainingError, match="reset"):
         TrainingCoordinator._request(worker, "/v1/start", payload={"run_id": "r"})
     assert len(calls) == 1  # a started run must not be started twice
+
+
+def test_federated_nas_prefers_the_smaller_of_tied_finalists(tmp_path: Path) -> None:
+    # The seed is far smaller and within the tie tolerance of the best finalist.
+    group, _calls, _runs = _run_federated_nas(tmp_path, {"-c2": 0.620, "seed-": 0.617})
+    assert group["status"] == "completed", group.get("error")
+    assert group["selected_architecture"]["id"] == "seed-baseline-cnn"
+
+
+def test_federated_nas_keeps_the_seed_in_a_full_compact_population(tmp_path: Path) -> None:
+    group, calls, runs = _run_federated_nas(tmp_path, {"seed-": 0.70}, dataset="mnist", space="compact")
+    assert group["status"] == "completed", group.get("error")
+    first_stage = calls[0]["architectures"]
+    assert len(first_stage) == 8 and first_stage[-1]["id"] == "seed-baseline-cnn"
+    assert any(run["architecture"]["id"] == "seed-baseline-cnn" for run in runs)
+

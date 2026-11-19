@@ -305,7 +305,7 @@ def test_worker_search_rejects_time_limit_outside_hard_bounds() -> None:
             np.zeros((10, 32, 32, 3), dtype=np.uint8),
             np.zeros((10,), dtype=np.int64),
             seed=1,
-            time_limit_seconds=301,
+            time_limit_seconds=601,
             node_id="worker1",
             logger=lambda *args, **kwargs: None,
         )

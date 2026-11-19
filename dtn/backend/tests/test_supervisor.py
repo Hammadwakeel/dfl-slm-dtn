@@ -653,7 +653,7 @@ def test_hpo_budget_fits_one_worker_search_request(sessions) -> None:
     supervisor = make_supervisor(sessions, cluster, slm)
     run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
     hpo = next(action for action in cluster.actions if action["action"] == "run_hpo")
-    assert hpo["parameters"]["search_time_limit_seconds"] <= 300
+    assert hpo["parameters"]["search_time_limit_seconds"] <= 600
 
 
 def test_prepare_data_keeps_each_dataset_at_its_native_size(sessions) -> None:

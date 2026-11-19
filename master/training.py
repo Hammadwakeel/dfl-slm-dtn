@@ -945,9 +945,9 @@ class TrainingCoordinator:
             or len(classes) < 2
         ):
             raise ValueError("HPO architecture must carry its dataset input_shape and classes")
-        # One worker search request is capped at MAX_SEARCH_SECONDS (300 s) on the worker.
-        if not 90 <= search_time_limit_seconds <= 300:
-            raise ValueError("HPO search time limit must be between 90 and 300 seconds")
+        # One worker search request is capped at MAX_SEARCH_SECONDS (600 s) on the worker.
+        if not 90 <= search_time_limit_seconds <= 600:
+            raise ValueError("HPO search time limit must be between 90 and 600 seconds")
         if not 0 <= seed <= 2**32 - 1:
             raise ValueError("HPO seed is out of range")
         candidates = hpo_candidates(

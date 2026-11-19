@@ -499,7 +499,7 @@
               "properties": {
                 "dataset_name": {"$ref": "#/$defs/datasetName"},
                 "architecture": {"$ref": "#/$defs/customArchitecture"},
-                "search_time_limit_seconds": {"type": "integer", "minimum": 90, "maximum": 300},
+                "search_time_limit_seconds": {"type": "integer", "minimum": 90, "maximum": 600},
                 "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295}
               },
               "required": ["dataset_name", "architecture"],

@@ -24,7 +24,9 @@ from common.nas import (
 from worker.model_factory import build_dataset_model
 
 
-MAX_SEARCH_SECONDS = 300
+# One search request; the HPO grid of a larger model on the slowest Jetson needs
+# just over 300 s, so allow up to 600 s (a search returns as soon as it is done).
+MAX_SEARCH_SECONDS = 600
 MAX_SEARCH_RSS_MB = 3072
 MIN_SEARCH_AVAILABLE_MEMORY_MB = 1024
 # In-process (CIFAR-10) search shares the long-lived training service, whose RSS

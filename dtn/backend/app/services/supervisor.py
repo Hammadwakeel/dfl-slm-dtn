@@ -687,8 +687,9 @@ class Supervisor:
                 "parameters": {
                     "dataset_name": goal["dataset"],
                     "architecture": architecture,
-                    # A worker evaluates the whole HPO grid in one search request (<= 300 s).
-                    "search_time_limit_seconds": min(300, max(90, int(goal["nas_budget_seconds"]))),
+                    # A worker evaluates the whole HPO grid in one search request (<= 600 s);
+                    # the slowest Jetson needs just over 300 s for a 30k-parameter model.
+                    "search_time_limit_seconds": min(600, max(90, int(goal["nas_budget_seconds"]))),
                     "seed": int(goal["seed"]),
                 },
             }

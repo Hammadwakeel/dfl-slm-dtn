@@ -577,6 +577,18 @@ def test_dataset_training_rejects_invalid_dataset_name(tmp_path: Path) -> None:
         raise AssertionError("Invalid dataset name was accepted")
 
 
+def test_dataset_training_validates_and_records_augmentation(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    with pytest.raises(ValueError, match="augmentation"):
+        coordinator.start_training(rounds=1, epochs=1, dataset_name="cifar10", augmentation="mixup")
+    with pytest.raises(ValueError, match="dataset run"):
+        coordinator.start_training(rounds=1, epochs=1, augmentation="flip_shift")
+    coordinator._run_group = lambda group_id: None
+    started = coordinator.start_training(rounds=1, epochs=1, dataset_name="cifar10", augmentation="flip_shift")
+    assert started["augmentation"] == "flip_shift"
+    assert coordinator.results()["groups"][-1]["augmentation"] == "flip_shift"
+
+
 def test_dataset_training_accepts_validated_custom_model_manifest(tmp_path: Path) -> None:
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
     coordinator._run_distributed_seed = lambda group_id, group, run: None
@@ -662,6 +674,7 @@ def test_dataset_training_forwards_named_shard_and_uses_worker_validation(
         "aggregation": "metropolis",
         "sync_mode": "semi_sync",
         "sync_deadline_seconds": 120,
+        "augmentation": "flip_shift",
         "runs": [
             {
                 "run_id": "dataset-run-seed-2026",
@@ -719,6 +732,7 @@ def test_dataset_training_forwards_named_shard_and_uses_worker_validation(
         and config["aggregation"] == "metropolis"
         and config["sync_mode"] == "semi_sync"
         and config["sync_deadline_seconds"] == 120
+        and config["augmentation"] == "flip_shift"
         for config in config_payloads
     )
     # Dataset runs report worker-local validation metrics; weights are not downloaded.

@@ -36,6 +36,7 @@ def _make_initial_model_bundle(
     *,
     input_shape: tuple[int, int, int] = (8, 8, 1),
     class_names: tuple[str, ...] = ("cat", "dog"),
+    training: dict | None = None,
 ) -> bytes:
     import tensorflow as tf
 
@@ -80,6 +81,8 @@ def _make_initial_model_bundle(
             },
         ],
     }
+    if training is not None:
+        architecture["training"] = training
     weight_buffer = io.BytesIO()
     np.savez_compressed(
         weight_buffer,
@@ -93,6 +96,57 @@ def _make_initial_model_bundle(
         zipped.writestr("architecture.json", json.dumps(architecture).encode("utf-8"))
         zipped.writestr("initial_weights.npz", weight_buffer.getvalue())
     return bundle.getvalue()
+
+
+def _installed_bundle_trainer(tmp_path, training):
+    dataset_name = "settings-run"
+    dataset_path = tmp_path / "datasets" / dataset_name
+    dataset_path.mkdir(parents=True)
+    labels = np.tile(np.arange(2, dtype=np.int64), 10)
+    images = np.linspace(0.0, 1.0, 20 * 8 * 8, dtype=np.float32).reshape(20, 8, 8, 1)
+    np.savez_compressed(
+        dataset_path / "train.npz", images=images, labels=labels, class_names=np.asarray(("cat", "dog"))
+    )
+    shard_path = tmp_path / "default_shard.npz"
+    np.savez(shard_path, images=np.zeros((1, 32, 32, 3), dtype=np.uint8), labels=np.array([0]))
+    config = WorkerConfig(
+        node_id="worker1",
+        api_token="a" * 48,
+        port=5004,
+        data_path=str(shard_path),
+        dataset_root=str(tmp_path / "datasets"),
+        peers=(),
+        log_path=str(tmp_path / "worker.jsonl"),
+    )
+    install_initial_model(config, dataset_name, _make_initial_model_bundle(dataset_name, training=training))
+    return WorkerTrainer(config), dataset_name
+
+
+def test_installed_model_trains_with_its_own_settings_and_run_augmentation_overrides(tmp_path):
+    training = {"optimizer": "adam", "learning_rate": 0.003, "batch_size": 4, "augmentation": "flip_shift"}
+    trainer, dataset_name = _installed_bundle_trainer(tmp_path, training)
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name)
+    trainer._create_run_model("own-settings", 7)
+    audit = trainer._run_model_audits["own-settings"]
+    assert audit["learning_rate"] == pytest.approx(0.003)
+    assert audit["batch_size"] == 4
+    assert audit["augmentation"] == "flip_shift"
+
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name, augmentation="none")
+    trainer._create_run_model("override", 7)
+    assert trainer._run_model_audits["override"]["augmentation"] == "none"
+    with pytest.raises(ValueError, match="augmentation"):
+        trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name, augmentation="mixup")
+
+
+def test_installed_model_without_settings_keeps_worker_defaults(tmp_path):
+    trainer, dataset_name = _installed_bundle_trainer(tmp_path, None)
+    trainer.configure(rounds=1, epochs=1, topology="ring", dataset_name=dataset_name, augmentation="flip_shift")
+    trainer._create_run_model("defaults", 7)
+    audit = trainer._run_model_audits["defaults"]
+    assert audit["learning_rate"] == pytest.approx(0.01)
+    assert audit["batch_size"] == 32
+    assert audit["augmentation"] == "flip_shift"
 
 
 def test_ring_and_mesh_neighbour_sets_are_distinct():

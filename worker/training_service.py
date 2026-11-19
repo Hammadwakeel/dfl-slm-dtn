@@ -43,6 +43,7 @@ from common.auth import is_authorized
 from common.cifar_model import build_cifar10_model, compile_cifar10_model, model_size_bytes
 from common.dataset_nas import smoke_test_architecture
 from common.model_design import (
+    AUGMENTATIONS,
     MAX_MODEL_PARAMETERS,
     MAX_MODEL_WEIGHT_BYTES,
     ModelDesignError,
@@ -959,6 +960,8 @@ class WorkerTrainer:
         self._min_peers = 1
         self._learned_senders: dict[str, tuple[str, ...]] = {}
         self._measure_peers = False
+        # Run-level augmentation override (None = use the architecture's setting).
+        self._augmentation: str | None = None
         self._arrivals: dict[tuple[str, int], dict[str, float]] = {}
 
     def configure_peers(self, peers: tuple[Peer, ...]) -> dict[str, Any]:
@@ -1252,9 +1255,12 @@ class WorkerTrainer:
         min_peers: int = 1,
         learned_senders: dict[str, list[str]] | None = None,
         measure_peers: bool = False,
+        augmentation: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(measure_peers, bool):
             raise ValueError("measure_peers must be a boolean")
+        if augmentation is not None and augmentation not in AUGMENTATIONS:
+            raise ValueError(f"augmentation must be one of {', '.join(AUGMENTATIONS)}")
         senders_map = _validate_learned_senders(learned_senders) if topology == "learned" else {}
         if aggregation not in AGGREGATION_RULES:
             raise ValueError(f"aggregation must be one of {', '.join(AGGREGATION_RULES)}")
@@ -1344,6 +1350,7 @@ class WorkerTrainer:
             self._min_peers = min_peers
             self._learned_senders = senders_map
             self._measure_peers = measure_peers
+            self._augmentation = augmentation
         return {
             "rounds": rounds,
             "epochs": epochs,
@@ -1358,6 +1365,7 @@ class WorkerTrainer:
             "min_peers": min_peers,
             "learned_senders": {key: list(value) for key, value in senders_map.items()},
             "measure_peers": measure_peers,
+            "augmentation": augmentation,
         }
 
     def _measure_peer_models(
@@ -1488,7 +1496,14 @@ class WorkerTrainer:
                 weights_sha256 = metadata["weights_sha256"]
             import tensorflow as tf
 
-            training_settings = self._architecture.get("training", {})
+            # An explicit request (e.g. an HPO result) sets the training settings;
+            # otherwise the installed model trains with its own recorded settings
+            # rather than the worker-wide defaults.
+            training_settings = self._architecture.get("training") or (
+                model_architecture.get("training")
+                if initial_model_loaded and isinstance(model_architecture, dict)
+                else None
+            ) or {}
             optimizer_name = training_settings.get("optimizer", "adam")
             learning_rate = float(
                 training_settings.get(
@@ -1518,7 +1533,9 @@ class WorkerTrainer:
         self._run_architectures[run_id] = model_architecture
         self._results[run_id] = []
         augmentation = "none"
-        if self.dataset_name is not None:
+        if self.dataset_name is not None and self._augmentation is not None:
+            augmentation = self._augmentation
+        elif self.dataset_name is not None:
             requested_training = self._architecture.get("training") or {}
             installed_training = (
                 model_architecture.get("training") if isinstance(model_architecture, dict) else None
@@ -2347,6 +2364,7 @@ def make_handler(config: WorkerConfig, trainer: WorkerTrainer) -> type[BaseHTTPR
                     min_peers=payload.get("min_peers", 1),
                     learned_senders=payload.get("learned_senders"),
                     measure_peers=payload.get("measure_peers", False),
+                    augmentation=payload.get("augmentation"),
                 )
             except RuntimeError as error:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(error)})

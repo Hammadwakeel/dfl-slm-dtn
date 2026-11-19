@@ -77,6 +77,8 @@ DATASET_SPLITS = {
     0.5: "dirichlet_a05",
     0.7: "dirichlet_a07",
 }
+# Run-level data augmentation that workers apply to their training inputs.
+TRAINING_AUGMENTATIONS = ("none", "flip_shift")
 OPTIMIZATION_ALPHAS = (0.1, 0.3, 0.5)
 # Datasets the topology sweep supports. Both use the same fixed 3-block CNN
 # (32/64/64 channels; ~61k parameters on MNIST, ~62k on CIFAR-10) for every
@@ -519,7 +521,12 @@ class TrainingCoordinator:
         aggregation: str | None = None,
         sync_mode: str | None = None,
         sync_deadline_seconds: int | None = None,
+        augmentation: str | None = None,
     ) -> dict[str, Any]:
+        if augmentation is not None and augmentation not in TRAINING_AUGMENTATIONS:
+            raise ValueError(f"augmentation must be one of {', '.join(TRAINING_AUGMENTATIONS)}")
+        if augmentation not in (None, "none") and dataset_name is None:
+            raise ValueError("Data augmentation needs a dataset run")
         if dataset_name is not None and not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", dataset_name
         ):
@@ -612,6 +619,7 @@ class TrainingCoordinator:
                 "sync_deadline_seconds": settings["sync_deadline_seconds"],
                 "nas_enabled": False,
                 "seeds": list(selected_seeds),
+                "augmentation": augmentation,
                 "status": "running",
                 "started_at": time.time(),
                 "completed_at": None,
@@ -637,6 +645,7 @@ class TrainingCoordinator:
             **settings,
             "seeds": list(selected_seeds),
             "dataset_name": dataset_name,
+            "augmentation": augmentation,
         }
 
     def start_nas_experiment(
@@ -1261,6 +1270,8 @@ class TrainingCoordinator:
             configuration["dataset_name"] = group["dataset_name"]
         if group.get("learned_senders"):
             configuration["learned_senders"] = group["learned_senders"]
+        if group.get("augmentation") is not None:
+            configuration["augmentation"] = group["augmentation"]
         if group.get("measure_peers"):
             configuration["measure_peers"] = True
         self._parallel_workers(

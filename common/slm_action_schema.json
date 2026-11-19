@@ -317,7 +317,8 @@
                   "maxItems": 3,
                   "uniqueItems": true,
                   "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
-                }
+                },
+                "augmentation": {"enum": ["none", "flip_shift"]}
               },
               "required": ["rounds", "epochs", "dataset_name"],
               "additionalProperties": false

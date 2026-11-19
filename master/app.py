@@ -861,6 +861,11 @@ def _execute_action(
                         else {}
                     ),
                     **({"seeds": tuple(parameters["seeds"])} if "seeds" in parameters else {}),
+                    **(
+                        {"augmentation": parameters["augmentation"]}
+                        if "augmentation" in parameters
+                        else {}
+                    ),
                 ),
             }
         if name == "stop_training":

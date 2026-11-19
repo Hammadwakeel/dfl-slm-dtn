@@ -753,7 +753,10 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
             aggregation=None,
             sync_mode=None,
             sync_deadline_seconds=None,
+            seeds=None,
         ):
+            if seeds is not None:
+                return {"accepted": True, "seeds": list(seeds)}
             return {
                 "accepted": True,
                 "rounds": rounds,
@@ -811,6 +814,25 @@ def test_training_actions_dispatch_to_configured_worker_coordinator(tmp_path: Pa
         "dataset_name": "mnist",
         "architecture": {"id": "b1_c16_k5", "blocks": 1, "channels": 16, "kernel_size": 5},
     }
+    seeded = client.post(
+        "/command",
+        json={
+            "action": "start_training",
+            "parameters": {"rounds": 3, "epochs": 2, "dataset_name": "cifar10", "seeds": [17, 42, 2026]},
+        },
+        headers=headers,
+    )
+    assert seeded.status_code == 200
+    assert seeded.get_json()["result"]["data"] == {"accepted": True, "seeds": [17, 42, 2026]}
+    too_many = client.post(
+        "/command",
+        json={
+            "action": "start_training",
+            "parameters": {"rounds": 3, "epochs": 2, "dataset_name": "cifar10", "seeds": [1, 2, 3, 4]},
+        },
+        headers=headers,
+    )
+    assert too_many.status_code == 422
     stopped = client.post(
         "/command",
         json={"action": "stop_training", "parameters": {}},

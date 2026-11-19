@@ -47,7 +47,8 @@
       "properties": {
         "optimizer": {"enum": ["adam", "adamw", "sgd", "rmsprop"]},
         "learning_rate": {"type": "number", "minimum": 0.000001, "maximum": 0.1},
-        "batch_size": {"type": "integer", "minimum": 8, "maximum": 256}
+        "batch_size": {"type": "integer", "minimum": 8, "maximum": 256},
+        "augmentation": {"enum": ["none", "flip_shift"]}
       },
       "additionalProperties": false
     },
@@ -309,7 +310,14 @@
                 "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]},
                 "aggregation": {"enum": ["fedavg", "uniform", "metropolis", "trimmed_mean"]},
                 "sync_mode": {"enum": ["sync", "semi_sync"]},
-                "sync_deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 7200}
+                "sync_deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 7200},
+                "seeds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true,
+                  "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+                }
               },
               "required": ["rounds", "epochs", "dataset_name"],
               "additionalProperties": false

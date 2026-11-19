@@ -860,6 +860,7 @@ def _execute_action(
                         if "architecture" in parameters
                         else {}
                     ),
+                    **({"seeds": tuple(parameters["seeds"])} if "seeds" in parameters else {}),
                 ),
             }
         if name == "stop_training":

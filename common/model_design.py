@@ -8,6 +8,10 @@ from typing import Any
 
 MAX_MODEL_PARAMETERS = 20_000_000
 MAX_MODEL_WEIGHT_BYTES = 128 * 1024 * 1024
+# Training-time data augmentation applied by the workers (no model layers, no weights):
+# "flip_shift" = random horizontal flip + random shift of up to 4 pixels (pad and crop),
+# the standard CIFAR-10 recipe. Not meant for digits (a flipped digit is another symbol).
+AUGMENTATIONS = ("none", "flip_shift")
 ACTIVATIONS = {
     "relu",
     "gelu",
@@ -105,6 +109,12 @@ def validate_model_design(
         "learning_rate": float(learning_rate),
         "batch_size": batch_size,
     }
+    augmentation = training.get("augmentation", "none")
+    if augmentation not in AUGMENTATIONS:
+        raise ModelDesignError(f"Augmentation must be one of: {', '.join(AUGMENTATIONS)}")
+    # Recorded only when enabled, so designs without augmentation keep their hashes.
+    if augmentation != "none":
+        normalized_training["augmentation"] = augmentation
     if (
         not isinstance(input_shape, (tuple, list))
         or len(input_shape) != 3

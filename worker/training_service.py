@@ -627,6 +627,43 @@ def install_initial_model(
     return metadata
 
 
+def _augmented_dataset(
+    images: np.ndarray,
+    labels: np.ndarray,
+    *,
+    batch_size: int,
+    seed: int,
+    max_shift: int = 4,
+) -> Any:
+    """Shuffled batches with a random horizontal flip and a random shift of up to
+    ``max_shift`` pixels (reflect-pad, then random crop back to the input size).
+
+    Augmentation only changes the training inputs; the model and its exchanged weights
+    are unchanged, so peers can still average them.
+    """
+    import tensorflow as tf
+
+    height, width, channels = (int(value) for value in images.shape[1:])
+
+    def augment(image: Any, label: Any) -> tuple[Any, Any]:
+        image = tf.image.random_flip_left_right(image)
+        padded = tf.pad(
+            image,
+            [[max_shift, max_shift], [max_shift, max_shift], [0, 0]],
+            mode="REFLECT",
+        )
+        image = tf.image.random_crop(padded, [height, width, channels])
+        return image, label
+
+    return (
+        tf.data.Dataset.from_tensor_slices((images, labels))
+        .shuffle(int(labels.size), seed=seed, reshuffle_each_iteration=True)
+        .map(augment, num_parallel_calls=tf.data.AUTOTUNE)
+        .batch(batch_size)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+
 def _load_installed_dataset_initial_model(
     config: WorkerConfig,
     dataset_name: str,
@@ -1480,9 +1517,21 @@ class WorkerTrainer:
         self._models[run_id] = model
         self._run_architectures[run_id] = model_architecture
         self._results[run_id] = []
+        augmentation = "none"
+        if self.dataset_name is not None:
+            requested_training = self._architecture.get("training") or {}
+            installed_training = (
+                model_architecture.get("training") if isinstance(model_architecture, dict) else None
+            ) or {}
+            augmentation = str(
+                requested_training.get("augmentation")
+                or installed_training.get("augmentation")
+                or "none"
+            )
         self._run_model_audits[run_id] = {
             "learning_rate": float(tf.keras.backend.get_value(model.optimizer.learning_rate)),
             "batch_size": batch_size,
+            "augmentation": augmentation,
             "optimizer": type(model.optimizer).__name__,
             "initial_model_loaded": initial_model_loaded,
             "architecture_sha256": architecture_sha256,
@@ -1726,15 +1775,31 @@ class WorkerTrainer:
                         self.model.stop_training = True
 
             train_started = time.perf_counter()
-            history = model.fit(
-                training_images,
-                training_labels,
-                epochs=epochs,
-                batch_size=int(self._run_model_audits[run_id]["batch_size"]),
-                shuffle=True,
-                verbose=0,
-                callbacks=[StopOnRequest()],
-            )
+            fit_batch_size = int(self._run_model_audits[run_id]["batch_size"])
+            augmentation = self._run_model_audits[run_id].get("augmentation", "none")
+            if augmentation == "flip_shift":
+                training_input = _augmented_dataset(
+                    training_images,
+                    training_labels,
+                    batch_size=fit_batch_size,
+                    seed=int(seed) * 1000 + int(round_index),
+                )
+                history = model.fit(
+                    training_input,
+                    epochs=epochs,
+                    verbose=0,
+                    callbacks=[StopOnRequest()],
+                )
+            else:
+                history = model.fit(
+                    training_images,
+                    training_labels,
+                    epochs=epochs,
+                    batch_size=fit_batch_size,
+                    shuffle=True,
+                    verbose=0,
+                    callbacks=[StopOnRequest()],
+                )
             train_seconds = time.perf_counter() - train_started
             if self._cancel.is_set():
                 raise RuntimeError("Training was cancelled before peer exchange")
@@ -1900,6 +1965,7 @@ class WorkerTrainer:
                 ),
                 "dataset_split": self.dataset_split,
                 "dataset_name": self.dataset_name,
+                "augmentation": self._run_model_audits.get(run_id, {}).get("augmentation", "none"),
                 "local_epochs": epochs,
                 "sample_count": train_sample_count,
                 **self._run_model_audits[run_id],

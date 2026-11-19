@@ -110,3 +110,23 @@ def test_worker_runtime_peer_configuration_rejects_changes_during_training() -> 
 
     with pytest.raises(RuntimeError, match="training is active"):
         trainer.configure_peers(peers)
+
+
+def test_flip_shift_augmentation_keeps_labels_shapes_and_changes_pixels() -> None:
+    import numpy as np
+
+    from worker.training_service import _augmented_dataset
+
+    rng = np.random.default_rng(0)
+    images = rng.random((12, 32, 32, 3), dtype=np.float32)
+    labels = np.arange(12, dtype=np.int64)
+    batches = list(_augmented_dataset(images, labels, batch_size=5, seed=7))
+    assert [int(batch[0].shape[0]) for batch in batches] == [5, 5, 2]
+    assert all(tuple(batch[0].shape[1:]) == (32, 32, 3) for batch in batches)
+    seen = np.concatenate([batch[1].numpy() for batch in batches])
+    assert sorted(seen.tolist()) == labels.tolist()  # every example once per epoch
+    augmented = np.concatenate([batch[0].numpy() for batch in batches])
+    originals = images[seen]
+    assert not np.allclose(augmented, originals)  # flips/shifts actually happened
+    # Reflect padding never invents values outside the source image's range.
+    assert augmented.min() >= images.min() and augmented.max() <= images.max()

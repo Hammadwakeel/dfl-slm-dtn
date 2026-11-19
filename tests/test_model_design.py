@@ -109,3 +109,31 @@ def test_pretrained_deit_and_normalization_are_restricted_and_validated():
             {"method": "standard", "mean": [0.1], "standard_deviation": [0]},
             1,
         )
+
+
+def test_augmentation_is_recorded_only_when_enabled_and_validated():
+    layers = [
+        {"type": "conv2d", "filters": 8, "kernel_size": 3},
+        {"type": "global_average_pooling2d"},
+        {"type": "dense", "units": 10, "activation": "linear"},
+    ]
+    plain, _ = validate_model_design({"model_type": "custom", "layers": layers}, (32, 32, 3), 10)
+    assert "augmentation" not in plain["training"]
+    none, _ = validate_model_design(
+        {"model_type": "custom", "layers": layers, "training": {"augmentation": "none"}},
+        (32, 32, 3),
+        10,
+    )
+    assert none == plain  # explicit "none" keeps the design (and its hash) unchanged
+    augmented, _ = validate_model_design(
+        {"model_type": "custom", "layers": layers, "training": {"augmentation": "flip_shift"}},
+        (32, 32, 3),
+        10,
+    )
+    assert augmented["training"]["augmentation"] == "flip_shift"
+    with pytest.raises(ModelDesignError, match="Augmentation"):
+        validate_model_design(
+            {"model_type": "custom", "layers": layers, "training": {"augmentation": "mixup"}},
+            (32, 32, 3),
+            10,
+        )

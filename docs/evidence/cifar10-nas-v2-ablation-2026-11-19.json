@@ -1,0 +1,1916 @@
+{
+ "description": "CIFAR-10 accuracy and NAS v1/v2 ablation on 8 Jetson workers, Dirichlet alpha 0.3, mesh, seed 2026 (2026-11-19).",
+ "ablation_rounds": {
+  "ablation_plan": {
+   "cifar10": {
+    "plan": {
+     "name": "cifar10",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 30,
+     "final_epochs": 2,
+     "augmentation": "flip_shift",
+     "seed": 2026
+    },
+    "baseline_params": 324394,
+    "nas_v1": {
+     "group_id": "dataset-nas-1795061923-d360c8",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 546,
+     "search_seconds": 513.73,
+     "selected_id": "nas-d2-w16x64-k3-conv-h0-drop35",
+     "selected_params": 10698,
+     "method": "pareto_evolutionary_multifidelity",
+     "search_metric": 0.2889889426331964,
+     "search_local": null,
+     "federated_stage": [],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x32-k3-conv-h64-drop0",
+        8042,
+        0.203,
+        0.203,
+        0.0976
+       ],
+       [
+        "nas-d2-w16x64-k3-conv-h0-drop35",
+        10698,
+        0.2922,
+        0.2922,
+        0.1103
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24586,
+        0.227,
+        0.227,
+        0.1072
+       ],
+       [
+        "nas-d3-w16x16x64-k3-sep-h64-drop35",
+        6933,
+        0.2053,
+        0.2053,
+        0.106
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop20",
+        28842,
+        0.1993,
+        0.1993,
+        0.1106
+       ],
+       [
+        "nas-d3-w32x64x64-k3-sep-h64-drop0",
+        12741,
+        0.1939,
+        0.1939,
+        0.1088
+       ]
+      ],
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h0-drop35",
+        10698,
+        0.289,
+        0.289,
+        0.1132
+       ],
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14858,
+        0.2136,
+        0.2136,
+        0.1004
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24586,
+        0.212,
+        0.212,
+        0.1079
+       ],
+       [
+        "nas-d2-w32x64-k3-sep-h64-drop20",
+        7749,
+        0.2039,
+        0.2039,
+        0.1029
+       ]
+      ]
+     ]
+    },
+    "nas_v2": {
+     "group_id": "dataset-nas-1795062469-199897",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 1267,
+     "search_seconds": 1242.34,
+     "selected_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+     "selected_params": 197290,
+     "method": "pareto_evolutionary_multifidelity_federated",
+     "search_metric": 0.1136875,
+     "search_local": 0.2075609495073465,
+     "federated_stage": [
+      {
+       "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+       "curve": [
+        0.221,
+        0.4305,
+        0.498,
+        0.524,
+        0.5785
+       ],
+       "federated_global_validation_accuracy": 0.5785,
+       "federated_global_validation_min_accuracy": 0.5785,
+       "federated_local_validation_accuracy": 0.5600467364679376,
+       "nas_seed": false,
+       "parameter_count": 197290,
+       "rounds": 5,
+       "run_id": "nas-federated-1-1e18d103",
+       "search_global_validation_accuracy": 0.1136875,
+       "wall_seconds": 156.3
+      },
+      {
+       "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35",
+       "curve": [
+        0.323,
+        0.4115,
+        0.4445,
+        0.4805,
+        0.4965
+       ],
+       "federated_global_validation_accuracy": 0.4965,
+       "federated_global_validation_min_accuracy": 0.4965,
+       "federated_local_validation_accuracy": 0.4779827082404303,
+       "nas_seed": false,
+       "parameter_count": 39818,
+       "rounds": 5,
+       "run_id": "nas-federated-2-871c5ace",
+       "search_global_validation_accuracy": 0.1130625,
+       "wall_seconds": 136.9
+      },
+      {
+       "architecture_id": "seed-baseline",
+       "curve": [
+        0.1,
+        0.203,
+        0.394,
+        0.452,
+        0.5215
+       ],
+       "federated_global_validation_accuracy": 0.5215,
+       "federated_global_validation_min_accuracy": 0.5215,
+       "federated_local_validation_accuracy": 0.4920139749691425,
+       "nas_seed": true,
+       "parameter_count": 324394,
+       "rounds": 5,
+       "run_id": "nas-federated-3-565b36e7",
+       "search_global_validation_accuracy": 0.102625,
+       "wall_seconds": 400.9
+      }
+     ],
+     "generations": [
+      [
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35",
+        39818,
+        0.1128,
+        0.2499,
+        0.1128
+       ],
+       [
+        "nas-d2-w32x128-k3-conv-h64-drop20-c2",
+        204906,
+        0.1058,
+        0.1869,
+        0.1058
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop0",
+        24586,
+        0.1041,
+        0.2001,
+        0.1041
+       ],
+       [
+        "nas-d3-w32x32x128-k3-conv-h64-drop35-c2",
+        223658,
+        0.1001,
+        0.1887,
+        0.1001
+       ],
+       [
+        "nas-d3-w32x64x128-k3-conv-h64-drop20-c2",
+        297706,
+        0.0987,
+        0.1789,
+        0.0987
+       ],
+       [
+        "nas-d3-w32x64x64-k3-conv-h64-drop20",
+        61770,
+        0.1037,
+        0.1993,
+        0.1037
+       ],
+       [
+        "seed-baseline",
+        324394,
+        0.1026,
+        0.1778,
+        0.1026
+       ]
+      ],
+      [
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35",
+        39818,
+        0.1131,
+        0.2401,
+        0.1131
+       ],
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+        197290,
+        0.1137,
+        0.2076,
+        0.1137
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop0",
+        24586,
+        0.1064,
+        0.2064,
+        0.1064
+       ],
+       [
+        "nas-d3-w32x64x128-k3-conv-h64-drop0",
+        103050,
+        0.1072,
+        0.1863,
+        0.1072
+       ]
+      ]
+     ]
+    },
+    "final": {
+     "v1": {
+      "label": "v1",
+      "group_id": "mesh-1795063751-9a789e",
+      "status": "completed",
+      "error": null,
+      "params": 10698,
+      "architecture_id": "nas-d2-w16x64-k3-conv-h0-drop35",
+      "rounds": 30,
+      "run_id": "mesh-seed-2026-8454b03b",
+      "weights_ok": true,
+      "augmentation": [
+       "flip_shift"
+      ],
+      "local": 0.6001308259893104,
+      "global_acc": 0.6035,
+      "weakest": 0.6035,
+      "wall": 381.2300000000001,
+      "curve": [
+       0.254,
+       0.3725,
+       0.3905,
+       0.4235,
+       0.4815,
+       0.4865,
+       0.5025,
+       0.5285,
+       0.5375,
+       0.53,
+       0.536,
+       0.5315,
+       0.526,
+       0.5655,
+       0.562,
+       0.558,
+       0.5575,
+       0.5665,
+       0.5945,
+       0.5865,
+       0.5785,
+       0.595,
+       0.5965,
+       0.6005,
+       0.586,
+       0.599,
+       0.5935,
+       0.5955,
+       0.597,
+       0.6035
+      ],
+      "test_acc": 0.6071,
+      "test_f1": 0.593494,
+      "eval_val": 0.604,
+      "test_workers": 8
+     },
+     "v2": {
+      "label": "v2",
+      "group_id": "mesh-1795064419-4ef192",
+      "status": "failed",
+      "error": "TrainingError: Worker request failed: worker7: Could not reach worker7 for /v1/results?run_id=mesh-seed-2026-0279a36d: <urlopen error [Errno 113] No route to host>",
+      "params": 197290,
+      "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+      "rounds": 0,
+      "run_id": "mesh-seed-2026-0279a36d"
+     },
+     "baseline": {
+      "label": "baseline",
+      "group_id": "mesh-1795064724-cc8bb6",
+      "status": "completed",
+      "error": null,
+      "params": 324394,
+      "architecture_id": null,
+      "rounds": 30,
+      "run_id": "mesh-seed-2026-1dcebb66",
+      "weights_ok": true,
+      "augmentation": [
+       "flip_shift"
+      ],
+      "local": 0.8159196691610433,
+      "global_acc": 0.8215,
+      "weakest": 0.8215,
+      "wall": 3382.4429999999993,
+      "curve": [
+       0.1,
+       0.25,
+       0.4455,
+       0.5165,
+       0.528,
+       0.5785,
+       0.6045,
+       0.6315,
+       0.6925,
+       0.7115,
+       0.71,
+       0.7345,
+       0.747,
+       0.748,
+       0.77,
+       0.7755,
+       0.772,
+       0.7785,
+       0.7825,
+       0.7925,
+       0.8015,
+       0.802,
+       0.804,
+       0.802,
+       0.805,
+       0.806,
+       0.8085,
+       0.803,
+       0.807,
+       0.8215
+      ],
+      "test_acc": 0.8212,
+      "test_f1": 0.820505,
+      "eval_val": 0.829,
+      "test_workers": 8
+     }
+    }
+   },
+   "mnist": {
+    "plan": {
+     "name": "mnist",
+     "split": "dirichlet_a03",
+     "preprocess": true,
+     "final_rounds": 10,
+     "final_epochs": 2,
+     "augmentation": "none",
+     "seed": 2026
+    },
+    "baseline_params": 32794,
+    "nas_v1": {
+     "group_id": "dataset-nas-1795067976-b6c954",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 573,
+     "search_seconds": 549.107,
+     "selected_id": "nas-d3-w16x16x64-k5-sep-h0-drop35",
+     "selected_params": 3251,
+     "method": "pareto_evolutionary_multifidelity",
+     "search_metric": 0.31134166951842596,
+     "search_local": null,
+     "federated_stage": [],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14570,
+        0.1977,
+        0.1977,
+        0.1049
+       ],
+       [
+        "nas-d2-w32x32-k5-conv-h64-drop35",
+        29482,
+        0.284,
+        0.284,
+        0.0999
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24010,
+        0.1997,
+        0.1997,
+        0.101
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20-attn",
+        34154,
+        0.1822,
+        0.1822,
+        0.1
+       ],
+       [
+        "nas-d3-w16x16x32-k5-conv-h64-drop20",
+        22682,
+        0.2919,
+        0.2919,
+        0.1163
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.3302,
+        0.3302,
+        0.1001
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0",
+        28554,
+        0.1896,
+        0.1896,
+        0.1
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0",
+        78890,
+        0.2176,
+        0.2176,
+        0.1225
+       ]
+      ],
+      [
+       [
+        "nas-d3-w16x16x16-k5-conv-h64-drop20",
+        15178,
+        0.2804,
+        0.2804,
+        0.1151
+       ],
+       [
+        "nas-d3-w16x16x32-k5-conv-h64-drop20",
+        22682,
+        0.2104,
+        0.2104,
+        0.1076
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.3113,
+        0.3113,
+        0.1118
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35-attn",
+        14067,
+        0.1889,
+        0.1889,
+        0.1119
+       ]
+      ]
+     ]
+    },
+    "nas_v2": {
+     "group_id": "dataset-nas-1795068547-2030fd",
+     "status": "failed",
+     "error": "TrainingError: Worker request failed: worker2: Could not reach worker2 for /v1/nas/search: <urlopen error [Errno 113] No route to host>; worker4: Could not reach worker4 for /v1/nas/search: <urlopen error [Errno 113] No route to host>; worker7: Could not reach worker7 for /v1/nas/search: <urlopen error [Errno 113] No route to host>",
+     "wall_seconds": 304,
+     "search_seconds": null,
+     "selected_id": null,
+     "selected_params": null,
+     "method": null,
+     "search_metric": null,
+     "search_local": null,
+     "federated_stage": null,
+     "generations": []
+    },
+    "error": "HTTP 502 /api/autonomy/dispatch: {\"detail\":\"Could not reach worker8 to check training status: <urlopen error timed out>\"}"
+   }
+  },
+  "ablation3_plan": {
+   "mnist-orig-finals": {
+    "plan": {
+     "label": "mnist-orig-finals",
+     "name": "mnist",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 10,
+     "final_epochs": 2,
+     "augmentation": "none",
+     "seed": 2026,
+     "versions": [],
+     "reuse": {
+      "v1": "dataset-nas-1795067976-b6c954"
+     },
+     "finals": [
+      "v1",
+      "baseline"
+     ]
+    },
+    "error": "HTTP 502 /api/autonomy/dispatch: {\"detail\":\"worker1 already has a different initial model for mnist\"}"
+   },
+   "cifar10-v2-buggyscreen-final": {
+    "plan": {
+     "label": "cifar10-v2-buggyscreen-final",
+     "name": "cifar10",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 30,
+     "final_epochs": 2,
+     "augmentation": "flip_shift",
+     "seed": 2026,
+     "versions": [],
+     "reuse": {
+      "v2": "dataset-nas-1795062469-199897"
+     },
+     "finals": [
+      "v2"
+     ]
+    },
+    "baseline_params": 324394,
+    "nas_v2": {
+     "group_id": "dataset-nas-1795062469-199897",
+     "reused": true,
+     "selected_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+     "selected_params": 197290
+    },
+    "final": {
+     "v2": {
+      "label": "v2",
+      "group_id": "mesh-1795073605-36cb48",
+      "status": "completed",
+      "error": null,
+      "params": 197290,
+      "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+      "rounds": 30,
+      "run_id": "mesh-seed-2026-7e931713",
+      "weights_ok": true,
+      "augmentation": [
+       "flip_shift"
+      ],
+      "local": 0.7909197662233708,
+      "global_acc": 0.8005,
+      "weakest": 0.8005,
+      "wall": 854.017,
+      "curve": [
+       0.1865,
+       0.451,
+       0.4905,
+       0.5295,
+       0.578,
+       0.638,
+       0.6395,
+       0.683,
+       0.6725,
+       0.687,
+       0.7105,
+       0.708,
+       0.7275,
+       0.7375,
+       0.732,
+       0.753,
+       0.763,
+       0.769,
+       0.7715,
+       0.7675,
+       0.7755,
+       0.793,
+       0.7875,
+       0.7865,
+       0.789,
+       0.7955,
+       0.799,
+       0.798,
+       0.7985,
+       0.8005
+      ],
+      "test_acc": 0.7959,
+      "test_f1": 0.794659,
+      "eval_val": 0.8004,
+      "test_workers": 8
+     }
+    }
+   },
+   "cifar10-fixed": {
+    "plan": {
+     "label": "cifar10-fixed",
+     "name": "cifar10",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 30,
+     "final_epochs": 2,
+     "augmentation": "flip_shift",
+     "seed": 2026,
+     "versions": [
+      "v1",
+      "v2"
+     ],
+     "finals": [
+      "v1",
+      "v2"
+     ]
+    },
+    "baseline_params": 324394,
+    "nas_v1": {
+     "group_id": "dataset-nas-1795074486-7f592c",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 524,
+     "search_seconds": 499.264,
+     "selected_id": "nas-d3-w16x32x64-k3-conv-h64-drop20",
+     "selected_params": 28842,
+     "method": "pareto_evolutionary_multifidelity",
+     "search_metric": 0.7114965635450305,
+     "search_local": null,
+     "federated_stage": [],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x32-k3-conv-h64-drop0",
+        8042,
+        0.6371,
+        0.6371,
+        0.2319
+       ],
+       [
+        "nas-d2-w16x64-k3-conv-h0-drop35",
+        10698,
+        0.6498,
+        0.6498,
+        0.2388
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24586,
+        0.6123,
+        0.6123,
+        0.2244
+       ],
+       [
+        "nas-d3-w16x16x64-k3-sep-h64-drop35",
+        6933,
+        0.5562,
+        0.5562,
+        0.1912
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop20",
+        28842,
+        0.6435,
+        0.6435,
+        0.2403
+       ],
+       [
+        "nas-d3-w32x64x64-k3-sep-h64-drop0",
+        12741,
+        0.5437,
+        0.5437,
+        0.2214
+       ]
+      ],
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h0-drop35",
+        10698,
+        0.6887,
+        0.6887,
+        0.2767
+       ],
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14858,
+        0.6849,
+        0.6849,
+        0.2677
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop20",
+        28842,
+        0.7115,
+        0.7115,
+        0.2903
+       ],
+       [
+        "nas-d3-w16x32x64-k3-sep-h64-drop20",
+        8437,
+        0.6831,
+        0.6831,
+        0.2762
+       ]
+      ]
+     ]
+    },
+    "nas_v2": {
+     "group_id": "dataset-nas-1795075010-d39994",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 1180,
+     "search_seconds": 1163.043,
+     "selected_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+     "selected_params": 197290,
+     "method": "pareto_evolutionary_multifidelity_federated",
+     "search_metric": 0.2829375,
+     "search_local": 0.6970887278717159,
+     "federated_stage": [
+      {
+       "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+       "curve": [
+        0.2275,
+        0.452,
+        0.4975,
+        0.5385,
+        0.571
+       ],
+       "federated_global_validation_accuracy": 0.571,
+       "federated_global_validation_min_accuracy": 0.571,
+       "federated_local_validation_accuracy": 0.5625735145719494,
+       "nas_seed": false,
+       "parameter_count": 197290,
+       "rounds": 5,
+       "run_id": "nas-federated-1-58ef901f",
+       "search_global_validation_accuracy": 0.2829375,
+       "wall_seconds": 143.2
+      },
+      {
+       "architecture_id": "nas-d3-w32x64x128-k3-conv-h64-drop0",
+       "curve": [
+        0.196,
+        0.421,
+        0.4925,
+        0.52,
+        0.5605
+       ],
+       "federated_global_validation_accuracy": 0.5605,
+       "federated_global_validation_min_accuracy": 0.5605,
+       "federated_local_validation_accuracy": 0.5457639026292715,
+       "nas_seed": false,
+       "parameter_count": 103050,
+       "rounds": 5,
+       "run_id": "nas-federated-2-b19df434",
+       "search_global_validation_accuracy": 0.27543750000000006,
+       "wall_seconds": 161.1
+      },
+      {
+       "architecture_id": "seed-baseline",
+       "curve": [
+        0.1,
+        0.212,
+        0.396,
+        0.493,
+        0.516
+       ],
+       "federated_global_validation_accuracy": 0.516,
+       "federated_global_validation_min_accuracy": 0.516,
+       "federated_local_validation_accuracy": 0.48804004050149485,
+       "nas_seed": true,
+       "parameter_count": 324394,
+       "rounds": 5,
+       "run_id": "nas-federated-3-f1f16954",
+       "search_global_validation_accuracy": 0.23431249999999998,
+       "wall_seconds": 383.6
+      }
+     ],
+     "generations": [
+      [
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35",
+        39818,
+        0.2382,
+        0.6071,
+        0.2382
+       ],
+       [
+        "nas-d2-w32x128-k3-conv-h64-drop20-c2",
+        204906,
+        0.2297,
+        0.6065,
+        0.2297
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop0",
+        24586,
+        0.2345,
+        0.6238,
+        0.2345
+       ],
+       [
+        "nas-d3-w32x32x128-k3-conv-h64-drop35-c2",
+        223658,
+        0.2204,
+        0.6085,
+        0.2204
+       ],
+       [
+        "nas-d3-w32x64x128-k3-conv-h64-drop20-c2",
+        297706,
+        0.2331,
+        0.6275,
+        0.2331
+       ],
+       [
+        "nas-d3-w32x64x64-k3-conv-h64-drop20",
+        61770,
+        0.2278,
+        0.6197,
+        0.2278
+       ],
+       [
+        "seed-baseline",
+        324394,
+        0.2343,
+        0.6018,
+        0.2343
+       ]
+      ],
+      [
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35",
+        39818,
+        0.2531,
+        0.6676,
+        0.2531
+       ],
+       [
+        "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+        197290,
+        0.2829,
+        0.6971,
+        0.2829
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop0",
+        24586,
+        0.2578,
+        0.667,
+        0.2578
+       ],
+       [
+        "nas-d3-w32x64x128-k3-conv-h64-drop0",
+        103050,
+        0.2754,
+        0.6855,
+        0.2754
+       ]
+      ]
+     ]
+    },
+    "final": {
+     "v1": {
+      "label": "v1",
+      "group_id": "mesh-1795076201-87d893",
+      "status": "completed",
+      "error": null,
+      "params": 28842,
+      "architecture_id": "nas-d3-w16x32x64-k3-conv-h64-drop20",
+      "rounds": 30,
+      "run_id": "mesh-seed-2026-fca16c62",
+      "weights_ok": true,
+      "augmentation": [
+       "flip_shift"
+      ],
+      "local": 0.6695581423232053,
+      "global_acc": 0.6765,
+      "weakest": 0.6765,
+      "wall": 514.667,
+      "curve": [
+       0.2297,
+       0.3685,
+       0.4485,
+       0.4725,
+       0.491,
+       0.5115,
+       0.5175,
+       0.5552,
+       0.5665,
+       0.5685,
+       0.597,
+       0.597,
+       0.593,
+       0.6078,
+       0.5985,
+       0.6045,
+       0.622,
+       0.624,
+       0.6395,
+       0.646,
+       0.635,
+       0.646,
+       0.6627,
+       0.6465,
+       0.659,
+       0.6522,
+       0.655,
+       0.6785,
+       0.666,
+       0.6765
+      ],
+      "test_acc": 0.6791,
+      "test_f1": 0.673439,
+      "eval_val": 0.6822,
+      "test_workers": 8
+     },
+     "v2": {
+      "label": "v2",
+      "group_id": "mesh-1795076800-019c6d",
+      "status": "completed",
+      "error": null,
+      "params": 197290,
+      "architecture_id": "nas-d2-w32x128-k3-conv-h0-drop35-c2",
+      "rounds": 30,
+      "run_id": "mesh-seed-2026-579cb394",
+      "weights_ok": true,
+      "augmentation": [
+       "flip_shift"
+      ],
+      "local": 0.7957676609837967,
+      "global_acc": 0.8065,
+      "weakest": 0.8065,
+      "wall": 981.197,
+      "curve": [
+       0.181,
+       0.463,
+       0.5015,
+       0.5355,
+       0.59,
+       0.62,
+       0.6385,
+       0.6695,
+       0.6855,
+       0.689,
+       0.6985,
+       0.709,
+       0.7325,
+       0.74,
+       0.736,
+       0.7505,
+       0.757,
+       0.7645,
+       0.759,
+       0.7645,
+       0.7825,
+       0.7785,
+       0.7955,
+       0.789,
+       0.788,
+       0.8035,
+       0.797,
+       0.7995,
+       0.7985,
+       0.8065
+      ],
+      "test_acc": 0.8027,
+      "test_f1": 0.801665,
+      "eval_val": 0.8058,
+      "test_workers": 8
+     }
+    }
+   },
+   "mnist-fixed": {
+    "plan": {
+     "label": "mnist-fixed",
+     "name": "mnist",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 10,
+     "final_epochs": 2,
+     "augmentation": "none",
+     "seed": 2026,
+     "versions": [
+      "v1",
+      "v2"
+     ],
+     "finals": [
+      "v1",
+      "v2"
+     ]
+    },
+    "baseline_params": 32794,
+    "nas_v1": {
+     "group_id": "dataset-nas-1795077777-128011",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 500,
+     "search_seconds": 490.485,
+     "selected_id": "nas-d3-w32x32x64-k5-conv-h0-drop0",
+     "selected_params": 78890,
+     "method": "pareto_evolutionary_multifidelity",
+     "search_metric": 0.9811592819916538,
+     "search_local": null,
+     "federated_stage": [],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14570,
+        0.8995,
+        0.8995,
+        0.4036
+       ],
+       [
+        "nas-d2-w32x32-k5-conv-h64-drop35",
+        29482,
+        0.9396,
+        0.9396,
+        0.4644
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24010,
+        0.8791,
+        0.8791,
+        0.3981
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20-attn",
+        34154,
+        0.9211,
+        0.9211,
+        0.4394
+       ],
+       [
+        "nas-d3-w16x16x32-k5-conv-h64-drop20",
+        22682,
+        0.9677,
+        0.9677,
+        0.5331
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.9432,
+        0.9432,
+        0.4779
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0",
+        28554,
+        0.9575,
+        0.9575,
+        0.5366
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0",
+        78890,
+        0.9761,
+        0.9761,
+        0.6071
+       ]
+      ],
+      [
+       [
+        "nas-d3-w16x16x16-k5-sep-h0-drop35",
+        1763,
+        0.9507,
+        0.9507,
+        0.5147
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.972,
+        0.972,
+        0.5896
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0",
+        78890,
+        0.9812,
+        0.9812,
+        0.6772
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0-attn",
+        89706,
+        0.9754,
+        0.9754,
+        0.6547
+       ]
+      ]
+     ]
+    },
+    "nas_v2": {
+     "group_id": "dataset-nas-1795078277-657ed8",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 787,
+     "search_seconds": 756.062,
+     "selected_id": "nas-d3-w32x32x64-k5-conv-h0-drop0-attn",
+     "selected_params": 89706,
+     "method": "pareto_evolutionary_multifidelity_federated",
+     "search_metric": 0.6656249999999999,
+     "search_local": 0.9792219729170266,
+     "federated_stage": [
+      {
+       "architecture_id": "nas-d3-w32x32x64-k5-conv-h0-drop0",
+       "curve": [
+        0.2305,
+        0.9115,
+        0.9625,
+        0.969,
+        0.979
+       ],
+       "federated_global_validation_accuracy": 0.979,
+       "federated_global_validation_min_accuracy": 0.979,
+       "federated_local_validation_accuracy": 0.9785366212044745,
+       "nas_seed": false,
+       "parameter_count": 78890,
+       "rounds": 5,
+       "run_id": "nas-federated-1-075ac872",
+       "search_global_validation_accuracy": 0.6819999999999999,
+       "wall_seconds": 95.5
+      },
+      {
+       "architecture_id": "nas-d3-w32x32x64-k5-conv-h0-drop0-attn",
+       "curve": [
+        0.141,
+        0.887,
+        0.959,
+        0.97,
+        0.98
+       ],
+       "federated_global_validation_accuracy": 0.98,
+       "federated_global_validation_min_accuracy": 0.98,
+       "federated_local_validation_accuracy": 0.9821397881741254,
+       "nas_seed": false,
+       "parameter_count": 89706,
+       "rounds": 5,
+       "run_id": "nas-federated-2-69efe173",
+       "search_global_validation_accuracy": 0.6656249999999999,
+       "wall_seconds": 162.7
+      }
+     ],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14570,
+        0.4154,
+        0.9015,
+        0.4154
+       ],
+       [
+        "nas-d2-w32x32-k5-conv-h64-drop35",
+        29482,
+        0.4516,
+        0.926,
+        0.4516
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24010,
+        0.4093,
+        0.8898,
+        0.4093
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20-attn",
+        34154,
+        0.4375,
+        0.9201,
+        0.4375
+       ],
+       [
+        "nas-d3-w16x16x32-k5-conv-h64-drop20",
+        22682,
+        0.5236,
+        0.9592,
+        0.5236
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.4767,
+        0.9431,
+        0.4767
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0",
+        28554,
+        0.5236,
+        0.9537,
+        0.5236
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0",
+        78890,
+        0.6101,
+        0.9738,
+        0.6101
+       ]
+      ],
+      [
+       [
+        "nas-d3-w16x16x16-k5-sep-h0-drop35",
+        1763,
+        0.515,
+        0.9517,
+        0.515
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.5801,
+        0.9698,
+        0.5801
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0",
+        78890,
+        0.682,
+        0.9844,
+        0.682
+       ],
+       [
+        "nas-d3-w32x32x64-k5-conv-h0-drop0-attn",
+        89706,
+        0.6656,
+        0.9792,
+        0.6656
+       ]
+      ]
+     ]
+    },
+    "final": {
+     "v1": {
+      "label": "v1",
+      "group_id": "mesh-1795079070-55f160",
+      "status": "completed",
+      "error": null,
+      "params": 78890,
+      "architecture_id": "nas-d3-w32x32x64-k5-conv-h0-drop0",
+      "rounds": 10,
+      "run_id": "mesh-seed-2026-c7ac5213",
+      "weights_ok": true,
+      "augmentation": [
+       "none"
+      ],
+      "local": 0.9904696832481124,
+      "global_acc": 0.9885,
+      "weakest": 0.9885,
+      "wall": 165.18,
+      "curve": [
+       0.154,
+       0.9405,
+       0.975,
+       0.9775,
+       0.98,
+       0.9815,
+       0.9815,
+       0.984,
+       0.9855,
+       0.9885
+      ],
+      "test_acc": 0.9899,
+      "test_f1": 0.989917,
+      "eval_val": 0.986664,
+      "test_workers": 8
+     },
+     "v2": {
+      "label": "v2",
+      "group_id": "mesh-1795079298-a811e9",
+      "status": "completed",
+      "error": null,
+      "params": 89706,
+      "architecture_id": "nas-d3-w32x32x64-k5-conv-h0-drop0-attn",
+      "rounds": 10,
+      "run_id": "mesh-seed-2026-539db628",
+      "weights_ok": true,
+      "augmentation": [
+       "none"
+      ],
+      "local": 0.9889002871875677,
+      "global_acc": 0.9835,
+      "weakest": 0.9835,
+      "wall": 255.01299999999998,
+      "curve": [
+       0.1295,
+       0.885,
+       0.9515,
+       0.9775,
+       0.9825,
+       0.985,
+       0.9865,
+       0.9835,
+       0.987,
+       0.9835
+      ],
+      "test_acc": 0.9893,
+      "test_f1": 0.989255,
+      "eval_val": 0.985831,
+      "test_workers": 8
+     }
+    }
+   }
+  },
+  "ablation4_plan": {
+   "mnist-orig-finals": {
+    "plan": {
+     "label": "mnist-orig-finals",
+     "name": "mnist",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 10,
+     "final_epochs": 2,
+     "augmentation": "none",
+     "seed": 2026,
+     "versions": [],
+     "reuse": {
+      "v1": "dataset-nas-1795067976-b6c954"
+     },
+     "finals": [
+      "v1",
+      "baseline"
+     ]
+    },
+    "baseline_params": 32794,
+    "nas_v1": {
+     "group_id": "dataset-nas-1795067976-b6c954",
+     "reused": true,
+     "selected_id": "nas-d3-w16x16x64-k5-sep-h0-drop35",
+     "selected_params": 3251
+    },
+    "final": {
+     "v1": {
+      "label": "v1",
+      "group_id": "mesh-1795080242-603301",
+      "status": "completed",
+      "error": null,
+      "params": 3251,
+      "architecture_id": "nas-d3-w16x16x64-k5-sep-h0-drop35",
+      "rounds": 10,
+      "run_id": "mesh-seed-2026-ebecfac5",
+      "weights_ok": true,
+      "augmentation": [
+       "none"
+      ],
+      "local": 0.9506916442866049,
+      "global_acc": 0.9545,
+      "weakest": 0.9545,
+      "wall": 119.401,
+      "curve": [
+       0.1,
+       0.5875,
+       0.8235,
+       0.8955,
+       0.932,
+       0.937,
+       0.9485,
+       0.9485,
+       0.951,
+       0.9545
+      ],
+      "test_acc": 0.9548,
+      "test_f1": 0.954689,
+      "eval_val": 0.948325,
+      "test_workers": 8
+     },
+     "baseline": {
+      "label": "baseline",
+      "group_id": "mesh-1795080457-323e43",
+      "status": "completed",
+      "error": null,
+      "params": 32794,
+      "architecture_id": null,
+      "rounds": 10,
+      "run_id": "mesh-seed-2026-d87a4065",
+      "weights_ok": true,
+      "augmentation": [
+       "none"
+      ],
+      "local": 0.9845685492028324,
+      "global_acc": 0.9865,
+      "weakest": 0.9865,
+      "wall": 313.038,
+      "curve": [
+       0.1,
+       0.74,
+       0.922,
+       0.9675,
+       0.9755,
+       0.9815,
+       0.982,
+       0.9825,
+       0.9835,
+       0.9865
+      ],
+      "test_acc": 0.9855,
+      "test_f1": 0.985516,
+      "eval_val": 0.983497,
+      "test_workers": 8
+     }
+    }
+   }
+  },
+  "ablation5_plan": {
+   "mnist-v2-seedfix": {
+    "plan": {
+     "label": "mnist-v2-seedfix",
+     "name": "mnist",
+     "split": "dirichlet_a03",
+     "preprocess": false,
+     "final_rounds": 10,
+     "final_epochs": 2,
+     "augmentation": "none",
+     "seed": 2026,
+     "versions": [
+      "v2"
+     ],
+     "finals": [
+      "v2"
+     ]
+    },
+    "baseline_params": 32794,
+    "nas_v2": {
+     "group_id": "dataset-nas-1795080913-0548b3",
+     "status": "completed",
+     "error": null,
+     "wall_seconds": 968,
+     "search_seconds": 937.315,
+     "selected_id": "seed-baseline",
+     "selected_params": 32794,
+     "method": "pareto_evolutionary_multifidelity_federated",
+     "search_metric": 0.5184375,
+     "search_local": 0.954601607845015,
+     "federated_stage": [
+      {
+       "architecture_id": "nas-d3-w16x32x64-k3-conv-h64-drop0",
+       "curve": [
+        0.2665,
+        0.859,
+        0.943,
+        0.9635,
+        0.966
+       ],
+       "federated_global_validation_accuracy": 0.966,
+       "federated_global_validation_min_accuracy": 0.966,
+       "federated_local_validation_accuracy": 0.9623732315667632,
+       "nas_seed": false,
+       "parameter_count": 28554,
+       "rounds": 5,
+       "run_id": "nas-federated-1-39e6f275",
+       "search_global_validation_accuracy": 0.6396249999999999,
+       "wall_seconds": 81.7
+      },
+      {
+       "architecture_id": "nas-d3-w16x32x64-k3-conv-h64-drop0-attn",
+       "curve": [
+        0.1665,
+        0.801,
+        0.929,
+        0.9685,
+        0.978
+       ],
+       "federated_global_validation_accuracy": 0.978,
+       "federated_global_validation_min_accuracy": 0.978,
+       "federated_local_validation_accuracy": 0.9707547925111492,
+       "nas_seed": false,
+       "parameter_count": 37642,
+       "rounds": 5,
+       "run_id": "nas-federated-2-ce84673a",
+       "search_global_validation_accuracy": 0.6153125000000002,
+       "wall_seconds": 175.4
+      },
+      {
+       "architecture_id": "seed-baseline",
+       "curve": [
+        0.142,
+        0.7715,
+        0.933,
+        0.9735,
+        0.9735
+       ],
+       "federated_global_validation_accuracy": 0.9735,
+       "federated_global_validation_min_accuracy": 0.9735,
+       "federated_local_validation_accuracy": 0.9743507739365834,
+       "nas_seed": true,
+       "parameter_count": 32794,
+       "rounds": 5,
+       "run_id": "nas-federated-3-f65f7674",
+       "search_global_validation_accuracy": 0.5184375,
+       "wall_seconds": 172.3
+      }
+     ],
+     "generations": [
+      [
+       [
+        "nas-d2-w16x64-k3-conv-h64-drop35",
+        14570,
+        0.3983,
+        0.9037,
+        0.3983
+       ],
+       [
+        "nas-d2-w32x32-k5-conv-h64-drop35",
+        29482,
+        0.4514,
+        0.9183,
+        0.4514
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20",
+        24010,
+        0.4053,
+        0.8878,
+        0.4053
+       ],
+       [
+        "nas-d2-w32x64-k3-conv-h64-drop20-attn",
+        34154,
+        0.4438,
+        0.9076,
+        0.4438
+       ],
+       [
+        "nas-d3-w16x16x32-k5-conv-h64-drop20",
+        22682,
+        0.5249,
+        0.9648,
+        0.5249
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.4753,
+        0.9393,
+        0.4753
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0",
+        28554,
+        0.542,
+        0.9627,
+        0.542
+       ],
+       [
+        "seed-baseline",
+        32794,
+        0.5184,
+        0.9546,
+        0.5184
+       ]
+      ],
+      [
+       [
+        "nas-d3-w16x16x16-k5-sep-h0-drop35",
+        1763,
+        0.5154,
+        0.9538,
+        0.5154
+       ],
+       [
+        "nas-d3-w16x16x64-k5-sep-h0-drop35",
+        3251,
+        0.5887,
+        0.9685,
+        0.5887
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0",
+        28554,
+        0.6396,
+        0.9749,
+        0.6396
+       ],
+       [
+        "nas-d3-w16x32x64-k3-conv-h64-drop0-attn",
+        37642,
+        0.6153,
+        0.9744,
+        0.6153
+       ]
+      ]
+     ]
+    },
+    "final": {
+     "v2": {
+      "label": "v2",
+      "group_id": "mesh-1795081882-c7d856",
+      "status": "completed",
+      "error": null,
+      "params": 32794,
+      "architecture_id": "seed-baseline",
+      "rounds": 10,
+      "run_id": "mesh-seed-2026-8b3d0cef",
+      "weights_ok": true,
+      "augmentation": [
+       "none"
+      ],
+      "local": 0.9818679558452897,
+      "global_acc": 0.9825,
+      "weakest": 0.9825,
+      "wall": 320.087,
+      "curve": [
+       0.1,
+       0.77,
+       0.9115,
+       0.962,
+       0.9735,
+       0.9775,
+       0.9795,
+       0.9815,
+       0.9845,
+       0.9825
+      ],
+      "test_acc": 0.9839,
+      "test_f1": 0.983878,
+      "eval_val": 0.98133,
+      "test_workers": 8
+     }
+    }
+   }
+  }
+ },
+ "augmentation_runs": {
+  "cifar_phase1.json": [
+   {
+    "job": {
+     "name": "cnn61-aug-mesh-s2026",
+     "arch": "cnn61",
+     "aug": true,
+     "topology": "mesh",
+     "rounds": 30,
+     "epochs": 2,
+     "seeds": [
+      2026
+     ]
+    },
+    "group_id": "mesh-1795054737-551b10",
+    "rows": [
+     {
+      "seed": 2026,
+      "run_id": "mesh-seed-2026-509de2d6",
+      "status": "failed",
+      "rounds": 16,
+      "local": 0.6556748745350254,
+      "global": 0.6715,
+      "weakest": 0.6715,
+      "aug": [
+       "flip_shift"
+      ],
+      "params": [
+       61770
+      ],
+      "wall": 363.97300000000007,
+      "curve": [
+       0.2135,
+       0.379,
+       0.437,
+       0.513,
+       0.5355,
+       0.5525,
+       0.558,
+       0.5865,
+       0.599,
+       0.6275,
+       0.6235,
+       0.6415,
+       0.64,
+       0.655,
+       0.6745,
+       0.6715
+      ]
+     }
+    ]
+   },
+   {
+    "job": {
+     "name": "vgg6-aug-mesh-s2026",
+     "arch": "vgg6",
+     "aug": true,
+     "topology": "mesh",
+     "rounds": 30,
+     "epochs": 2,
+     "seeds": [
+      2026
+     ]
+    },
+    "group_id": "mesh-1795055388-140dd1",
+    "rows": [
+     {
+      "seed": 2026,
+      "run_id": "mesh-seed-2026-84cde4ec",
+      "status": "completed",
+      "rounds": 30,
+      "local": 0.825784645056844,
+      "global": 0.8420624999999999,
+      "weakest": 0.842,
+      "aug": [
+       "flip_shift"
+      ],
+      "params": [
+       324394
+      ],
+      "wall": 1150.601,
+      "curve": [
+       0.1415,
+       0.3885,
+       0.501,
+       0.5495,
+       0.598,
+       0.622,
+       0.647,
+       0.673,
+       0.6915,
+       0.7275,
+       0.7355,
+       0.7615,
+       0.7535,
+       0.781,
+       0.7744,
+       0.7879,
+       0.801,
+       0.8065,
+       0.8175,
+       0.8189,
+       0.8135,
+       0.8205,
+       0.8355,
+       0.833,
+       0.828,
+       0.8335,
+       0.833,
+       0.832,
+       0.8375,
+       0.8421
+      ],
+      "eval_validation_mean": 0.841,
+      "eval_validation_f1": 0.840629,
+      "eval_validation_min": 0.841,
+      "eval_validation_n": 8,
+      "eval_test_mean": 0.8285,
+      "eval_test_f1": 0.827583,
+      "eval_test_min": 0.8285,
+      "eval_test_n": 8
+     }
+    ]
+   },
+   {
+    "job": {
+     "name": "vgg6-noaug-mesh-s2026",
+     "arch": "vgg6",
+     "aug": false,
+     "topology": "mesh",
+     "rounds": 30,
+     "epochs": 2,
+     "seeds": [
+      2026
+     ]
+    },
+    "group_id": "mesh-1795056980-2a3c5b",
+    "rows": [
+     {
+      "seed": 2026,
+      "run_id": "mesh-seed-2026-89f3df6f",
+      "status": "completed",
+      "rounds": 30,
+      "local": 0.7580427491290493,
+      "global": 0.7685,
+      "weakest": 0.7685,
+      "aug": [
+       "none"
+      ],
+      "params": [
+       324394
+      ],
+      "wall": 1107.9619999999998,
+      "curve": [
+       0.1,
+       0.4195,
+       0.5119,
+       0.5796,
+       0.605,
+       0.6285,
+       0.6585,
+       0.671,
+       0.6995,
+       0.711,
+       0.727,
+       0.721,
+       0.7355,
+       0.7585,
+       0.76,
+       0.7715,
+       0.7725,
+       0.759,
+       0.7575,
+       0.7645,
+       0.756,
+       0.7779,
+       0.764,
+       0.7696,
+       0.7604,
+       0.7675,
+       0.762,
+       0.7455,
+       0.759,
+       0.7685
+      ],
+      "eval_validation_mean": 0.7732,
+      "eval_validation_f1": 0.770504,
+      "eval_validation_min": 0.7732,
+      "eval_validation_n": 8,
+      "eval_test_mean": 0.7524,
+      "eval_test_f1": 0.749238,
+      "eval_test_min": 0.7524,
+      "eval_test_n": 8
+     }
+    ]
+   }
+  ],
+  "cifar_rerun.json": [
+   {
+    "job": {
+     "name": "cnn61-aug-mesh-s2026",
+     "arch": "cnn61",
+     "aug": true,
+     "topology": "mesh",
+     "rounds": 30,
+     "epochs": 2,
+     "seeds": [
+      2026
+     ]
+    },
+    "group_id": "mesh-1795079645-10c061",
+    "rows": [
+     {
+      "seed": 2026,
+      "run_id": "mesh-seed-2026-4d41034f",
+      "status": "completed",
+      "rounds": 30,
+      "local": 0.7164989502110557,
+      "global": 0.7265,
+      "weakest": 0.7265,
+      "aug": [
+       "flip_shift"
+      ],
+      "params": [
+       61770
+      ],
+      "wall": 539.793,
+      "curve": [
+       0.178,
+       0.369,
+       0.4527,
+       0.49,
+       0.526,
+       0.564,
+       0.5665,
+       0.5995,
+       0.5995,
+       0.5985,
+       0.616,
+       0.6235,
+       0.639,
+       0.6345,
+       0.6415,
+       0.657,
+       0.6545,
+       0.6685,
+       0.6845,
+       0.6785,
+       0.694,
+       0.6995,
+       0.694,
+       0.6965,
+       0.7155,
+       0.713,
+       0.708,
+       0.7145,
+       0.717,
+       0.7265
+      ],
+      "eval_validation_mean": 0.7316,
+      "eval_validation_f1": 0.729361,
+      "eval_validation_min": 0.7316,
+      "eval_validation_n": 8,
+      "eval_test_mean": 0.7295,
+      "eval_test_f1": 0.727496,
+      "eval_test_min": 0.7295,
+      "eval_test_n": 8
+     }
+    ]
+   }
+  ]
+ }
+}

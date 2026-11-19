@@ -260,7 +260,7 @@ def test_initial_model_report_rejects_non_object_architecture(tmp_path):
         get_initial_model_report(store, "sample-dataset")
 
 
-def test_create_and_distribute_initial_model_from_preprocessed_dataset(tmp_path):
+def test_create_and_distribute_initial_model_from_preprocessed_dataset(tmp_path, monkeypatch):
     dataset_root = tmp_path / "datasets"
     store = DatasetStore(dataset_root)
     store.upload_folder(
@@ -370,6 +370,36 @@ def test_create_and_distribute_initial_model_from_preprocessed_dataset(tmp_path)
             for item in repaired["workers"].values()
         )
         assert [handler.post_calls for handler in handlers] == [1, 1, 2]
+        # A distribution that stopped part-way can leave one worker on another model.
+        real_present = initial_models.get_worker_dataset_initial_model_if_present
+        stale_workers = {"worker2"}
+
+        def stale_on_worker2(worker, name):
+            found = real_present(worker, name)
+            if found is not None and worker.node_id in stale_workers:
+                return {**found, "architecture_sha256": "stale-model"}
+            return found
+
+        removed = []
+        real_delete = initial_models.delete_worker_initial_model
+
+        def recording_delete(worker, name, **kwargs):
+            removed.append(worker.node_id)
+            stale_workers.discard(worker.node_id)
+            return real_delete(worker, name, **kwargs)
+
+        monkeypatch.setattr(initial_models, "get_worker_dataset_initial_model_if_present", stale_on_worker2)
+        monkeypatch.setattr(initial_models, "delete_worker_initial_model", recording_delete)
+        with pytest.raises(WorkerShardError, match="different initial model"):
+            create_and_distribute_initial_model(store, workers, "sample-dataset", seed=21)
+        assert removed == []  # without replace_existing a mismatch is never overwritten
+        healed = create_and_distribute_initial_model(
+            store, workers, "sample-dataset", seed=21, replace_existing=True
+        )
+        assert removed == ["worker2"]
+        assert healed["architecture_sha256"] == report["architecture_sha256"]
+        assert [handler.post_calls for handler in handlers] == [1, 2, 2]
+        monkeypatch.undo()
         deleted = delete_initial_model(store, workers, "sample-dataset")
         assert deleted["deleted"] is True
         assert deleted["workers"] == ["worker1", "worker2", "worker3"]

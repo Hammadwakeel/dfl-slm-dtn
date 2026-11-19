@@ -412,6 +412,18 @@ def create_and_distribute_initial_model(
     for worker in selected_workers:
         get_worker_training_status(worker)
         installed = get_worker_dataset_initial_model_if_present(worker, dataset_name)
+        if (
+            installed is not None
+            and replace_existing
+            and (
+                installed.get("architecture_sha256") != architecture_sha256
+                or installed.get("parameter_count") != architecture["parameter_count"]
+            )
+        ):
+            # An earlier distribution stopped part-way (e.g. a worker timed out), so
+            # this worker kept another model; replacing was requested, so repair it.
+            delete_worker_initial_model(worker, dataset_name)
+            installed = None
         if installed is not None:
             if (
                 installed.get("architecture_sha256") != architecture_sha256

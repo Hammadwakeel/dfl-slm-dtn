@@ -1018,6 +1018,10 @@ export interface SupervisorGoal {
   sync_mode: "sync" | "semi_sync";
   sync_deadline_seconds: number;
   seed?: number;
+  /** v2: shared-split objective, extended CIFAR-10 space, federated finalist check. */
+  nas_version?: "v1" | "v2";
+  /** Omitted = dataset default (flip_shift for CIFAR-10, none for MNIST). */
+  augmentation?: "none" | "flip_shift";
 }
 
 export interface SupervisorExperiment {

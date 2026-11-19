@@ -60,6 +60,7 @@ const DEFAULT_GOAL: SupervisorGoal = {
   aggregation: "fedavg",
   sync_mode: "semi_sync",
   sync_deadline_seconds: 300,
+  nas_version: "v2",
 };
 
 /** Agentic mode: a server-side supervisor that monitors and controls the whole cluster. */
@@ -283,6 +284,13 @@ function GoalForm({
         <label>
           NAS budget (s)
           <input type="number" min={90} max={600} step={30} value={goal.nas_budget_seconds} onChange={(event) => update("nas_budget_seconds", Number(event.target.value))} />
+        </label>
+        <label>
+          NAS version
+          <select value={goal.nas_version ?? "v2"} onChange={(event) => update("nas_version", event.target.value as SupervisorGoal["nas_version"])}>
+            <option value="v2">v2: shared-split + federated check</option>
+            <option value="v1">v1: local objective (ablation)</option>
+          </select>
         </label>
       </div>
       {formError && <div className="assistant-error" role="alert">{formError}</div>}

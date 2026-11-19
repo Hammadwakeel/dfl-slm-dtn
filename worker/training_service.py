@@ -628,8 +628,9 @@ def install_initial_model(
     return metadata
 
 
-PEER_SEND_ATTEMPTS = 3
-PEER_SEND_BACKOFF_SECONDS = (1.0, 3.0)
+# Covers a ~20 s network drop (worker7 is on Wi-Fi) before a round fails.
+PEER_SEND_ATTEMPTS = 5
+PEER_SEND_BACKOFF_SECONDS = (1.0, 3.0, 6.0, 10.0)
 
 
 def _send_with_retry(

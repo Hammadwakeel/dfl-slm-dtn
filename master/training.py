@@ -145,6 +145,7 @@ def _rank_by_global_validation(measured: list[dict[str, Any]]) -> None:
 
 
 RESULTS_GROUP_LIMIT = 20
+RUN_RESULTS_RETRY_DELAYS_SECONDS = (1, 3, 5, 10, 20)
 # Per-worker fields that repeat in every round (the ~1 kB architecture, confusion
 # matrices, per-class arrays). A compact view keeps them only in each run's final
 # round, which is what reports and the dashboard read; scalar metrics stay in all.
@@ -2701,7 +2702,10 @@ class TrainingCoordinator:
             "connection reset",
             "remote end closed connection",
         )
-        for attempt in range(3):
+        # A worker on Wi-Fi (worker7) can drop off the network for tens of seconds;
+        # reading results is idempotent, so wait it out instead of failing the run.
+        delays = RUN_RESULTS_RETRY_DELAYS_SECONDS
+        for attempt in range(len(delays) + 1):
             try:
                 return self._get_json(
                     worker,
@@ -2710,17 +2714,18 @@ class TrainingCoordinator:
                 )
             except TrainingError as error:
                 message = str(error).lower()
-                if attempt == 2 or not any(
+                if attempt == len(delays) or not any(
                     retryable_error in message
                     for retryable_error in retryable_errors
                 ):
                     raise
-                delay = (1, 3)[attempt]
+                delay = delays[attempt]
                 LOGGER.warning(
-                    "Transient error reading run %s results from %s; retry %s/2 in %s seconds: %s",
+                    "Transient error reading run %s results from %s; retry %s/%s in %s seconds: %s",
                     run_id,
                     worker.node_id,
                     attempt + 1,
+                    len(delays),
                     delay,
                     error,
                 )

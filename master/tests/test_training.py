@@ -1577,3 +1577,29 @@ def test_compact_results_keep_heavy_worker_fields_only_in_the_final_round(tmp_pa
     full = coordinator.results(group_id="g")["groups"][0]["runs"][0]["rounds"]
     assert all(row["workers"]["w1"] == heavy for row in full)
     assert coordinator._groups[0]["runs"][0]["rounds"][0]["workers"]["w1"] == heavy  # stored data untouched
+
+
+def test_run_results_wait_out_a_long_wifi_drop_but_not_forever(tmp_path: Path, monkeypatch) -> None:
+    from master.training import RUN_RESULTS_RETRY_DELAYS_SECONDS
+
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    worker = coordinator.config.workers[0]
+    slept, requests = [], []
+    monkeypatch.setattr("master.training.time.sleep", slept.append)
+
+    def drops_four_times(requested_worker, path, *, timeout=10):
+        requests.append(path)
+        if len(requests) <= 4:
+            raise TrainingError("Could not reach worker1: [Errno 113] No route to host")
+        return {"runs": {"run-1": [{}]}}
+
+    coordinator._get_json = drops_four_times
+    assert coordinator._get_run_results(worker, "run-1") == {"runs": {"run-1": [{}]}}
+    assert slept == list(RUN_RESULTS_RETRY_DELAYS_SECONDS[:4])
+
+    def always_down(requested_worker, path, *, timeout=10):
+        raise TrainingError("Could not reach worker1: [Errno 113] No route to host")
+
+    coordinator._get_json = always_down
+    with pytest.raises(TrainingError, match="No route"):
+        coordinator._get_run_results(worker, "run-1")

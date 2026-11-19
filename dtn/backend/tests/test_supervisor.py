@@ -745,6 +745,34 @@ def test_failed_global_evaluation_keeps_worker_accuracy_and_the_run_going(sessio
     assert any(event["event_type"] == "global_evaluation_failed" for event in finished["events"])
 
 
+def test_operator_evaluation_scores_newest_models_and_passes_the_run_filter(sessions) -> None:
+    calls = []
+
+    def evaluate(dataset_name: str, run_id=None) -> dict:
+        calls.append((dataset_name, run_id))
+        return _global_result(0.66, 0.64)
+
+    supervisor = make_supervisor(sessions, FakeCluster(), FakeSLM([]), global_evaluate=evaluate)
+    assert supervisor.evaluate_newest_models("cifar10")["test"]["mean_accuracy"] == pytest.approx(0.64)
+    supervisor.evaluate_newest_models("cifar10", "mesh-seed-17-abcd1234")
+    assert calls == [("cifar10", None), ("cifar10", "mesh-seed-17-abcd1234")]
+
+
+def test_operator_evaluation_reports_missing_or_failing_evaluator(sessions) -> None:
+    supervisor = make_supervisor(sessions, FakeCluster(), FakeSLM([]))
+    with pytest.raises(SupervisorError) as missing:
+        supervisor.evaluate_newest_models("mnist")
+    assert missing.value.status_code == 503
+
+    def broken(dataset_name: str, run_id=None) -> dict:
+        raise RuntimeError("no worker model")
+
+    supervisor = make_supervisor(sessions, FakeCluster(), FakeSLM([]), global_evaluate=broken)
+    with pytest.raises(SupervisorError) as failed:
+        supervisor.evaluate_newest_models("mnist")
+    assert failed.value.status_code == 502 and "no worker model" in str(failed.value)
+
+
 def test_final_training_warm_starts_from_the_best_trained_model(sessions) -> None:
     cluster = FakeCluster()
     cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}

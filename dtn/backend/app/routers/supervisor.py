@@ -42,6 +42,12 @@ class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
+class EvaluateRequest(BaseModel):
+    dataset: Literal["mnist", "cifar10"]
+    # Only score models from this master run id (all workers' newest otherwise).
+    run_id: str | None = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
+
+
 def get_supervisor(request: Request) -> Supervisor:
     supervisor = getattr(request.app.state, "supervisor", None)
     if supervisor is None:
@@ -96,3 +102,9 @@ def ask(
 @router.get("/cluster")
 def cluster(supervisor: Supervisor = Depends(get_supervisor)) -> dict[str, Any]:
     return supervisor.cluster_summary()
+
+
+@router.post("/evaluate")
+def evaluate(body: EvaluateRequest, supervisor: Supervisor = Depends(get_supervisor)) -> dict[str, Any]:
+    """Global validation + official test accuracy of every worker's newest model."""
+    return _call(lambda: supervisor.evaluate_newest_models(body.dataset, body.run_id))

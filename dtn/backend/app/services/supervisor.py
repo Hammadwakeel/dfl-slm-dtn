@@ -112,7 +112,7 @@ class Supervisor:
         master_results: Callable[[], dict[str, Any]],
         model_call: ModelCall,
         memory_cleanup: Callable[..., dict[str, Any]],
-        global_evaluate: Callable[[str], dict[str, Any]] | None = None,
+        global_evaluate: Callable[..., dict[str, Any]] | None = None,
         min_free_memory_mb: int = 1200,
         preflight_wait_seconds: float = 600.0,
         tick_seconds: float = 10.0,
@@ -231,6 +231,22 @@ class Supervisor:
             "min_free_memory_mb_required": self._min_free_memory_mb,
             "global_stop": self._global_stop(),
         }
+
+    def evaluate_newest_models(self, dataset: str, experiment_run_id: str | None = None) -> dict[str, Any]:
+        """Score every worker's newest trained model on the shared validation and the
+        official test split (for reporting a finished experiment, e.g. per topology)."""
+        if self._global_evaluate is None:
+            raise SupervisorError("Global evaluation is not configured", 503)
+        if self._active_run_ids():
+            raise SupervisorError("A supervisor run is active; evaluate after it finishes")
+        try:
+            if experiment_run_id is None:
+                return self._global_evaluate(dataset)
+            return self._global_evaluate(dataset, run_id=experiment_run_id)
+        except SupervisorError:
+            raise
+        except Exception as error:  # noqa: BLE001 - reported to the caller
+            raise SupervisorError(f"Global evaluation failed: {str(error)[:300]}", 502) from error
 
     def ask(self, run_id: str, question: str) -> dict[str, Any]:
         """Answer an operator question about a run from its recorded state (read-only)."""

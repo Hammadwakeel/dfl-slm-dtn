@@ -209,10 +209,11 @@ def create_app(
             master_results=lambda: _forward(resolved_settings, "/results"),
             model_call=supervisor_model_call,
             memory_cleanup=supervisor_memory_cleanup,
-            global_evaluate=lambda dataset_name: evaluate_newest_models(
+            global_evaluate=lambda dataset_name, run_id=None: evaluate_newest_models(
                 app.state.datasets,
                 cluster_nodes(resolved_settings, sessions),
                 dataset_name,
+                run_id=run_id,
             ),
             min_free_memory_mb=resolved_settings.supervisor_min_free_memory_mb,
             tick_seconds=resolved_settings.supervisor_tick_seconds,

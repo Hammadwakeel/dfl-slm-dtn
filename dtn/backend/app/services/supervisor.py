@@ -726,6 +726,7 @@ class Supervisor:
                     # Sweep on the run's own dataset and Dirichlet split.
                     "alphas": [SWEEP_ALPHAS.get(goal["dataset_split"], 0.3)],
                     "dataset_name": goal["dataset"],
+                    "augmentation": run_augmentation(goal),
                 },
             }
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}

@@ -1994,3 +1994,17 @@ def test_identical_peer_reupload_is_acknowledged_and_a_different_one_rejected(tm
     assert trainer.accept_peer_weights("retry-run", 0, "worker2", 10, first) is True
     with pytest.raises(ValueError, match="Duplicate"):
         trainer.accept_peer_weights("retry-run", 0, "worker2", 10, other)
+
+
+def test_global_validation_labels_are_flattened(tmp_path):
+    from worker.training_service import GLOBAL_VALIDATION_FILE, load_global_validation
+
+    np.savez(
+        tmp_path / GLOBAL_VALIDATION_FILE,
+        images=np.zeros((3, 4, 4, 1), dtype=np.float32),
+        labels=np.array([[0], [1], [2]], dtype=np.int64),
+    )
+    images, labels = load_global_validation(tmp_path)
+    # (N, 1) labels would broadcast against (N,) predictions into an N x N comparison.
+    assert labels.shape == (3,)
+    assert images.shape == (3, 4, 4, 1)

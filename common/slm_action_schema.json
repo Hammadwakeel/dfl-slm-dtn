@@ -398,7 +398,8 @@
                   "uniqueItems": true,
                   "items": {"type": "number", "enum": [0.1, 0.3, 0.5]}
                 },
-                "dataset_name": {"type": "string", "enum": ["mnist", "cifar10"]}
+                "dataset_name": {"type": "string", "enum": ["mnist", "cifar10"]},
+                "augmentation": {"enum": ["none", "flip_shift"]}
               },
               "additionalProperties": false
             }

@@ -908,6 +908,7 @@ def _execute_action(
                     seeds=tuple(parameters.get("seeds", (17, 42, 2026))),
                     alphas=tuple(parameters.get("alphas", (0.3,))),
                     dataset_name=parameters.get("dataset_name", "mnist"),
+                    augmentation=parameters.get("augmentation", "none"),
                 ),
             }
         if name in {"get_results", "suggest_next_action"}:

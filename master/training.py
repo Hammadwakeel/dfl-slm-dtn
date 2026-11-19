@@ -1086,7 +1086,10 @@ class TrainingCoordinator:
         seeds: tuple[int, ...] = (17, 42, 2026),
         alphas: tuple[float, ...] = (0.3,),
         dataset_name: str = "mnist",
+        augmentation: str = "none",
     ) -> dict[str, Any]:
+        if augmentation not in TRAINING_AUGMENTATIONS:
+            raise ValueError(f"augmentation must be one of {', '.join(TRAINING_AUGMENTATIONS)}")
         if not 1 <= len(seeds) <= 3 or any(seed < 0 for seed in seeds):
             raise ValueError("Provide between one and three non-negative seeds")
         # Workers train on whichever shard the backend installed last, so one sweep
@@ -1112,6 +1115,10 @@ class TrainingCoordinator:
                 "kind": "topology_optimization",
                 "dataset_name": dataset_name,
                 "architecture": architecture,
+                # Every candidate trains the same fixed CNN from scratch, not whatever
+                # model a previous step left installed, under the run's augmentation.
+                "fresh_model": True,
+                "augmentation": augmentation,
                 "reward_metric_source": "validation_accuracy",
                 "topology": "candidate_sweep",
                 "rounds": rounds,
@@ -1425,7 +1432,15 @@ class TrainingCoordinator:
                 }
                 self._persist_locked()
             started = time.monotonic()
-            self._run_distributed_seed(group_id, run_group, run)
+            try:
+                self._run_distributed_seed(group_id, run_group, run)
+            except BaseException:
+                # Never leave a finalist run (or its progress) looking active.
+                with self._lock:
+                    run["status"] = "failed"
+                    group.pop("federated_progress", None)
+                    self._persist_locked()
+                raise
             run["status"] = "completed"
             last = list(run["rounds"][-1]["workers"].values()) if run["rounds"] else []
             accuracies = [

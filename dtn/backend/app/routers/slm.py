@@ -199,7 +199,11 @@ def _cached_results(settings: Settings, query: str) -> dict[str, object]:
         if cached is not None and time.monotonic() - cached[0] < RESULTS_CACHE_SECONDS:
             return cached[1]
         result = _forward(settings, "/results", query=query)
-        _RESULTS_CACHE[key] = (time.monotonic(), result)
+        now = time.monotonic()
+        # Drop expired entries so one cached response per queried group cannot pile up.
+        for stale in [item for item, (stored, _) in _RESULTS_CACHE.items() if now - stored >= RESULTS_CACHE_SECONDS]:
+            del _RESULTS_CACHE[stale]
+        _RESULTS_CACHE[key] = (now, result)
         return result
 
 

@@ -462,7 +462,8 @@ def load_global_validation(dataset_path: Path) -> tuple[np.ndarray, np.ndarray] 
     with np.load(path, allow_pickle=False) as split:
         return (
             np.asarray(split["images"], dtype=np.float32),
-            np.asarray(split["labels"], dtype=np.int64),
+            # Flatten so (N, 1) labels compare element-wise with (N,) predictions.
+            np.asarray(split["labels"], dtype=np.int64).reshape(-1),
         )
 
 

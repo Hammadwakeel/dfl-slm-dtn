@@ -889,3 +889,4 @@ def test_topology_sweep_is_a_short_screening_run(sessions) -> None:
     assert sweep["parameters"]["rounds"] == 4
     assert sweep["parameters"]["dataset_name"] == "mnist"
     assert sweep["parameters"]["alphas"] == [0.3]
+    assert sweep["parameters"]["augmentation"] == "none"

@@ -50,3 +50,6 @@ results_export.zip
 
 # Local TensorFlow CPU venv for global test-set evaluation
 dtn/backend/.venv-eval/
+
+# Archived experiment history (local only)
+archive/

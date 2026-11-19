@@ -1669,3 +1669,28 @@ def test_federated_nas_keeps_the_seed_in_a_full_compact_population(tmp_path: Pat
     assert len(first_stage) == 8 and first_stage[-1]["id"] == "seed-baseline-cnn"
     assert any(run["architecture"]["id"] == "seed-baseline-cnn" for run in runs)
 
+
+
+def test_optimizer_trains_a_fresh_fixed_model_with_the_run_augmentation(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    seen_groups: list[dict] = []
+
+    def fake_seed(group_id, group, run):
+        seen_groups.append(dict(group))
+        run["rounds"].append(
+            {"round": 1, "workers": {worker.node_id: {"validation_accuracy": 0.6} for worker in coordinator.config.workers}}
+        )
+
+    coordinator._run_distributed_seed = fake_seed
+    with pytest.raises(ValueError, match="augmentation"):
+        coordinator.start_optimization(rounds=1, epochs=1, seeds=(17,), augmentation="rotate")
+    coordinator.start_optimization(rounds=1, epochs=1, seeds=(17,), dataset_name="cifar10", augmentation="flip_shift")
+    deadline = time.monotonic() + 3
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(seen_groups) == 5
+    # Candidates must not train whatever model an earlier step left installed.
+    assert all(group["fresh_model"] is True for group in seen_groups)
+    assert all(group["augmentation"] == "flip_shift" for group in seen_groups)
+    assert all(group["dataset_name"] == "cifar10" for group in seen_groups)

@@ -89,7 +89,15 @@ def _split_indices(labels: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarra
         validation_count = max(1, int(round(indices.size * VALIDATION_FRACTION)))
         validation.extend(indices[:validation_count].tolist())
         training.extend(indices[validation_count:].tolist())
-    return np.asarray(training, dtype=np.int64), np.asarray(validation, dtype=np.int64)
+    # Built class by class, the training order had only one label change per class.
+    # The NAS input pipeline shuffles with a small buffer (memory cap), so candidates
+    # trained on one class at a time and scored near chance on balanced data; a
+    # seeded permutation mixes the classes without changing either split.
+    training_order = rng.permutation(len(training))
+    return (
+        np.asarray(training, dtype=np.int64)[training_order],
+        np.asarray(validation, dtype=np.int64),
+    )
 
 
 def search_cifar10_architectures(

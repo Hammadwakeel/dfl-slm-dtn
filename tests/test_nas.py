@@ -670,3 +670,17 @@ def test_dataset_search_scores_candidates_on_the_shared_split(monkeypatch, augme
             images, labels, ["a", "b"], seed=5, time_limit_seconds=120, node_id="worker1",
             logger=lambda *_a, **_k: None, architectures=[candidate], augmentation="mixup",
         )
+
+
+def test_split_training_order_mixes_classes_for_small_shuffle_buffers() -> None:
+    from worker.nas_search import DATASET_NAS_SHUFFLE_BUFFER_SIZE, _split_indices
+
+    labels = np.repeat(np.arange(10, dtype=np.int64), 200)  # stored class by class
+    train, validation = _split_indices(labels, seed=2026)
+    again_train, again_validation = _split_indices(labels, seed=2026)
+    assert np.array_equal(train, again_train) and np.array_equal(validation, again_validation)
+    assert set(train.tolist()).isdisjoint(validation.tolist())
+    assert sorted([*train.tolist(), *validation.tolist()]) == list(range(labels.size))
+    # Every window the search pipeline's shuffle buffer sees holds several classes.
+    windows = [labels[train[start:start + DATASET_NAS_SHUFFLE_BUFFER_SIZE]] for start in range(0, train.size, DATASET_NAS_SHUFFLE_BUFFER_SIZE)]
+    assert min(len(set(window.tolist())) for window in windows) >= 5

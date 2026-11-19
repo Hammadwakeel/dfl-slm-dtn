@@ -92,7 +92,7 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
     "optimize_topology": {
         "description": (
             "Measure candidate peer-to-peer topologies and select the best one by reward. "
-            "Useful when peers learn slowly from each other on non-IID data (MNIST only)."
+            "Useful when peers learn slowly from each other on non-IID data."
         ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -182,6 +182,17 @@ def default_goal(**overrides: Any) -> dict[str, Any]:
     return goal
 
 
+# Training-input augmentation per dataset: flip/shift is the standard CIFAR-10 recipe
+# (it lowers local over-fitting on small non-IID shards); a flipped digit is another
+# symbol, so MNIST trains on the raw images.
+DEFAULT_AUGMENTATION = {"mnist": "none", "cifar10": "flip_shift"}
+
+
+def run_augmentation(goal: dict[str, Any]) -> str:
+    """The augmentation every training of this goal uses (goal override, else dataset default)."""
+    return goal.get("augmentation") or DEFAULT_AUGMENTATION.get(goal["dataset"], "none")
+
+
 def new_state() -> dict[str, Any]:
     return {
         "completed_steps": [],
@@ -225,8 +236,7 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
         if "run_nas" not in completed and failures.get("run_nas", 0) < MAX_STEP_FAILURES:
             steps.append("run_nas")
         if (
-            goal["dataset"] == "mnist"
-            and "optimize_topology" not in completed
+            "optimize_topology" not in completed
             and failures.get("optimize_topology", 0) < MAX_STEP_FAILURES
         ):
             steps.append("optimize_topology")

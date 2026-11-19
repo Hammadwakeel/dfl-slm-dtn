@@ -47,6 +47,7 @@ from app.services.supervisor_policy import (
     parse_decision,
     prompt_state,
     rule_decision,
+    run_augmentation,
     summarize_group,
     tool_definitions,
     tuning_architecture,
@@ -707,6 +708,7 @@ class Supervisor:
                 "dataset_split": goal["dataset_split"],
                 "aggregation": goal.get("aggregation", "fedavg"),
                 "sync_mode": goal.get("sync_mode", "sync"),
+                "augmentation": run_augmentation(goal),
             }
             if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
                 parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
@@ -797,6 +799,7 @@ class Supervisor:
                 "dataset_split": goal["dataset_split"],
                 "aggregation": aggregation,
                 "sync_mode": goal.get("sync_mode", "sync"),
+                "augmentation": run_augmentation(goal),
             }
             if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
                 parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])

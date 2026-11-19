@@ -32,6 +32,8 @@ class GoalRequest(BaseModel):
     sync_mode: Literal["sync", "semi_sync"] = "semi_sync"
     sync_deadline_seconds: int = Field(300, ge=30, le=3600)
     seed: int = Field(2026, ge=0, le=4_294_967_295)
+    # None = dataset default (flip_shift for CIFAR-10, none for MNIST).
+    augmentation: Literal["none", "flip_shift"] | None = None
 
 
 class StopRequest(BaseModel):

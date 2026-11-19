@@ -14,6 +14,7 @@ from app.services.supervisor_policy import (
     DecisionError,
     allowed_steps,
     default_goal,
+    run_augmentation,
     fallback_decision,
     new_state,
     parse_decision,
@@ -38,8 +39,15 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
     state["nas_architecture"] = NAS_ARCHITECTURE
     assert allowed_steps(goal, state) == ["optimize_topology", "learn_topology", "run_hpo", "train_final", "finish_workflow"]
 
+    # The master sweeps topologies on either dataset, so CIFAR-10 is offered it too.
     cifar = default_goal(dataset="cifar10")
-    assert "optimize_topology" not in allowed_steps(cifar, state)
+    assert "optimize_topology" in allowed_steps(cifar, state)
+
+
+def test_cifar_trainings_use_flip_shift_and_mnist_trains_on_raw_images() -> None:
+    assert run_augmentation(default_goal(dataset="cifar10")) == "flip_shift"
+    assert run_augmentation(default_goal(dataset="mnist")) == "none"
+    assert run_augmentation(default_goal(dataset="cifar10", augmentation="none")) == "none"
 
 
 def test_trained_configuration_is_not_offered_again() -> None:
@@ -347,6 +355,8 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert cluster.actions[retrain_index]["parameters"]["sync_deadline_seconds"] == 300
     baseline = next(action for action in cluster.actions if action["action"] == "start_training")
     assert baseline["parameters"]["aggregation"] == "fedavg"
+    # MNIST (the default goal) trains on raw images in every training step.
+    assert {a["parameters"]["augmentation"] for a in cluster.actions if a["action"] == "start_training"} == {"none"}
     # Every SLM decision received only the compact allowed tool set.
     offered = [{tool["function"]["name"] for tool in tools} for _messages, tools in slm.calls]
     assert offered[0] == {"run_nas", "optimize_topology", "learn_topology", "finish_workflow"}

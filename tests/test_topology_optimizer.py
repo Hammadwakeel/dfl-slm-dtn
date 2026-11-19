@@ -263,8 +263,10 @@ def test_v2_no_longer_rewards_a_cheap_topology_with_a_failing_worker():
     assert mesh["reward"] > chain["reward"]
 
 
-def _v2_candidate(topology, reward, *, gate, bandwidth, std=0.0):
+def _v2_candidate(topology, reward, *, gate, bandwidth, std=0.0, min_worker=None):
+    extra = {} if min_worker is None else {"mean_min_worker_accuracy": min_worker}
     return {
+        **extra,
         "topology": topology,
         "alpha": 0.3,
         "completed_runs": 3,
@@ -308,4 +310,19 @@ def test_v2_selector_falls_back_to_best_reward_when_no_candidate_passes():
         ]
     )
     assert selection["quality_gate_met"] is False
+    assert selection["selected_candidate"]["topology"] == "mesh"
+
+
+def test_v2_selector_keeps_quality_first_when_no_candidate_passes_the_gate():
+    # Measured on CIFAR-10 (4 rounds): no topology reaches the 0.9 gate and chain's
+    # bandwidth savings outscored mesh although mesh's weakest worker was far better.
+    selection = select_candidate(
+        [
+            _v2_candidate("chain", 0.4706, gate=False, bandwidth=0.76, min_worker=0.3885),
+            _v2_candidate("mesh", 0.4656, gate=False, bandwidth=0.06, min_worker=0.5495),
+            _v2_candidate("bidirectional_ring", 0.4648, gate=False, bandwidth=0.73, min_worker=0.394),
+        ]
+    )
+    assert selection["quality_gate_met"] is False
+    assert selection["method"] == "relative_quality_gated_reward_v2"
     assert selection["selected_candidate"]["topology"] == "mesh"

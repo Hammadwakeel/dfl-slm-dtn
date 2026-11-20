@@ -191,7 +191,7 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
         return [item[key] for item in runs if isinstance(item.get(key), (int, float))]
 
     lines = [
-        f"# Agentic end-to-end supervisor runs: {dataset.upper()}, 3 seeds",
+        f"# Agentic end-to-end supervisor runs: {dataset.upper()}, {len(runs)} seed{'s' if len(runs) != 1 else ''}",
         "",
         f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} by `scripts/paper_campaign.py`.",
         "",

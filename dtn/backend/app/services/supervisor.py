@@ -1268,7 +1268,7 @@ class Supervisor:
             {"step": decision.step, "arguments": decision.arguments, "source": decision.source},
         )
         if decision.step == "finish_workflow":
-            self._finish(run_id, state, decision)
+            self._finish(run_id, state, _measured_outcome(goal, state, decision))
             return
         state["pending_step"] = {
             "step": decision.step,
@@ -1428,6 +1428,28 @@ class Supervisor:
                 if reason:
                     run.selected_reason = reason[:2000]
                 run.updated_at = self._clock()
+
+
+def _measured_outcome(goal: dict[str, Any], state: dict[str, Any], decision: Decision) -> Decision:
+    """The SLM may not claim the objective when the measured best misses the target."""
+    if decision.arguments.get("outcome") != "objective_achieved":
+        return decision
+    best = (state.get("best") or {}).get("validation_accuracy")
+    target = float(goal["target_accuracy"])
+    if isinstance(best, (int, float)) and best >= target:
+        return decision
+    measured = f"{best:.4f}" if isinstance(best, (int, float)) else "none"
+    return Decision(
+        decision.step,
+        {
+            **decision.arguments,
+            "outcome": "no_worthwhile_action",
+            "summary": f"Target {target:.4f} not met (best validation accuracy {measured}). {decision.arguments.get('summary', '')}"[:400],
+            "claimed_outcome": "objective_achieved",
+        },
+        decision.rationale,
+        decision.source,
+    )
 
 
 def _group_id(data: dict[str, Any]) -> str:

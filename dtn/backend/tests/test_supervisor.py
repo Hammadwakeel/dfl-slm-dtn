@@ -1065,3 +1065,14 @@ def test_a_failed_checkpoint_save_disables_continuation_and_the_final_install(se
     assert not any(a["parameters"].get("best_checkpoint") == "install" for a in cluster.actions)
     assert any("best model checkpoint" in event["message"] for event in finished["events"] if event["event_type"] == "warning")
 
+
+
+def test_the_slm_cannot_claim_the_objective_when_the_target_is_missed(sessions) -> None:
+    cluster = FakeCluster()
+    slm = FakeSLM([tool_call("finish_workflow", {"outcome": "objective_achieved", "summary": "Close enough to the target."})])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
+
+    assert finished["result"]["outcome"] == "no_worthwhile_action"
+    assert finished["result"]["summary"].startswith("Target 0.9900 not met (best validation accuracy 0.9000).")
+    assert finished["status"] == "completed"

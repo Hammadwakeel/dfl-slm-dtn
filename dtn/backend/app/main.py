@@ -28,6 +28,7 @@ from app.services.autonomy import AutonomyController, AutonomyError
 from app.services.apg import APGJobManager
 from app.services.cluster import cluster_nodes, sync_training_registry
 from app.services.global_evaluation import evaluate_newest_models
+from app.services.best_checkpoint import install_best_checkpoint, save_best_checkpoint
 from app.services.pruning import prune_and_distribute, redistribute_trained_model, restore_source_model
 from app.services.dataset_pipeline import preprocess_and_ship
 from app.services.datasets import DatasetError, DatasetStore
@@ -96,6 +97,29 @@ def create_app(
             return {"available": True, "data": report}
         if action["action"] == "create_initial_model":
             dataset_name = action["parameters"]["model_name"]
+            checkpoint = action["parameters"].get("best_checkpoint")
+            if checkpoint in {"save", "install"}:
+                try:
+                    if checkpoint == "save":
+                        report = save_best_checkpoint(
+                            app.state.datasets,
+                            cluster_nodes(resolved_settings, sessions),
+                            dataset_name,
+                            checkpoint_id=action["parameters"].get("checkpoint_id"),
+                            source_worker=action["parameters"].get("source_worker"),
+                        )
+                    else:
+                        report = install_best_checkpoint(
+                            app.state.datasets,
+                            cluster_nodes(resolved_settings, sessions),
+                            dataset_name,
+                            checkpoint_id=action["parameters"].get("checkpoint_id"),
+                            seed=action["parameters"].get("seed", 0),
+                        )
+                except (InitialModelError, WorkerShardError) as error:
+                    status_code = 502 if isinstance(error, WorkerShardError) else 422
+                    raise AutonomyError(str(error), status_code) from error
+                return {"available": True, "data": report}
             if action["parameters"].get("from_trained_model") is True:
                 try:
                     report = redistribute_trained_model(

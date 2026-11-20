@@ -37,6 +37,7 @@ STEP_LABELS = {
     "optimize_topology": "Topology sweep",
     "learn_topology": "APG learned topology",
     "train_final": "Final training",
+    "continue_training": "Continued training",
     "prune_model": "Pruning + fine-tune",
 }
 
@@ -144,6 +145,12 @@ def summarize_run(seed: int, run: dict[str, Any]) -> dict[str, Any]:
         "pruned_test_accuracy": _test(pruned)[0] if pruned else None,
         "pruned_parameter_count": pruned.get("parameter_count") if pruned else None,
         "warm_start": bool(state.get("warm_start")),
+        "continuations": [
+            {key: item.get(key) for key in ("validation_accuracy", "gain", "improved")}
+            for item in state.get("continuations") or []
+        ],
+        "deployed_model": (run.get("result") or {}).get("deployed_model"),
+        "deployed_test_accuracy": ((run.get("result") or {}).get("deployed_model") or {}).get("test_accuracy"),
         "decisions": [
             {"message": str(event.get("message"))[:300]}
             for event in decisions
@@ -212,6 +219,7 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
         f"| Baseline test accuracy | {_mean_std(values('baseline_test_accuracy'))} |",
         f"| Best model test accuracy | {_mean_std(values('best_test_accuracy'))} |",
         f"| Pruned model test accuracy | {_mean_std(values('pruned_test_accuracy'))} |",
+        f"| Model installed on the workers at the end (test) | {_mean_std(values('deployed_test_accuracy'))} |",
         f"| Target met (seeds) | {sum(1 for item in runs if (item.get('best_validation_accuracy') or 0) >= goal.get('target_accuracy', 1))} / {len(runs)} |",
         "",
         "## Per seed",
@@ -258,6 +266,21 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
                 if isinstance(attempt.get("ratio"), (int, float))
             )
             lines += ["", f"Pruning attempts: {attempts}."]
+        if item.get("continuations"):
+            continued = ", ".join(
+                f"{_pct(entry.get('validation_accuracy'))} ({'improved' if entry.get('improved') else 'no gain'})"
+                for entry in item["continuations"]
+            )
+            lines += ["", f"Continued training from the best checkpoint: {continued}."]
+        deployed = item.get("deployed_model") or {}
+        if deployed:
+            lines += [
+                "",
+                f"Model left on every worker: {STEP_LABELS.get(deployed.get('step') or '', deployed.get('step'))} "
+                f"({deployed.get('source_worker')}), global val {_pct(deployed.get('validation_accuracy'))}, "
+                f"test {_pct(deployed.get('test_accuracy'))}, "
+                + ("installed." if deployed.get("installed") else f"not installed: {deployed.get('error')}."),
+            ]
         if item["errors"]:
             lines += ["", "Errors recorded during the run:", ""] + [f"- {error}" for error in item["errors"]]
     path.parent.mkdir(parents=True, exist_ok=True)

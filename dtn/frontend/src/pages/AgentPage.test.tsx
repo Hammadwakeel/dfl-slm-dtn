@@ -198,6 +198,28 @@ describe("Agent Supervisor page", () => {
     expect(attempts).toHaveTextContent("15% pruned: 93.50% · kept");
   });
 
+  it("shows the best model left on every worker when a run finishes", async () => {
+    const run = runFixture();
+    run.status = "completed";
+    run.result = {
+      outcome: "no_worthwhile_action",
+      summary: "Every available improvement step is done.",
+      deployed_model: {
+        step: "continue_training",
+        source_worker: "worker3",
+        validation_accuracy: 0.7031,
+        test_accuracy: 0.6984,
+        installed: true,
+      },
+    };
+    mockApi([run]);
+    render(<AgentPage token="dtn-token" active />);
+    fireEvent.click(await screen.findByText(run.task));
+
+    const note = await screen.findByLabelText("Deployed model");
+    expect(note).toHaveTextContent("Continued DFL from worker3, 70.31% validation, 69.84% test");
+  });
+
   it("stops an active run after confirmation", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     const run = runFixture();

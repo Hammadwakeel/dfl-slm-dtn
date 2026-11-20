@@ -284,7 +284,9 @@
                 "replace_existing": {"type": "boolean"},
                 "restore_baseline": {"type": "boolean"},
                 "from_trained_model": {"type": "boolean", "description": "Install the newest run's best trained model, with its weights, on every worker (warm start)."},
-                "source_worker": {"type": "string", "pattern": "^worker[1-9][0-9]*$"}
+                "source_worker": {"type": "string", "pattern": "^worker[1-9][0-9]*$"},
+                "best_checkpoint": {"enum": ["save", "install"], "description": "Save the newest run's model of source_worker as the supervisor run's best checkpoint, or install that checkpoint on every worker."},
+                "checkpoint_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}
               },
               "required": ["model_name"],
               "additionalProperties": false

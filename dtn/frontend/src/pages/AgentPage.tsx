@@ -10,6 +10,7 @@ import {
   type SupervisorCluster,
   type SupervisorEvent,
   type SupervisorGoal,
+  type SupervisorDeployedModel,
   type SupervisorPruning,
   type SupervisorRun,
 } from "../api/client";
@@ -38,6 +39,7 @@ const STEP_LABELS: Record<string, string> = {
   optimize_topology: "Topology optimization",
   prune_model: "Pruning + fine-tune",
   train_final: "Final DFL",
+  continue_training: "Continued DFL",
   finish_workflow: "Finish",
 };
 const SOURCE_LABELS: Record<string, string> = {
@@ -412,6 +414,7 @@ function RunPanel({ token, run, onChanged }: { token: string; run: SupervisorRun
         <div className={`agent-outcome ${run.result.outcome}`}>
           <strong>{run.result.outcome.replace(/_/g, " ")}</strong>
           <p>{run.result.summary}</p>
+          {run.result.deployed_model && <DeployedModelNote model={run.result.deployed_model} />}
         </div>
       )}
 
@@ -672,4 +675,19 @@ function formatDate(value: string): string {
 function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function DeployedModelNote({ model }: { model: SupervisorDeployedModel }) {
+  const step = STEP_LABELS[model.step ?? ""] ?? model.step ?? "best";
+  if (!model.installed) {
+    return <p className="agent-deployed">Best model ({step}) could not be installed on the workers: {model.error}</p>;
+  }
+  return (
+    <p className="agent-deployed" aria-label="Deployed model">
+      Every worker now holds the run&apos;s best model: <strong>{step}</strong>
+      {model.source_worker ? ` from ${model.source_worker}` : ""}
+      {model.validation_accuracy != null ? `, ${formatPercent(model.validation_accuracy)} validation` : ""}
+      {model.test_accuracy != null ? `, ${formatPercent(model.test_accuracy)} test` : ""}.
+    </p>
+  );
 }

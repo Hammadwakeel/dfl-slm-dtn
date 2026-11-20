@@ -39,6 +39,7 @@ EXPERIMENT_STEPS = (
     "learn_topology",
     "optimize_topology",
     "train_final",
+    "continue_training",
     "prune_model",
 )
 # Steps that need a measured, trained model (and a custom layer architecture).
@@ -55,6 +56,10 @@ PRUNE_RETRY_RATIO = 0.15
 # them at a fraction of the cost (5 topologies x 10 rounds took ~55 minutes).
 TOPOLOGY_SWEEP_ROUNDS = 4
 MAX_STEP_FAILURES = 2
+# When every search step is done and the target is still missed, training continues
+# from the run's best checkpoint, at most this often and only while it keeps helping.
+MAX_CONTINUATIONS = 2
+CONTINUATION_MIN_GAIN = 0.005
 
 STEP_TOOLS: dict[str, dict[str, Any]] = {
     "run_nas": {
@@ -115,6 +120,18 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
                     ),
                 },
             },
+            "additionalProperties": False,
+        },
+    },
+    "continue_training": {
+        "description": (
+            "Continue training the run's best model (its trained weights, architecture and "
+            "topology) for more rounds on all workers. Useful when the target is not met yet "
+            "and the best model was still improving."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"rounds": {"type": "integer", "minimum": 1, "maximum": 20}},
             "additionalProperties": False,
         },
     },
@@ -238,6 +255,8 @@ def new_state() -> dict[str, Any]:
         "failures": {},
         "pending_step": None,
         "active": None,
+        "best_checkpoint": None,
+        "continuations": [],
         "counters": {"slm_decisions": 0, "slm_repairs": 0, "fallback_decisions": 0, "rule_decisions": 0},
     }
 
@@ -289,10 +308,28 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
         # Compress only a good model: when the target is met, or nothing else can help.
         best = (state.get("best") or {}).get("validation_accuracy")
         target_met = isinstance(best, (int, float)) and best >= float(goal["target_accuracy"])
+        if not target_met and not steps and can_continue(state):
+            steps.append("continue_training")
         if can_prune(state) and (target_met or not steps):
             steps.append("prune_model")
     steps.append("finish_workflow")
     return steps
+
+
+def can_continue(state: dict[str, Any]) -> bool:
+    """Continue from the best checkpoint while each continuation still improved the run."""
+    checkpoint = state.get("best_checkpoint")
+    if not isinstance(checkpoint, dict) or not is_custom_architecture(checkpoint.get("architecture")):
+        return False
+    # A pruned model is the run's deliberate compact result; never retrain past it.
+    if "prune_model" in state.get("completed_steps", []):
+        return False
+    if state.get("failures", {}).get("continue_training", 0) >= MAX_STEP_FAILURES:
+        return False
+    continuations = state.get("continuations") or []
+    if len(continuations) >= MAX_CONTINUATIONS:
+        return False
+    return not continuations or bool(continuations[-1].get("improved"))
 
 
 def tuning_architecture(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -510,10 +547,13 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
 def fallback_decision(goal: dict[str, Any], state: dict[str, Any]) -> Decision:
     """Used when the SLM is unreachable or keeps returning invalid steps."""
     allowed = allowed_steps(goal, state)
-    for step in ("run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final", "prune_model"):
+    for step in ("run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final", "continue_training", "prune_model"):
         if step in allowed:
             return Decision(
-                step, {}, "Default improvement order: NAS, HPO, learned topology, topology sweep, retrain, prune.", "fallback"
+                step,
+                {},
+                "Default improvement order: NAS, HPO, learned topology, topology sweep, retrain, continue, prune.",
+                "fallback",
             )
     return Decision(
         "finish_workflow",
@@ -548,6 +588,10 @@ def prompt_state(goal: dict[str, Any], state: dict[str, Any], cluster: dict[str,
         "recent_experiments": recent,
         "nas_architecture_found": bool(state.get("nas_architecture")),
         "pruned_model": (state.get("pruning") or {}).get("compression"),
+        "continuations": [
+            {key: item.get(key) for key in ("validation_accuracy", "improved")}
+            for item in state.get("continuations") or []
+        ],
         "selected_topology": state.get("selected_topology"),
         "cluster": cluster,
     }

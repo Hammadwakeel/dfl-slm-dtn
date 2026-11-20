@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
+    CONTINUATION_MIN_GAIN,
     DATASET_IMAGE_SIZES,
     PRUNE_MAX_ACCURACY_DROP,
     PRUNE_MIN_FINE_TUNE_ROUNDS,
@@ -746,6 +747,58 @@ class Supervisor:
                 "local_epochs": epochs,
                 "pruning": state["pruning"],
             }
+        if step == "continue_training":
+            checkpoint = state.get("best_checkpoint")
+            if not isinstance(checkpoint, dict):
+                raise StepFailed("No best checkpoint is saved to continue from")
+            topology = checkpoint.get("topology") or state.get("selected_topology") or goal["topology"]
+            rounds = max(PRUNE_MIN_FINE_TUNE_ROUNDS, int(arguments.get("rounds", goal["rounds"])))
+            epochs = int(goal["local_epochs"])
+            aggregation = checkpoint.get("aggregation") or goal.get("aggregation", "fedavg")
+            _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
+            # Workers train their installed model: put the best checkpoint (with its
+            # trained weights) there, whatever was trained after it.
+            _unwrap_result(
+                self._dispatch(
+                    {
+                        "action": "create_initial_model",
+                        "parameters": {
+                            "model_name": goal["dataset"],
+                            "best_checkpoint": "install",
+                            "checkpoint_id": run_id,
+                            "seed": int(goal["seed"]),
+                        },
+                    },
+                    reason,
+                    run_id,
+                )
+            )
+            parameters = {
+                "rounds": rounds,
+                "epochs": epochs,
+                "dataset_name": goal["dataset"],
+                "dataset_split": goal["dataset_split"],
+                "aggregation": aggregation,
+                "sync_mode": goal.get("sync_mode", "sync"),
+                "augmentation": run_augmentation(goal),
+            }
+            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
+                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
+            state["last_trained_architecture"] = checkpoint.get("architecture")
+            data = _unwrap_result(
+                self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
+            ).get("data") or {}
+            return _group_id(data), {
+                "topology": topology,
+                "rounds": rounds,
+                "local_epochs": epochs,
+                "aggregation": aggregation,
+                "continued_from": {
+                    "group_id": checkpoint.get("group_id"),
+                    "validation_accuracy": checkpoint.get("validation_accuracy"),
+                    "source_worker": checkpoint.get("source_worker"),
+                },
+            }
         if step == "optimize_topology":
             action = {
                 "action": "optimize_topology",
@@ -983,7 +1036,24 @@ class Supervisor:
             )
         accuracy = summary.get("validation_accuracy")
         best = state.get("best")
-        if isinstance(accuracy, (int, float)) and (not best or accuracy > best.get("validation_accuracy", -1)):
+        previous_best = (best or {}).get("validation_accuracy")
+        new_best = isinstance(accuracy, (int, float)) and (not best or accuracy > best.get("validation_accuracy", -1))
+        if step == "continue_training":
+            gain = (
+                float(accuracy) - float(previous_best)
+                if isinstance(accuracy, (int, float)) and isinstance(previous_best, (int, float))
+                else None
+            )
+            continuation = {
+                "group_id": summary.get("group_id"),
+                "validation_accuracy": accuracy,
+                "previous_best": previous_best,
+                "gain": round(gain, 6) if gain is not None else None,
+                "improved": gain is not None and gain >= CONTINUATION_MIN_GAIN,
+            }
+            state.setdefault("continuations", []).append(continuation)
+            summary["continuation"] = continuation
+        if new_best:
             state["best"] = {
                 "validation_accuracy": accuracy,
                 "macro_f1": summary.get("macro_f1"),
@@ -992,6 +1062,12 @@ class Supervisor:
                 "architecture": summary.get("architecture"),
                 "topology": summary.get("topology"),
             }
+        pruning_accepted = step == "prune_model" and bool((state.get("pruning") or {}).get("accepted"))
+        if summary.get("kind") == "decentralized" and (
+            (new_best and step != "prune_model") or pruning_accepted
+        ):
+            # An accepted prune is the run's compact result even when slightly less accurate.
+            self._save_best_checkpoint(run_id, goal, state, summary, active)
         state["stage"] = "deciding"
         if retry_pruning:
             state["pending_step"] = {
@@ -1006,6 +1082,90 @@ class Supervisor:
             state["stage"] = "executing"
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
+
+    def _save_best_checkpoint(
+        self,
+        run_id: str,
+        goal: dict[str, Any],
+        state: dict[str, Any],
+        summary: dict[str, Any],
+        active: dict[str, Any],
+    ) -> None:
+        """Keep the best worker model of this experiment so it can be restored later."""
+        per_worker = summary.get("validation_per_worker") or {}
+        source_worker = max(sorted(per_worker), key=per_worker.get) if per_worker else None
+        action = {
+            "action": "create_initial_model",
+            "parameters": {
+                "model_name": goal["dataset"],
+                "best_checkpoint": "save",
+                "checkpoint_id": run_id,
+                **({"source_worker": source_worker} if source_worker else {}),
+            },
+        }
+        try:
+            report = _unwrap_result(self._dispatch(action, "Keep the run's best model", run_id)).get("data") or {}
+        except Exception as error:  # noqa: BLE001 - the run continues without a checkpoint
+            # The saved model is no longer the best one; never restore it.
+            state["best_checkpoint"] = None
+            self._event(run_id, "warning", f"Could not save the best model checkpoint: {str(error)[:200]}")
+            return
+        source = report.get("source_worker") or source_worker
+        test_row = (summary.get("test_per_worker") or {}).get(source) or {}
+        state["best_checkpoint"] = {
+            "dataset": goal["dataset"],
+            "group_id": summary.get("group_id"),
+            "step": summary.get("step"),
+            "source_worker": source,
+            "validation_accuracy": per_worker.get(source),
+            "test_accuracy": test_row.get("accuracy"),
+            "mean_validation_accuracy": summary.get("validation_accuracy"),
+            "architecture_id": summary.get("architecture"),
+            "parameter_count": summary.get("parameter_count"),
+            "topology": summary.get("topology") or active.get("topology"),
+            "aggregation": active.get("aggregation"),
+            "architecture": state.get("last_trained_architecture"),
+        }
+
+    def _install_best_checkpoint(self, run_id: str, state: dict[str, Any]) -> dict[str, Any] | None:
+        """Leave every worker with the run's best (or accepted pruned) model."""
+        checkpoint = state.get("best_checkpoint")
+        if not isinstance(checkpoint, dict):
+            return None
+        deployed = {
+            key: checkpoint.get(key)
+            for key in (
+                "group_id",
+                "step",
+                "source_worker",
+                "validation_accuracy",
+                "test_accuracy",
+                "architecture_id",
+                "parameter_count",
+                "topology",
+            )
+        }
+        if state.get("active"):
+            deployed.update(installed=False, error="An experiment was still active when the run ended")
+            return deployed
+        action = {
+            "action": "create_initial_model",
+            "parameters": {"model_name": checkpoint["dataset"], "best_checkpoint": "install", "checkpoint_id": run_id},
+        }
+        try:
+            _unwrap_result(self._dispatch(action, "Install the run's best model on every worker", run_id))
+        except Exception as error:  # noqa: BLE001 - recorded; the measured result is unaffected
+            deployed.update(installed=False, error=str(error)[:300])
+            self._event(run_id, "warning", f"Could not install the best model on the workers: {str(error)[:200]}")
+            return deployed
+        deployed["installed"] = True
+        self._event(
+            run_id,
+            "model_deployed",
+            f"Installed the run's best model ({checkpoint.get('step')}, {checkpoint.get('source_worker')}) on every worker.",
+            {"deployed_model": deployed},
+        )
+        return deployed
 
     @staticmethod
     def _warm_start_source(state: dict[str, Any], architecture: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1210,6 +1370,7 @@ class Supervisor:
     def _finish(self, run_id: str, state: dict[str, Any], decision: Decision) -> None:
         outcome = decision.arguments.get("outcome", "no_worthwhile_action")
         summary = decision.arguments.get("summary", "")
+        deployed = self._install_best_checkpoint(run_id, state)
         state["stage"] = "finished"
         state["pending_step"] = None
         status = "failed" if outcome == "blocked" else "completed"
@@ -1218,6 +1379,7 @@ class Supervisor:
             "summary": summary,
             "decided_by": decision.source,
             "best": state.get("best"),
+            "deployed_model": deployed,
             "experiments": len(state.get("experiments", [])),
             "counters": state.get("counters"),
         }

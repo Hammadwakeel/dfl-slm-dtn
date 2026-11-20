@@ -1093,6 +1093,8 @@ export interface SupervisorState {
   pruning?: SupervisorPruning | null;
   /** Every pruning attempt in order; a rejected 30% prune is retried once at 15%. */
   pruning_attempts?: SupervisorPruning[];
+  /** Trainings continued from the run's best checkpoint after the target was missed. */
+  continuations?: SupervisorContinuation[];
   /** The final training continued from this experiment's trained model. */
   warm_start?: {
     from_group_id?: string;
@@ -1105,6 +1107,23 @@ export interface SupervisorState {
   counters: SupervisorCounters;
   waiting_reason?: string;
   deadline?: string;
+}
+
+export interface SupervisorDeployedModel {
+  step?: string | null;
+  source_worker?: string | null;
+  validation_accuracy?: number | null;
+  test_accuracy?: number | null;
+  architecture_id?: string | null;
+  parameter_count?: number | null;
+  installed?: boolean;
+  error?: string;
+}
+
+export interface SupervisorContinuation {
+  validation_accuracy?: number | null;
+  gain?: number | null;
+  improved?: boolean;
 }
 
 export interface SupervisorEvent {
@@ -1130,6 +1149,8 @@ export interface SupervisorRun {
     summary: string;
     decided_by?: string;
     best?: SupervisorBest | null;
+    /** The run's best (or accepted pruned) model, installed on every worker at the end. */
+    deployed_model?: SupervisorDeployedModel | null;
     counters?: SupervisorCounters;
   } | null;
   error: string | null;

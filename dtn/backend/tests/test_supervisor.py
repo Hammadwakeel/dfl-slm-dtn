@@ -167,7 +167,7 @@ class FakeCluster:
         self.actions: list[dict[str, Any]] = []
         self.result_queries: list[str] = []
         self.groups: list[dict[str, Any]] = []
-        self.accuracy = {"baseline_training": 0.90, "train_final": 0.96}
+        self.accuracy = {"baseline_training": 0.90, "train_final": 0.96, "continue": 0.90}
         self.fail_next: dict[str, str] = {}
         self.cleanups = 0
         self.counter = 0
@@ -182,6 +182,8 @@ class FakeCluster:
             self.warm_started = True
             report = {"warm_started": True, "source_worker": action["parameters"].get("source_worker", "worker1")}
             return {"status": "executed", "result": {"available": True, "data": report}}
+        if name == "create_initial_model" and action["parameters"].get("best_checkpoint") == "install":
+            self.checkpoint_installed = True
         if name in {"preprocess_dataset", "create_initial_model"}:
             return {"status": "executed", "result": {"available": True, "data": {"dataset_name": "mnist", **self.model_report}}}
         if name == "prune_model" and action["parameters"].get("restore_source"):
@@ -217,8 +219,11 @@ class FakeCluster:
                 "_fine_tune": name == "start_training" and self.pruned,
                 "_ratio": getattr(self, "prune_ratio", None),
                 "_warm": name == "start_training" and getattr(self, "warm_started", False),
+                "_continue": name == "start_training" and getattr(self, "checkpoint_installed", False),
             }
         )
+        if name == "start_training":
+            self.checkpoint_installed = False
         return {
             "status": "executed",
             "result": {"action": action, "result": {"available": True, "data": {"accepted": True, "group_id": group_id}}},
@@ -235,7 +240,9 @@ class FakeCluster:
             action = group["_action"]
             if group["kind"] == "decentralized":
                 step = (
-                    "fine_tune"
+                    "continue"
+                    if group.get("_continue")
+                    else "fine_tune"
                     if group["_fine_tune"]
                     else "warm_final"
                     if group.get("_warm")
@@ -250,6 +257,8 @@ class FakeCluster:
                     accuracy = self.accuracy[f"fine_tune_{group['_ratio']}"]
                 else:
                     accuracy = self.accuracy[step]
+                if isinstance(accuracy, list):
+                    accuracy = accuracy.pop(0)
                 group["runs"] = [{"rounds": [{"workers": {"worker1": {"validation_accuracy": accuracy, "validation_macro_f1": accuracy - 0.01}}}]}]
                 group["topology"] = "directed_ring"
             elif group["kind"] == "dataset_architecture_search":
@@ -931,3 +940,128 @@ def test_workers_left_unregistered_by_a_failed_sync_are_re_registered(sessions) 
     assert finished["status"] == "completed"
     assert len(calls) == 1
     assert any("Re-registered the workers" in event["message"] for event in finished["events"])
+
+
+# --------------------------------------------------------------------------- continuation + best model
+
+
+def _continuation_state() -> dict[str, Any]:
+    state = new_state()
+    state["completed_steps"] = ["baseline_training", "run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final"]
+    state["nas_architecture"] = {**NAS_ARCHITECTURE, "layers": CNN_LAYERS}
+    state["selected_topology"] = "learned"
+    state["trained_configs"] = ["b2_c16_k5|learned"]
+    state["last_trained_architecture"] = state["nas_architecture"]
+    state["experiments"] = [
+        {"step": "train_final", "kind": "decentralized", "status": "completed", "group_id": "g1", "validation_accuracy": 0.66}
+    ]
+    state["best"] = {"validation_accuracy": 0.66, "group_id": "g1"}
+    state["best_checkpoint"] = {"group_id": "g1", "architecture": state["nas_architecture"]}
+    return state
+
+
+def test_continuation_is_offered_before_pruning_only_while_it_keeps_helping() -> None:
+    goal = default_goal(dataset="cifar10", target_accuracy=0.70, max_experiments=12)
+    state = _continuation_state()
+    assert allowed_steps(goal, state) == ["continue_training", "finish_workflow"]
+    assert fallback_decision(goal, state).step == "continue_training"
+
+    state["continuations"] = [{"validation_accuracy": 0.68, "improved": True}]
+    assert allowed_steps(goal, state)[0] == "continue_training"
+    # A continuation without gain, or the second one, ends continuation; pruning is next.
+    state["continuations"] = [{"validation_accuracy": 0.661, "improved": False}]
+    assert allowed_steps(goal, state) == ["prune_model", "finish_workflow"]
+    state["continuations"] = [{"improved": True}, {"improved": True}]
+    assert "continue_training" not in allowed_steps(goal, state)
+
+    # Never when the target is met, without a checkpoint, or after a prune.
+    state = _continuation_state()
+    state["best"]["validation_accuracy"] = 0.71
+    assert "continue_training" not in allowed_steps(goal, state)
+    state = _continuation_state()
+    state["best_checkpoint"] = None
+    assert "continue_training" not in allowed_steps(goal, state)
+    state = _continuation_state()
+    state["completed_steps"].append("prune_model")
+    assert "continue_training" not in allowed_steps(goal, state)
+
+
+def test_missed_target_continues_from_the_best_checkpoint_and_ends_with_it_installed(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy.update(train_final=0.96, warm_final=0.96, fine_tune=0.97)
+    cluster.accuracy["continue"] = [0.975, 0.976]
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    run = supervisor.create_run(default_goal(target_accuracy=0.99, max_experiments=10))
+
+    finished = run_until_done(supervisor, run["id"], ticks=80)
+
+    assert finished["status"] == "completed"
+    state = finished["state"]
+    assert [(item["validation_accuracy"], item["improved"]) for item in state["continuations"]] == [
+        (0.975, True),
+        (0.976, False),
+    ]
+    actions = cluster.actions
+    continued = [
+        index
+        for index, action in enumerate(actions)
+        if action["action"] == "create_initial_model" and action["parameters"].get("best_checkpoint") == "install"
+    ]
+    # Two continuations plus the final install, all of this run's checkpoint.
+    assert len(continued) == 3
+    assert all(actions[index]["parameters"]["checkpoint_id"] == run["id"] for index in continued)
+    for index in continued[:2]:
+        training = next(action for action in actions[index:] if action["action"] == "start_training")
+        assert "architecture" not in training["parameters"]
+        assert training["parameters"]["rounds"] == 10
+    assert actions[-1]["parameters"].get("best_checkpoint") == "install"
+    saves = [a for a in actions if a["action"] == "create_initial_model" and a["parameters"].get("best_checkpoint") == "save"]
+    # New bests: baseline, learned topology, both continuations, then the accepted prune.
+    assert len(saves) == 5
+    # Continuation ran out before pruning; the accepted prune is the model left on the workers.
+    assert state["pruning"]["accepted"] is True
+    deployed = finished["result"]["deployed_model"]
+    assert deployed["step"] == "prune_model" and deployed["installed"] is True
+    assert any(event["event_type"] == "model_deployed" for event in finished["events"])
+
+
+def test_the_checkpoint_comes_from_the_best_globally_validated_worker(sessions) -> None:
+    cluster = FakeCluster()
+
+    def evaluate(dataset_name: str) -> dict:
+        result = _global_result(0.92, 0.91)
+        result["validation"]["per_worker"] = {"worker1": {"accuracy": 0.90}, "worker3": {"accuracy": 0.94}}
+        result["test"]["per_worker"] = {"worker1": {"accuracy": 0.89}, "worker3": {"accuracy": 0.93}}
+        return result
+
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "done"})]), global_evaluate=evaluate)
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
+
+    save = next(a for a in cluster.actions if a["parameters"].get("best_checkpoint") == "save")
+    assert save["parameters"]["source_worker"] == "worker3"
+    deployed = finished["result"]["deployed_model"]
+    assert deployed["source_worker"] == "worker3"
+    assert deployed["validation_accuracy"] == pytest.approx(0.94)
+    assert deployed["test_accuracy"] == pytest.approx(0.93)
+    assert deployed["step"] == "baseline_training" and deployed["installed"] is True
+
+
+def test_a_failed_checkpoint_save_disables_continuation_and_the_final_install(sessions) -> None:
+    class NoCheckpoint(FakeCluster):
+        def dispatch(self, action, reason, run_id):
+            if action["parameters"].get("best_checkpoint") == "save":
+                self.actions.append(action)
+                return {"status": "executed", "result": {"available": False, "message": "worker1 unreachable"}}
+            return super().dispatch(action, reason, run_id)
+
+    cluster = NoCheckpoint()
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([tool_call("finish_workflow", {"outcome": "no_worthwhile_action", "summary": "done"})]))
+    finished = run_until_done(supervisor, supervisor.create_run(default_goal(target_accuracy=0.99))["id"])
+
+    assert finished["status"] == "completed"
+    assert finished["state"]["best_checkpoint"] is None
+    assert finished["result"]["deployed_model"] is None
+    assert not any(a["parameters"].get("best_checkpoint") == "install" for a in cluster.actions)
+    assert any("best model checkpoint" in event["message"] for event in finished["events"] if event["event_type"] == "warning")
+

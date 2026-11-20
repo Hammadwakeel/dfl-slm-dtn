@@ -1,0 +1,155 @@
+{
+  "runs": [
+    {
+      "seed": 17,
+      "run_id": "5588000d-8a0a-4c04-b8b7-05ccbbaa077d",
+      "status": "completed",
+      "outcome": "objective_achieved",
+      "error": null,
+      "created_at": "2026-11-20T16:11:01.289186+00:00",
+      "finished_at": "2026-11-20T18:02:32.856528+00:00",
+      "steps": [
+        {
+          "step": "baseline_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "baseline",
+          "parameter_count": 324394,
+          "validation_accuracy": 0.50255,
+          "local_validation_accuracy": 0.712218,
+          "test_accuracy": 0.5019,
+          "test_std": 0.058808
+        },
+        {
+          "step": "run_nas",
+          "status": "completed",
+          "topology": null,
+          "architecture": "seed-baseline",
+          "parameter_count": 324394,
+          "validation_accuracy": null,
+          "local_validation_accuracy": null,
+          "test_accuracy": null,
+          "test_std": null
+        },
+        {
+          "step": "run_hpo",
+          "status": "completed",
+          "topology": null,
+          "architecture": "hpo-adam-lr1e-3-bs8",
+          "parameter_count": 324394,
+          "validation_accuracy": null,
+          "local_validation_accuracy": null,
+          "test_accuracy": null,
+          "test_std": null
+        },
+        {
+          "step": "optimize_topology",
+          "status": "completed",
+          "topology": "mesh",
+          "architecture": null,
+          "parameter_count": null,
+          "validation_accuracy": null,
+          "local_validation_accuracy": null,
+          "test_accuracy": null,
+          "test_std": null
+        },
+        {
+          "step": "train_final",
+          "status": "completed",
+          "topology": "mesh",
+          "architecture": "hpo-adam-lr1e-3-bs8",
+          "parameter_count": 324394,
+          "validation_accuracy": 0.7986,
+          "local_validation_accuracy": 0.806392,
+          "test_accuracy": 0.7955,
+          "test_std": 0.0
+        },
+        {
+          "step": "prune_model",
+          "status": "completed",
+          "topology": "mesh",
+          "architecture": "hpo-adam-lr1e-3-bs8-pruned30",
+          "parameter_count": 161094,
+          "validation_accuracy": 0.7974,
+          "local_validation_accuracy": 0.80942,
+          "test_accuracy": 0.7963,
+          "test_std": 0.0
+        }
+      ],
+      "baseline_test_accuracy": 0.5019,
+      "best_step": "train_final",
+      "best_topology": "mesh",
+      "best_architecture": "hpo-adam-lr1e-3-bs8",
+      "best_validation_accuracy": 0.7986,
+      "best_test_accuracy": 0.7955,
+      "best_test_std": 0.0,
+      "best_parameter_count": 324394,
+      "pruning_accepted": true,
+      "pruning_attempts": [
+        {
+          "ratio": 0.3,
+          "validation_accuracy": 0.7974,
+          "accepted": true
+        }
+      ],
+      "pruned_test_accuracy": 0.7963,
+      "pruned_parameter_count": 161094,
+      "warm_start": false,
+      "continuations": [],
+      "deployed_model": {
+        "group_id": "mesh-1795196332-981dc4",
+        "step": "prune_model",
+        "source_worker": "worker1",
+        "validation_accuracy": 0.7974,
+        "test_accuracy": 0.7963,
+        "architecture_id": "hpo-adam-lr1e-3-bs8-pruned30",
+        "parameter_count": 161094,
+        "topology": "mesh",
+        "installed": true
+      },
+      "deployed_test_accuracy": 0.7963,
+      "decisions": [
+        {
+          "message": "run_nas chosen by slm: Baseline model is too small (50.25% accuracy), need to search for a better architecture on worker data before tuning hyperparameters or optimizing topology."
+        },
+        {
+          "message": "run_hpo chosen by slm: Tune learning rate and batch size of the best architecture (seed-baseline) on every worker's own data to improve validation accuracy before final training."
+        },
+        {
+          "message": "optimize_topology chosen by slm: Improve validation accuracy from 0.50255 by finding a better peer-to-peer topology for non-IID CIFAR10 data, with 5 experiments and 860 minutes remaining."
+        },
+        {
+          "message": "train_final chosen by slm: Use the best architecture found (hpo-adam-lr1e-3-bs8) with the selected topology (mesh) to maximize validation accuracy within remaining time."
+        },
+        {
+          "message": "prune_model chosen by rule: The target is met; compress the model for the Jetsons before finishing."
+        },
+        {
+          "message": "finish_workflow chosen by rule: The measured result meets the goal."
+        }
+      ],
+      "slm_decisions": 4,
+      "rule_decisions": 2,
+      "fallback_decisions": 0,
+      "errors": []
+    }
+  ],
+  "active": null,
+  "goal": {
+    "dataset": "cifar10",
+    "target_accuracy": 0.7,
+    "max_experiments": 8,
+    "time_budget_minutes": 900,
+    "dataset_split": "dirichlet_a03",
+    "rounds": 10,
+    "local_epochs": 5,
+    "topology": "directed_ring",
+    "nas_budget_seconds": 600,
+    "aggregation": "fedavg",
+    "sync_mode": "semi_sync",
+    "sync_deadline_seconds": 300,
+    "seed": 17,
+    "augmentation": null,
+    "nas_version": "v2"
+  }
+}

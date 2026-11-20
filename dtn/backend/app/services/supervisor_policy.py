@@ -60,6 +60,9 @@ MAX_STEP_FAILURES = 2
 # from the run's best checkpoint, at most this often and only while it keeps helping.
 MAX_CONTINUATIONS = 2
 CONTINUATION_MIN_GAIN = 0.005
+# A run this close to its target, with this much time left, always continues training.
+CONTINUATION_NEAR_TARGET = 0.05
+CONTINUATION_MIN_MINUTES = 30
 
 STEP_TOOLS: dict[str, dict[str, Any]] = {
     "run_nas": {
@@ -529,6 +532,23 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
             "finish_workflow",
             {"outcome": "blocked", "summary": "The workflow time budget is exhausted."},
             "No time budget remains.",
+            "rule",
+        )
+    gap = float(goal["target_accuracy"]) - accuracy if isinstance(accuracy, (int, float)) else None
+    if (
+        gap is not None
+        and gap <= CONTINUATION_NEAR_TARGET
+        and minutes_left >= CONTINUATION_MIN_MINUTES
+        and "continue_training" in allowed_steps(goal, state)
+    ):
+        # Close to the target with budget left: stopping would waste a likely win.
+        return Decision(
+            "continue_training",
+            {},
+            (
+                f"Best validation accuracy {accuracy:.4f} is {gap * 100:.2f} points below the target "
+                f"{float(goal['target_accuracy']):.4f}; continue from the best checkpoint."
+            ),
             "rule",
         )
     if allowed_steps(goal, state) == ["finish_workflow"]:

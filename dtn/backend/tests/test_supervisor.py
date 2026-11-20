@@ -986,6 +986,23 @@ def test_continuation_is_offered_before_pruning_only_while_it_keeps_helping() ->
     assert "continue_training" not in allowed_steps(goal, state)
 
 
+def test_a_run_close_to_its_target_with_time_left_always_continues() -> None:
+    goal = default_goal(dataset="cifar10", target_accuracy=0.70, max_experiments=12)
+    state = _continuation_state()
+    state["best"]["validation_accuracy"] = 0.6969
+    decision = rule_decision(goal, state, minutes_left=600)
+    assert decision is not None and decision.step == "continue_training" and decision.source == "rule"
+    assert "0.31 points below" in decision.rationale
+
+    # Too far from the target, too little time, or no continuation left: the SLM decides.
+    state["best"]["validation_accuracy"] = 0.62
+    assert rule_decision(goal, state, minutes_left=600) is None
+    state["best"]["validation_accuracy"] = 0.6969
+    assert rule_decision(goal, state, minutes_left=10) is None
+    state["continuations"] = [{"validation_accuracy": 0.6969, "improved": False}]
+    assert rule_decision(goal, state, minutes_left=600) is None
+
+
 def test_missed_target_continues_from_the_best_checkpoint_and_ends_with_it_installed(sessions) -> None:
     cluster = FakeCluster()
     cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}

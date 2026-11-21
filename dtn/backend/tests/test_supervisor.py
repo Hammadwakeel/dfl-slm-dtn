@@ -1163,3 +1163,15 @@ def test_a_pruned_model_below_the_met_target_is_rejected(sessions) -> None:
     # 0.945 is within the 2-point tolerance of 0.96 but below the met 0.95 target.
     assert attempts and not any(item["accepted"] for item in attempts)
     assert finished["state"]["best"]["validation_accuracy"] == pytest.approx(0.96)
+
+
+def test_fair_mode_finishes_only_after_every_search_step() -> None:
+    goal = default_goal(target_accuracy=0.99, measure_each_step=True, max_experiments=20)
+    state = new_state()
+    state["completed_steps"] = ["prepare_data", "initial_model", "baseline_training"]
+    assert "finish_workflow" not in allowed_steps(goal, state)
+    state["completed_steps"] += ["run_nas", "learn_topology", "optimize_topology", "optimize_aggregation", "optimize_sync"]
+    state["nas_architecture"] = None
+    assert "finish_workflow" in allowed_steps(goal, state)
+    # Without fair mode the SLM may always finish.
+    assert "finish_workflow" in allowed_steps(default_goal(), new_state())

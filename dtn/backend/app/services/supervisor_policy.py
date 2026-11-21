@@ -351,6 +351,10 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
             steps.append("continue_training")
         if can_prune(state) and (target_met or not steps):
             steps.append("prune_model")
+        # Fair mode is an ablation: every search step is measured, in the order the SLM
+        # chooses, before the run may finish (unless the target is already met).
+        if fair and not target_met and any(step in SEARCH_STEPS for step in steps):
+            return steps
     steps.append("finish_workflow")
     return steps
 

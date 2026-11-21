@@ -17,25 +17,28 @@ router = APIRouter(
 
 
 class GoalRequest(BaseModel):
-    dataset: Literal["mnist", "cifar10"]
+    dataset: Literal["mnist", "cifar10", "fashion_mnist", "femnist"]
     target_accuracy: float = Field(0.95, ge=0.1, le=0.999)
     max_experiments: int = Field(6, ge=1, le=20)
     time_budget_minutes: int = Field(480, ge=10, le=2880)
     dataset_split: Literal[
-        "stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"
+        "stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07", "dirichlet_a09"
     ] = "dirichlet_a03"
     rounds: int = Field(10, ge=1, le=20)
     local_epochs: int = Field(5, ge=1, le=20)
     topology: Literal["directed_ring", "bidirectional_ring", "mesh", "chain", "star"] = "directed_ring"
     nas_budget_seconds: int = Field(600, ge=90, le=600)
     aggregation: Literal["fedavg", "uniform", "metropolis", "trimmed_mean"] = "fedavg"
-    sync_mode: Literal["sync", "semi_sync"] = "semi_sync"
+    sync_mode: Literal["sync", "semi_sync", "async"] = "semi_sync"
     sync_deadline_seconds: int = Field(300, ge=30, le=3600)
     seed: int = Field(2026, ge=0, le=4_294_967_295)
     # None = dataset default (flip_shift for CIFAR-10, none for MNIST).
     augmentation: Literal["none", "flip_shift"] | None = None
     # v2: shared-split objective, extended CIFAR-10 space, federated finalist check.
     nas_version: Literal["v1", "v2"] = "v2"
+    # Fair evaluation: every training uses rounds x local_epochs from the same initial
+    # weights, and each search step is followed by a measurement of its effect.
+    measure_each_step: bool = False
 
 
 class StopRequest(BaseModel):
@@ -47,7 +50,7 @@ class QuestionRequest(BaseModel):
 
 
 class EvaluateRequest(BaseModel):
-    dataset: Literal["mnist", "cifar10"]
+    dataset: Literal["mnist", "cifar10", "fashion_mnist", "femnist"]
     # Only score models from this master run id (all workers' newest otherwise).
     run_id: str | None = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
 

@@ -25,14 +25,21 @@ type SplitStrategy =
   | "dirichlet_a01"
   | "dirichlet_a03"
   | "dirichlet_a05"
-  | "dirichlet_a07";
+  | "dirichlet_a07"
+  | "dirichlet_a09";
 type Normalization = "standard" | "minmax" | "none";
 
-const OFFICIAL_DATASETS = new Set(["mnist", "cifar10"]);
-const DATASET_ORDER = ["mnist", "cifar10"];
+const OFFICIAL_DATASETS = new Set(["mnist", "cifar10", "fashion_mnist", "femnist"]);
+const DATASET_ORDER = ["mnist", "cifar10", "fashion_mnist", "femnist"];
+const DATASET_LABELS: Record<string, string> = {
+  mnist: "MNIST",
+  cifar10: "CIFAR-10",
+  fashion_mnist: "Fashion-MNIST",
+  femnist: "FEMNIST",
+};
 
 function datasetLabel(datasetName: string): string {
-  return datasetName === "cifar10" ? "CIFAR-10" : "MNIST";
+  return DATASET_LABELS[datasetName] ?? datasetName;
 }
 
 function imageSize(metadata: DatasetMetadata): { height: number; width: number } {
@@ -366,6 +373,7 @@ export default function DatasetsPage({ token, active = true }: Props) {
                   <option value="dirichlet_a03">Dirichlet α=0.3</option>
                   <option value="dirichlet_a05">Dirichlet α=0.5</option>
                   <option value="dirichlet_a07">Dirichlet α=0.7</option>
+                  <option value="dirichlet_a09">Dirichlet α=0.9</option>
                 </select>
               </label>
               {!selected.source_split_policy && (

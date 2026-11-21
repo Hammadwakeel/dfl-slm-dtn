@@ -7,6 +7,13 @@ evaluation on the official test split (never used for decisions).
 
     python scripts/paper_campaign.py --dataset mnist --target 0.95
     python scripts/paper_campaign.py --dataset cifar10 --target 0.70 --time-budget 900
+    python scripts/paper_campaign.py --dataset femnist --target 0.80 --split dirichlet_a01 \
+        --measure-each-step --max-experiments 16 --time-budget 600
+
+With ``--measure-each-step`` every training uses the same rounds x local epochs as
+the baseline, from the same initial weights, and the supervisor measures the
+configuration found so far after every search step, so the report shows the
+accuracy after each step and what each step added.
 
 Progress is saved after every run, so re-running the same command resumes.
 The API token is read from ``.env`` (``DTN_API_TOKEN``) and never printed.
@@ -35,6 +42,9 @@ STEP_LABELS = {
     "run_nas": "NAS",
     "run_hpo": "HPO",
     "optimize_topology": "Topology sweep",
+    "optimize_aggregation": "Aggregation sweep",
+    "optimize_sync": "Synchronization sweep",
+    "measure_step": "Measurement",
     "learn_topology": "APG learned topology",
     "train_final": "Final training",
     "continue_training": "Continued training",
@@ -123,13 +133,27 @@ def summarize_run(seed: int, run: dict[str, Any]) -> dict[str, Any]:
                 "architecture": item.get("architecture"),
                 "parameter_count": item.get("parameter_count"),
                 "validation_accuracy": item.get("validation_accuracy"),
+                "validation_min": (item.get("global_validation") or {}).get("min_accuracy"),
+                "macro_f1": item.get("macro_f1"),
                 "local_validation_accuracy": item.get("local_validation_accuracy"),
                 "test_accuracy": _test(item)[0],
                 "test_std": _test(item)[1],
+                "test_min": (item.get("test") or {}).get("min_accuracy"),
+                "test_macro_f1": item.get("test_macro_f1"),
+                "measures": item.get("measures"),
+                "aggregation": item.get("aggregation"),
+                "sync_mode": item.get("sync_mode"),
+                "rounds_completed": item.get("rounds_completed"),
+                "search_validation_accuracy": item.get("search_validation_accuracy"),
+                "selected_topology": item.get("selected_topology"),
+                "selected_aggregation": item.get("selected_aggregation"),
+                "selected_sync_mode": item.get("selected_sync_mode"),
+                "hyperparameters": item.get("hyperparameters"),
             }
             for item in experiments
         ],
         "baseline_test_accuracy": _test(baseline)[0] if baseline else None,
+        "baseline_validation_accuracy": baseline.get("validation_accuracy") if baseline else None,
         "best_step": best.get("step"),
         "best_topology": best.get("topology"),
         "best_architecture": best.get("architecture"),
@@ -186,6 +210,70 @@ def _hours(start: str | None, end: str | None) -> str:
         return "n/a"
 
 
+def _step_change(step: dict[str, Any], previous_search: dict[str, Any] | None) -> str:
+    source = previous_search or step
+    kind = source.get("step")
+    if kind == "run_nas":
+        return f"architecture {source.get('architecture') or 'kept'} ({source.get('parameter_count') or '?'} params)"
+    if kind == "run_hpo":
+        hp = source.get("hyperparameters") or {}
+        return f"lr {hp.get('learning_rate')}, batch {hp.get('batch_size')}"
+    if kind == "optimize_topology":
+        return f"topology {source.get('selected_topology')}"
+    if kind == "optimize_aggregation":
+        return f"aggregation {source.get('selected_aggregation')}"
+    if kind == "optimize_sync":
+        return f"sync {source.get('selected_sync_mode')}"
+    if kind == "learn_topology":
+        return "learned (APG) topology"
+    if kind == "prune_model":
+        return f"30% channels pruned ({step.get('parameter_count')} params)"
+    if kind == "baseline_training":
+        return f"{step.get('topology')}, {step.get('aggregation')}, {step.get('sync_mode') or 'goal sync'}"
+    return kind or ""
+
+
+def _signed(value: float | None) -> str:
+    return f"{100 * value:+.2f}" if isinstance(value, (int, float)) else "–"
+
+
+def _step_impact(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Accuracy after each trained step and what it added (fair-budget runs)."""
+    rows: list[dict[str, Any]] = []
+    baseline_val = previous_val = None
+    last_search: dict[str, Any] | None = None
+    for step in steps:
+        if step.get("status") != "completed":
+            continue
+        if step.get("step") in {"run_nas", "run_hpo", "optimize_topology", "optimize_aggregation", "optimize_sync"}:
+            last_search = step
+            continue
+        val = step.get("validation_accuracy")
+        if not isinstance(val, (int, float)):
+            continue
+        name = step.get("step")
+        label = STEP_LABELS.get(step.get("measures") or "", step.get("measures")) if name == "measure_step" else STEP_LABELS.get(name, name)
+        change = _step_change(step, last_search if name == "measure_step" else None)
+        if name == "baseline_training":
+            baseline_val = val
+        rows.append(
+            {
+                "label": label,
+                "change": change,
+                "val": val,
+                "val_min": step.get("validation_min"),
+                "test": step.get("test_accuracy"),
+                "test_min": step.get("test_min"),
+                "delta_prev": _signed(val - previous_val) if previous_val is not None else "–",
+                "delta_base": _signed(val - baseline_val) if baseline_val is not None and name != "baseline_training" else "–",
+            }
+        )
+        previous_val = val
+        if name == "measure_step":
+            last_search = None
+    return rows
+
+
 def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict[str, Any]]) -> None:
     def values(key: str) -> list[float]:
         return [item[key] for item in runs if isinstance(item.get(key), (int, float))]
@@ -207,7 +295,7 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
         "| Setting | Value |",
         "|---|---|",
     ]
-    for key in ("dataset", "target_accuracy", "max_experiments", "time_budget_minutes", "dataset_split", "rounds", "local_epochs"):
+    for key in ("dataset", "target_accuracy", "max_experiments", "time_budget_minutes", "dataset_split", "rounds", "local_epochs", "measure_each_step"):
         if key in goal:
             lines.append(f"| {key} | {goal[key]} |")
     lines += [
@@ -257,6 +345,20 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
                 f"{step.get('architecture') or ''} | {params} | {_pct(step.get('validation_accuracy')) if step.get('validation_accuracy') is not None else ''} | "
                 f"{test} | {_pct(step.get('local_validation_accuracy')) if step.get('local_validation_accuracy') is not None else ''} |"
             )
+        impact = _step_impact(item["steps"])
+        if impact:
+            lines += [
+                "",
+                "Step impact (every trained model uses the baseline's rounds x epochs):",
+                "",
+                "| After | Config change | Val | Weakest (val) | Test | Weakest (test) | Δ val vs previous | Δ val vs baseline |",
+                "|---|---|---|---|---|---|---|---|",
+            ]
+            for row in impact:
+                lines.append(
+                    f"| {row['label']} | {row['change']} | {_pct(row['val'])} | {_pct(row['val_min'])} | "
+                    f"{_pct(row['test'])} | {_pct(row['test_min'])} | {row['delta_prev']} | {row['delta_base']} |"
+                )
         lines += ["", "Agent decisions:", ""]
         lines += [f"1. {decision['message']}" for decision in item["decisions"]] or ["(none)"]
         if item["pruning_attempts"]:
@@ -289,7 +391,11 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dataset", choices=("mnist", "cifar10"), required=True)
+    parser.add_argument("--dataset", choices=("mnist", "cifar10", "fashion_mnist", "femnist"), required=True)
+    parser.add_argument("--split", default="dirichlet_a03", choices=("dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07", "dirichlet_a09"))
+    parser.add_argument("--measure-each-step", action="store_true", help="fair budget: measure every step")
+    parser.add_argument("--rounds", type=int, default=10)
+    parser.add_argument("--local-epochs", type=int, default=5)
     parser.add_argument("--target", type=float, required=True)
     parser.add_argument("--seeds", type=int, nargs="+", default=list(DEFAULT_SEEDS))
     parser.add_argument("--max-experiments", type=int, default=8)
@@ -299,7 +405,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     date = datetime.now().strftime("%Y-%m-%d")
-    report = args.out or REPO_ROOT / "docs" / "evidence" / f"agentic-{args.dataset}-3seed-{date}.md"
+    report = args.out or REPO_ROOT / "docs" / "evidence" / f"agentic-{args.dataset}-{args.split}-3seed-{date}.md"
     progress_path = report.with_suffix(".json")
     progress = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.is_file() else {"runs": []}
     api = Api(args.api, api_token())
@@ -308,6 +414,10 @@ def main(argv: list[str]) -> int:
         "target_accuracy": args.target,
         "max_experiments": args.max_experiments,
         "time_budget_minutes": args.time_budget,
+        "dataset_split": args.split,
+        "rounds": args.rounds,
+        "local_epochs": args.local_epochs,
+        "measure_each_step": bool(args.measure_each_step),
     }
     for seed in args.seeds:
         done = next((item for item in progress["runs"] if item["seed"] == seed and item["status"] == "completed"), None)

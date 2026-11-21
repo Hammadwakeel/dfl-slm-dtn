@@ -37,6 +37,9 @@ const STEP_LABELS: Record<string, string> = {
   run_hpo: "Hyperparameter tuning",
   learn_topology: "Learned topology (APG)",
   optimize_topology: "Topology optimization",
+  optimize_aggregation: "Aggregation optimization",
+  optimize_sync: "Synchronization optimization",
+  measure_step: "Step measurement (DFL)",
   prune_model: "Pruning + fine-tune",
   train_final: "Final DFL",
   continue_training: "Continued DFL",
@@ -206,6 +209,8 @@ function GoalForm({
           <select value={goal.dataset} onChange={(event) => update("dataset", event.target.value as SupervisorGoal["dataset"])}>
             <option value="mnist">MNIST</option>
             <option value="cifar10">CIFAR-10</option>
+            <option value="fashion_mnist">Fashion-MNIST</option>
+            <option value="femnist">FEMNIST</option>
           </select>
         </label>
         <label>
@@ -235,6 +240,7 @@ function GoalForm({
             <option value="dirichlet_a03">Dirichlet α=0.3</option>
             <option value="dirichlet_a05">Dirichlet α=0.5</option>
             <option value="dirichlet_a07">Dirichlet α=0.7</option>
+            <option value="dirichlet_a09">Dirichlet α=0.9</option>
           </select>
         </label>
         <label>
@@ -269,6 +275,7 @@ function GoalForm({
           <select value={goal.sync_mode} onChange={(event) => update("sync_mode", event.target.value as SupervisorGoal["sync_mode"])}>
             <option value="semi_sync">Semi-synchronous (deadline)</option>
             <option value="sync">Synchronous (wait for all)</option>
+            <option value="async">Asynchronous (bounded staleness)</option>
           </select>
         </label>
         <label>
@@ -292,6 +299,16 @@ function GoalForm({
           <select value={goal.nas_version ?? "v2"} onChange={(event) => update("nas_version", event.target.value as SupervisorGoal["nas_version"])}>
             <option value="v2">v2: shared-split + federated check</option>
             <option value="v1">v1: local objective (ablation)</option>
+          </select>
+        </label>
+        <label>
+          Step-by-step evaluation
+          <select
+            value={goal.measure_each_step ? "fair" : "off"}
+            onChange={(event) => update("measure_each_step", event.target.value === "fair")}
+          >
+            <option value="off">Off</option>
+            <option value="fair">Measure every step (baseline budget)</option>
           </select>
         </label>
       </div>
@@ -539,7 +556,7 @@ function ExperimentTable({ run }: { run: SupervisorRun }) {
                 <td>{experiment.selected_topology ?? experiment.topology ?? "–"}</td>
                 <td title={experiment.partial_rounds ? `${experiment.partial_rounds} round(s) aggregated without every peer` : undefined}>
                   {experiment.aggregation ?? "–"}
-                  {experiment.sync_mode === "semi_sync" ? " · semi-sync" : ""}
+                  {experiment.sync_mode === "semi_sync" ? " · semi-sync" : experiment.sync_mode === "async" ? " · async" : ""}
                   {experiment.partial_rounds ? ` · ${experiment.partial_rounds} partial` : ""}
                 </td>
               </tr>

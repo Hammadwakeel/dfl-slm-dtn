@@ -12,6 +12,10 @@ in-neighbours in the current topology. All rules return weights with the referen
 - ``trimmed_mean``: coordinate-wise mean after dropping the single smallest and largest
   value, robust to one faulty or outlying peer. Needs at least three models; with fewer it
   falls back to ``fedavg``.
+
+Synchronization modes: ``sync`` waits for every in-neighbour of the round, ``semi_sync``
+waits up to a deadline and continues with the peers that arrived, ``async`` waits only a
+short grace period and uses each missing peer's newest earlier model (bounded staleness).
 """
 
 from __future__ import annotations
@@ -22,7 +26,12 @@ from dataclasses import dataclass
 import numpy as np
 
 AGGREGATION_RULES = ("fedavg", "uniform", "metropolis", "trimmed_mean")
-SYNC_MODES = ("sync", "semi_sync")
+SYNC_MODES = ("sync", "semi_sync", "async")
+# Asynchronous rounds: a worker waits only this long for the current round of its
+# peers, then averages with each missing peer's newest model if it is at most
+# ASYNC_MAX_STALENESS rounds old (bounded staleness, no global barrier).
+ASYNC_GRACE_SECONDS = 2.0
+ASYNC_MAX_STALENESS = 2
 
 
 @dataclass(frozen=True)

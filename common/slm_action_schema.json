@@ -7,7 +7,7 @@
       "additionalProperties": false
     },
     "datasetName": {
-      "enum": ["mnist", "cifar10"]
+      "enum": ["mnist", "cifar10", "fashion_mnist", "femnist"]
     },
     "agentInitialModelParameters": {
       "type": "object",
@@ -18,7 +18,7 @@
       "additionalProperties": false
     },
     "preprocessableDatasetName": {
-      "enum": ["mnist", "cifar10"]
+      "enum": ["mnist", "cifar10", "fashion_mnist", "femnist"]
     },
     "cnnArchitecture": {
       "type": "object",
@@ -251,7 +251,7 @@
                 "seed": {"type": "integer", "minimum": 0, "maximum": 4294967295},
                 "replace_existing": {"type": "boolean"},
                 "dataset_split": {
-                  "enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]
+                  "enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07", "dirichlet_a09"]
                 }
               },
               "required": ["dataset_name"],
@@ -310,9 +310,9 @@
                 "epochs": {"type": "integer", "minimum": 1, "maximum": 50},
                 "dataset_name": {"$ref": "#/$defs/datasetName"},
                 "architecture": {"$ref": "#/$defs/modelArchitecture"},
-                "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07"]},
+                "dataset_split": {"enum": ["stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07", "dirichlet_a09"]},
                 "aggregation": {"enum": ["fedavg", "uniform", "metropolis", "trimmed_mean"]},
-                "sync_mode": {"enum": ["sync", "semi_sync"]},
+                "sync_mode": {"enum": ["sync", "semi_sync", "async"]},
                 "sync_deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 7200},
                 "seeds": {
                   "type": "array",
@@ -378,7 +378,7 @@
           "properties": {
             "action": {
               "const": "optimize_topology",
-              "description": "Start a measured sweep that selects a worker communication topology.",
+              "description": "Start a measured sweep that selects a worker topology, aggregation rule or synchronization mode.",
               "x-agent-tool": true
             },
             "parameters": {
@@ -398,10 +398,15 @@
                   "minItems": 1,
                   "maxItems": 1,
                   "uniqueItems": true,
-                  "items": {"type": "number", "enum": [0.1, 0.3, 0.5]}
+                  "items": {"type": "number", "enum": [0.1, 0.3, 0.5, 0.7, 0.9]}
                 },
-                "dataset_name": {"type": "string", "enum": ["mnist", "cifar10"]},
-                "augmentation": {"enum": ["none", "flip_shift"]}
+                "dataset_name": {"type": "string", "enum": ["mnist", "cifar10", "fashion_mnist", "femnist"]},
+                "augmentation": {"enum": ["none", "flip_shift"]},
+                "dimension": {"enum": ["topology", "aggregation", "sync"]},
+                "topology": {"enum": ["directed_ring", "bidirectional_ring", "mesh", "chain", "star"]},
+                "aggregation": {"enum": ["fedavg", "uniform", "metropolis", "trimmed_mean"]},
+                "sync_mode": {"enum": ["sync", "semi_sync", "async"]},
+                "sync_deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 7200}
               },
               "additionalProperties": false
             }

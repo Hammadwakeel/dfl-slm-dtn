@@ -48,6 +48,11 @@ def select_candidate(candidates: list[dict[str, Any]], seed: int = 2026) -> dict
             "topology": reward_choice["topology"],
             "alpha": reward_choice["alpha"],
             "mean_reward": reward_choice["mean_reward"],
+            **{
+                key: reward_choice[key]
+                for key in ("aggregation", "sync_mode")
+                if reward_choice.get(key) is not None
+            },
         },
         "baselines": {
             "best_observed": {

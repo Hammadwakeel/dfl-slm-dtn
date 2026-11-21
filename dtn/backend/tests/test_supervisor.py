@@ -34,11 +34,15 @@ def test_allowed_steps_offer_only_progress_steps_and_finish() -> None:
     state = new_state()
     state["completed_steps"] = ["prepare_data", "initial_model", "baseline_training"]
 
-    assert allowed_steps(goal, state) == ["run_nas", "optimize_topology", "learn_topology", "finish_workflow"]
+    assert allowed_steps(goal, state) == [
+        "run_nas", "optimize_topology", "learn_topology", "optimize_aggregation", "optimize_sync", "finish_workflow",
+    ]
 
     state["completed_steps"].append("run_nas")
     state["nas_architecture"] = NAS_ARCHITECTURE
-    assert allowed_steps(goal, state) == ["optimize_topology", "learn_topology", "run_hpo", "train_final", "finish_workflow"]
+    assert allowed_steps(goal, state) == [
+        "optimize_topology", "learn_topology", "run_hpo", "optimize_aggregation", "optimize_sync", "train_final", "finish_workflow",
+    ]
 
     # The master sweeps topologies on either dataset, so CIFAR-10 is offered it too.
     cifar = default_goal(dataset="cifar10")
@@ -72,7 +76,9 @@ def test_nas_v2_searches_on_the_shared_split_with_the_baseline_as_seed() -> None
 def test_trained_configuration_is_not_offered_again() -> None:
     goal = default_goal()
     state = new_state()
-    state["completed_steps"] = ["run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final"]
+    state["completed_steps"] = [
+        "run_nas", "run_hpo", "learn_topology", "optimize_topology", "optimize_aggregation", "optimize_sync", "train_final",
+    ]
     state["nas_architecture"] = NAS_ARCHITECTURE
     state["trained_configs"] = ["b2_c16_k5|directed_ring"]
 
@@ -267,7 +273,13 @@ class FakeCluster:
                 group["selected_architecture"] = {**action["parameters"]["architecture"], "id": "hpo-adam-lr3e-3-bs64"}
                 group["selected_hyperparameters"] = {"optimizer": "adam", "learning_rate": 0.003, "batch_size": 64}
             elif group["kind"] == "topology_optimization":
-                group["selected_configuration"] = {"topology": "bidirectional_ring"}
+                dimension = action["parameters"].get("dimension", "topology")
+                group["dimension"] = dimension
+                group["selected_configuration"] = {
+                    "topology": "bidirectional_ring" if dimension == "topology" else action["parameters"].get("topology"),
+                    **({"aggregation": "metropolis"} if dimension == "aggregation" else {}),
+                    **({"sync_mode": "semi_sync"} if dimension == "sync" else {}),
+                }
             group["status"] = "completed"
         return {"active_group_id": None, "groups": self.groups}
 
@@ -394,7 +406,7 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert {a["parameters"]["augmentation"] for a in cluster.actions if a["action"] == "start_training"} == {"none"}
     # Every SLM decision received only the compact allowed tool set.
     offered = [{tool["function"]["name"] for tool in tools} for _messages, tools in slm.calls]
-    assert offered[0] == {"run_nas", "optimize_topology", "learn_topology", "finish_workflow"}
+    assert offered[0] == {"run_nas", "optimize_topology", "learn_topology", "optimize_aggregation", "optimize_sync", "finish_workflow"}
     assert all("get_results" not in names for names in offered)
     assert finished["state"]["counters"]["slm_decisions"] == 2
     event_types = [event["event_type"] for event in finished["events"]]
@@ -947,7 +959,10 @@ def test_workers_left_unregistered_by_a_failed_sync_are_re_registered(sessions) 
 
 def _continuation_state() -> dict[str, Any]:
     state = new_state()
-    state["completed_steps"] = ["baseline_training", "run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final"]
+    state["completed_steps"] = [
+        "baseline_training", "run_nas", "run_hpo", "learn_topology", "optimize_topology",
+        "optimize_aggregation", "optimize_sync", "train_final",
+    ]
     state["nas_architecture"] = {**NAS_ARCHITECTURE, "layers": CNN_LAYERS}
     state["selected_topology"] = "learned"
     state["trained_configs"] = ["b2_c16_k5|learned"]
@@ -1009,7 +1024,7 @@ def test_missed_target_continues_from_the_best_checkpoint_and_ends_with_it_insta
     cluster.accuracy.update(train_final=0.96, warm_final=0.96, fine_tune=0.97)
     cluster.accuracy["continue"] = [0.975, 0.976]
     supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
-    run = supervisor.create_run(default_goal(target_accuracy=0.99, max_experiments=10))
+    run = supervisor.create_run(default_goal(target_accuracy=0.99, max_experiments=12))
 
     finished = run_until_done(supervisor, run["id"], ticks=80)
 
@@ -1093,3 +1108,58 @@ def test_the_slm_cannot_claim_the_objective_when_the_target_is_missed(sessions) 
     assert finished["result"]["outcome"] == "no_worthwhile_action"
     assert finished["result"]["summary"].startswith("Target 0.9900 not met (best validation accuracy 0.9000).")
     assert finished["status"] == "completed"
+
+
+# --------------------------------------------------------------------------- fair step-by-step mode
+
+
+def test_fair_mode_measures_every_step_with_the_baseline_budget(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy["train_final"] = [0.91, 0.92, 0.93, 0.94, 0.945, 0.95, 0.95, 0.95]
+    cluster.accuracy["fine_tune"] = 0.94
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    goal = default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True, sync_mode="sync")
+    run = supervisor.create_run(goal)
+
+    finished = run_until_done(supervisor, run["id"], ticks=300)
+
+    assert finished["status"] == "completed"
+    experiments = finished["state"]["experiments"]
+    steps = [item["step"] for item in experiments]
+    assert "train_final" not in steps and "continue_training" not in steps
+    measured = [item.get("measures") for item in experiments if item["step"] == "measure_step"]
+    assert set(measured) == {"run_nas", "run_hpo", "optimize_topology", "optimize_aggregation", "optimize_sync"}
+    # Each search step is directly followed by its measurement.
+    for index, item in enumerate(experiments):
+        if item["step"] in {"run_nas", "run_hpo", "optimize_topology", "optimize_aggregation", "optimize_sync"}:
+            assert experiments[index + 1]["step"] == "measure_step"
+            assert experiments[index + 1]["measures"] == item["step"]
+    trainings = [a["parameters"] for a in cluster.actions if a["action"] == "start_training"]
+    # Every training except the pruning fine-tune uses exactly the goal budget.
+    assert all(p["rounds"] == 10 and p["epochs"] == 5 for p in trainings)
+    assert not any(a["parameters"].get("from_trained_model") for a in cluster.actions if a["action"] == "create_initial_model")
+    sweeps = [a["parameters"] for a in cluster.actions if a["action"] == "optimize_topology"]
+    assert [p["dimension"] for p in sweeps] == ["topology", "aggregation", "sync"]
+    # The swept choices are used by every later training.
+    after_aggregation = trainings[-2:]
+    assert all(p["aggregation"] == "metropolis" for p in after_aggregation)
+    assert trainings[-1]["sync_mode"] == "semi_sync" and trainings[-1]["sync_deadline_seconds"] == 300
+    assert trainings[0]["aggregation"] == "fedavg" and trainings[0]["sync_mode"] == "sync"
+    state = finished["state"]
+    assert state["selected_aggregation"] == "metropolis" and state["selected_sync_mode"] == "semi_sync"
+
+
+def test_a_pruned_model_below_the_met_target_is_rejected(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    cluster.accuracy.update(train_final=0.96, fine_tune=0.945)
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    run = supervisor.create_run(default_goal(target_accuracy=0.95, max_experiments=20))
+
+    finished = run_until_done(supervisor, run["id"], ticks=120)
+
+    attempts = finished["state"]["pruning_attempts"]
+    # 0.945 is within the 2-point tolerance of 0.96 but below the met 0.95 target.
+    assert attempts and not any(item["accepted"] for item in attempts)
+    assert finished["state"]["best"]["validation_accuracy"] == pytest.approx(0.96)

@@ -919,7 +919,7 @@ def test_optimizer_defaults_to_only_dirichlet_alpha_03(tmp_path: Path) -> None:
 def test_optimizer_rejects_unsupported_or_multiple_alphas(tmp_path: Path) -> None:
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
 
-    for alphas in ((0.7,), (0.3, 0.5), ()):
+    for alphas in ((0.2,), (0.3, 0.5), ()):
         with pytest.raises(ValueError, match="exactly one Dirichlet alpha"):
             coordinator.start_optimization(alphas=alphas)
     with pytest.raises(ValueError, match="supports"):
@@ -1266,7 +1266,7 @@ def test_configure_validates_aggregation_and_sync_settings(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="aggregation"):
         coordinator.configure(aggregation="median")
     with pytest.raises(ValueError, match="sync_mode"):
-        coordinator.configure(sync_mode="async")
+        coordinator.configure(sync_mode="eventual")
     with pytest.raises(ValueError, match="sync_deadline_seconds"):
         coordinator.configure(sync_deadline_seconds=1)
 
@@ -1694,3 +1694,46 @@ def test_optimizer_trains_a_fresh_fixed_model_with_the_run_augmentation(tmp_path
     assert all(group["fresh_model"] is True for group in seen_groups)
     assert all(group["augmentation"] == "flip_shift" for group in seen_groups)
     assert all(group["dataset_name"] == "cifar10" for group in seen_groups)
+
+
+def test_optimizer_sweeps_aggregation_and_sync_with_the_other_settings_fixed(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    seen: list[tuple[str, str, str]] = []
+    accuracy = {"fedavg": 0.6, "uniform": 0.62, "metropolis": 0.7, "trimmed_mean": 0.55,
+                "sync": 0.6, "semi_sync": 0.6, "async": 0.61}
+
+    def fake_run(group_id, group, run):
+        seen.append((group["topology"], group["aggregation"], group["sync_mode"]))
+        key = group["aggregation"] if group["dimension"] == "aggregation" else group["sync_mode"]
+        run["rounds"].append(
+            {"round": 1, "workers": {w.node_id: {"validation_accuracy": accuracy[key]} for w in coordinator.config.workers}}
+        )
+
+    coordinator._run_distributed_seed = fake_run
+
+    def finish(accepted):
+        deadline = time.monotonic() + 3
+        while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return next(g for g in coordinator.results()["groups"] if g["group_id"] == accepted["group_id"])
+
+    accepted = coordinator.start_optimization(
+        rounds=1, epochs=1, seeds=(17,), alphas=(0.9,), dimension="aggregation", topology="star", sync_mode="semi_sync"
+    )
+    group = finish(accepted)
+    assert accepted["candidate_count"] == 4
+    assert {item[1] for item in seen} == {"fedavg", "uniform", "metropolis", "trimmed_mean"}
+    assert {item[0] for item in seen} == {"star"} and {item[2] for item in seen} == {"semi_sync"}
+    assert {run["dataset_split"] for run in group["runs"]} == {"dirichlet_a09"}
+    assert group["selected_configuration"]["aggregation"] == "metropolis"
+    assert coordinator._settings["aggregation"] == "metropolis"
+
+    seen.clear()
+    accepted = coordinator.start_optimization(
+        rounds=1, epochs=1, seeds=(17,), alphas=(0.9,), dimension="sync", topology="star", aggregation="metropolis"
+    )
+    group = finish(accepted)
+    assert {item[2] for item in seen} == {"sync", "semi_sync", "async"}
+    assert {item[1] for item in seen} == {"metropolis"}
+    assert group["selected_configuration"]["sync_mode"] in {"sync", "semi_sync", "async"}
+    assert coordinator._settings["sync_mode"] == group["selected_configuration"]["sync_mode"]

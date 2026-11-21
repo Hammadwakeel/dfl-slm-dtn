@@ -26,7 +26,7 @@ router = APIRouter(
     dependencies=[Depends(require_api_token)],
 )
 
-SUPPORTED_DATASETS = frozenset({"mnist", "cifar10"})
+SUPPORTED_DATASETS = frozenset({"mnist", "cifar10", "fashion_mnist", "femnist"})
 
 
 def get_dataset_store(request: Request) -> DatasetStore:

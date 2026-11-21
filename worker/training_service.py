@@ -33,6 +33,8 @@ from urllib.request import Request, urlopen
 import numpy as np
 
 from worker.aggregation import (
+    ASYNC_GRACE_SECONDS,
+    ASYNC_MAX_STALENESS,
     AGGREGATION_RULES,
     SYNC_MODES,
     Contribution,
@@ -970,6 +972,8 @@ class WorkerTrainer:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._incoming: dict[tuple[str, int], dict[str, tuple[list[np.ndarray], int, int]]] = {}
+        # Asynchronous mode: newest model received from each peer, (round, weights, samples, bytes).
+        self._latest_peer: dict[tuple[str, str], tuple[int, list[np.ndarray], int, int]] = {}
         self._models: dict[str, Any] = {}
         self._run_architectures: dict[str, Any] = {}
         self._run_model_audits: dict[str, dict[str, Any]] = {}
@@ -1089,6 +1093,7 @@ class WorkerTrainer:
                 self._results.clear()
                 self._run_errors.clear()
                 self._incoming.clear()
+                self._latest_peer.clear()
 
                 if "tensorflow" in sys.modules:
                     tensorflow = sys.modules["tensorflow"]
@@ -1264,6 +1269,8 @@ class WorkerTrainer:
                 self._round_sample_counts.pop(key, None)
             for key in [key for key in self._incoming if key[0] == run_id]:
                 self._incoming.pop(key, None)
+            for key in [key for key in self._latest_peer if key[0] == run_id]:
+                self._latest_peer.pop(key, None)
 
             if had_run_data:
                 if had_model:
@@ -1331,8 +1338,9 @@ class WorkerTrainer:
             "dirichlet_a03",
             "dirichlet_a05",
             "dirichlet_a07",
+            "dirichlet_a09",
         }:
-            raise ValueError("Unsupported CIFAR-10 dataset split")
+            raise ValueError("Unsupported dataset split")
         if dataset_name is not None:
             if DATASET_NAME_PATTERN.fullmatch(dataset_name) is None:
                 raise ValueError("Invalid dataset_name")
@@ -1723,7 +1731,9 @@ class WorkerTrainer:
             raise ValueError("Peer model signature header does not match its weights")
         key = (run_id, round_index)
         with self._condition:
-            if round_index <= self._completed_rounds.get(run_id, -1):
+            asynchronous = self._sync_mode == "async"
+            stale = round_index <= self._completed_rounds.get(run_id, -1)
+            if stale and not asynchronous:
                 # A straggler's update for a round this worker already aggregated
                 # (semi-synchronous mode); keeping it would only leak memory.
                 _log_event("stale_peer_weights_dropped", run_id=run_id, round=round_index, peer_id=sender)
@@ -1736,6 +1746,15 @@ class WorkerTrainer:
                         f"Architecture mismatch: {sender} sent model {received_signature}, "
                         f"this worker trains {local_signature}; redistribute one initial model"
                     )
+            if asynchronous:
+                newest = self._latest_peer.get((run_id, sender))
+                if newest is None or newest[0] < round_index:
+                    self._latest_peer[(run_id, sender)] = (round_index, weights, sample_count, len(payload))
+                if stale:
+                    # Too late for its own round: kept only as this peer's newest model.
+                    _log_event("late_peer_weights_cached", run_id=run_id, round=round_index, peer_id=sender)
+                    self._condition.notify_all()
+                    return True
             senders = self._incoming.setdefault(key, {})
             if sender in senders:
                 # A sender retries when the connection drops after the upload; the
@@ -1931,11 +1950,14 @@ class WorkerTrainer:
             with self._lock:
                 sync_mode = self._sync_mode
                 aggregation_rule = self._aggregation
-                wait_budget = (
-                    self.config.peer_timeout_seconds
-                    if sync_mode == "sync" or self._sync_deadline_seconds is None
-                    else self._sync_deadline_seconds
-                )
+                if sync_mode == "async":
+                    wait_budget = ASYNC_GRACE_SECONDS
+                else:
+                    wait_budget = (
+                        self.config.peer_timeout_seconds
+                        if sync_mode == "sync" or self._sync_deadline_seconds is None
+                        else self._sync_deadline_seconds
+                    )
                 required_peers = min(self._min_peers, len(expected_senders))
             deadline = time.monotonic() + wait_budget
             peer_wait_started = time.perf_counter()
@@ -1949,6 +1971,8 @@ class WorkerTrainer:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         missing = sorted(set(expected_senders) - arrived)
+                        if sync_mode == "async":
+                            break
                         if sync_mode == "semi_sync" and len(arrived & set(expected_senders)) >= required_peers:
                             # Semi-synchronous: aggregate what arrived instead of failing the
                             # whole round because one peer is slow.
@@ -1957,6 +1981,15 @@ class WorkerTrainer:
                     self._condition.wait(timeout=min(remaining, 1.0))
                 incoming = self._incoming.pop((run_id, round_index), {})
                 arrivals = self._arrivals.pop((run_id, round_index), {})
+                stale_peers: dict[str, int] = {}
+                if sync_mode == "async":
+                    for peer_id in expected_senders:
+                        if peer_id in incoming:
+                            continue
+                        newest = self._latest_peer.get((run_id, peer_id))
+                        if newest is not None and round_index - newest[0] <= ASYNC_MAX_STALENESS:
+                            incoming[peer_id] = (newest[1], newest[2], newest[3])
+                            stale_peers[peer_id] = round_index - newest[0]
             peer_wait_seconds = time.perf_counter() - peer_wait_started
             used_senders = [peer_id for peer_id in expected_senders if peer_id in incoming]
             missing_senders = sorted(set(expected_senders) - set(used_senders))
@@ -2084,6 +2117,7 @@ class WorkerTrainer:
                 **peer_measurements,
                 "exchange_seconds": round(exchange_seconds, 3),
                 "peer_wait_seconds": round(peer_wait_seconds, 3),
+                "stale_peers": stale_peers,
                 "neighbours": list(neighbors),
                 "weight_bytes": model_size_bytes(model),
             }

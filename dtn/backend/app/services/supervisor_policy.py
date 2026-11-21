@@ -20,28 +20,36 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from common.pruning import PASS_THROUGH_LAYERS, PRUNABLE_LAYERS
 
-DATASETS = ("mnist", "cifar10")
+DATASETS = ("mnist", "cifar10", "fashion_mnist", "femnist")
 # Native image size of each supported dataset (preprocessing must not resize them).
-DATASET_IMAGE_SIZES = {"mnist": 28, "cifar10": 32}
-DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07")
+DATASET_IMAGE_SIZES = {"mnist": 28, "cifar10": 32, "fashion_mnist": 28, "femnist": 28}
+DATASET_SPLITS = ("stratified", "dirichlet_a01", "dirichlet_a03", "dirichlet_a05", "dirichlet_a07", "dirichlet_a09")
 TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned")
 AGGREGATIONS = ("fedavg", "uniform", "metropolis", "trimmed_mean")
-SYNC_MODES = ("sync", "semi_sync")
+SYNC_MODES = ("sync", "semi_sync", "async")
 FINISH_OUTCOMES = ("objective_achieved", "no_worthwhile_action", "blocked")
 
 # Steps that start a measured experiment on the cluster, in the order the
 # deterministic fallback policy tries them.
-SEARCH_STEPS = ("run_nas", "run_hpo", "learn_topology", "optimize_topology")
+SEARCH_STEPS = ("run_nas", "run_hpo", "learn_topology", "optimize_topology", "optimize_aggregation", "optimize_sync")
 EXPERIMENT_STEPS = (
     "baseline_training",
     "run_nas",
     "run_hpo",
     "learn_topology",
     "optimize_topology",
+    "optimize_aggregation",
+    "optimize_sync",
+    "measure_step",
     "train_final",
     "continue_training",
     "prune_model",
 )
+# Fair, step-by-step evaluation (goal["measure_each_step"]): after each of these steps
+# the supervisor trains the configuration found so far with exactly the baseline's
+# rounds x epochs from the same initial weights, so every step's effect is measured
+# under one training budget. learn_topology already trains with that budget.
+MEASURED_STEPS = ("run_nas", "run_hpo", "optimize_topology", "optimize_aggregation", "optimize_sync")
 # Steps that need a measured, trained model (and a custom layer architecture).
 MODEL_STEPS = ("train_final", "prune_model")
 # Measured on MNIST (8 workers): 50% pruning gave 3.9x fewer parameters but lost ~5
@@ -101,6 +109,22 @@ STEP_TOOLS: dict[str, dict[str, Any]] = {
         "description": (
             "Measure candidate peer-to-peer topologies and select the best one by reward. "
             "Useful when peers learn slowly from each other on non-IID data."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "optimize_aggregation": {
+        "description": (
+            "Measure the model aggregation rules (fedavg, uniform, metropolis, trimmed_mean) "
+            "with the current topology and select the best one by the quality-gated reward. "
+            "Useful when workers' models disagree on non-IID data."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "optimize_sync": {
+        "description": (
+            "Measure the synchronization modes (sync waits for every peer, semi_sync waits up "
+            "to a deadline, async uses each peer's newest model without waiting) and select "
+            "the best one by the quality-gated reward. Useful when workers wait for slow peers."
         ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -197,6 +221,9 @@ def default_goal(**overrides: Any) -> dict[str, Any]:
         "aggregation": "fedavg",
         "sync_mode": "semi_sync",
         "sync_deadline_seconds": 300,
+        # Fair, step-by-step evaluation: every training uses rounds x local_epochs from
+        # the same initial weights, and each search step is followed by a measurement.
+        "measure_each_step": False,
     }
     goal.update(overrides)
     return goal
@@ -205,7 +232,7 @@ def default_goal(**overrides: Any) -> dict[str, Any]:
 # Training-input augmentation per dataset: flip/shift is the standard CIFAR-10 recipe
 # (it lowers local over-fitting on small non-IID shards); a flipped digit is another
 # symbol, so MNIST trains on the raw images.
-DEFAULT_AUGMENTATION = {"mnist": "none", "cifar10": "flip_shift"}
+DEFAULT_AUGMENTATION = {"mnist": "none", "cifar10": "flip_shift", "fashion_mnist": "none", "femnist": "none"}
 
 
 # NAS v2 scores candidates on the shared validation split, searches a larger space
@@ -254,6 +281,8 @@ def new_state() -> dict[str, Any]:
         "last_trained_architecture": None,
         "pruning": None,
         "selected_topology": None,
+        "selected_aggregation": None,
+        "selected_sync_mode": None,
         "trained_configs": [],
         "failures": {},
         "pending_step": None,
@@ -301,17 +330,24 @@ def allowed_steps(goal: dict[str, Any], state: dict[str, Any]) -> list[str]:
             and is_custom_architecture(tuning_architecture(state))
         ):
             steps.append("run_hpo")
+        for sweep in ("optimize_aggregation", "optimize_sync"):
+            if sweep not in completed and failures.get(sweep, 0) < MAX_STEP_FAILURES:
+                steps.append(sweep)
+        fair = bool(goal.get("measure_each_step"))
         has_improvement = bool(state.get("nas_architecture") or state.get("selected_topology"))
         untried = final_training_config(goal, state) not in state.get("trained_configs", [])
         # One explicit final retrain is always worth offering (the SLM may ask for more
         # rounds), even when a search step already trained the same configuration.
         never_retrained = "train_final" not in completed
-        if has_improvement and (untried or never_retrained) and failures.get("train_final", 0) < MAX_STEP_FAILURES:
+        # In fair mode every configuration is already measured with the baseline budget;
+        # a longer retrain or a continuation would give the agent more training than
+        # the baseline it is compared with.
+        if not fair and has_improvement and (untried or never_retrained) and failures.get("train_final", 0) < MAX_STEP_FAILURES:
             steps.append("train_final")
         # Compress only a good model: when the target is met, or nothing else can help.
         best = (state.get("best") or {}).get("validation_accuracy")
         target_met = isinstance(best, (int, float)) and best >= float(goal["target_accuracy"])
-        if not target_met and not steps and can_continue(state):
+        if not fair and not target_met and not steps and can_continue(state):
             steps.append("continue_training")
         if can_prune(state) and (target_met or not steps):
             steps.append("prune_model")
@@ -567,12 +603,15 @@ def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: flo
 def fallback_decision(goal: dict[str, Any], state: dict[str, Any]) -> Decision:
     """Used when the SLM is unreachable or keeps returning invalid steps."""
     allowed = allowed_steps(goal, state)
-    for step in ("run_nas", "run_hpo", "learn_topology", "optimize_topology", "train_final", "continue_training", "prune_model"):
+    for step in (
+        "run_nas", "run_hpo", "learn_topology", "optimize_topology", "optimize_aggregation",
+        "optimize_sync", "train_final", "continue_training", "prune_model",
+    ):
         if step in allowed:
             return Decision(
                 step,
                 {},
-                "Default improvement order: NAS, HPO, learned topology, topology sweep, retrain, continue, prune.",
+                "Default improvement order: NAS, HPO, learned topology, topology, aggregation and sync sweeps, retrain, continue, prune.",
                 "fallback",
             )
     return Decision(
@@ -613,6 +652,8 @@ def prompt_state(goal: dict[str, Any], state: dict[str, Any], cluster: dict[str,
             for item in state.get("continuations") or []
         ],
         "selected_topology": state.get("selected_topology"),
+        "selected_aggregation": state.get("selected_aggregation"),
+        "selected_sync_mode": state.get("selected_sync_mode"),
         "cluster": cluster,
     }
 
@@ -722,9 +763,16 @@ def summarize_group(group: dict[str, Any]) -> dict[str, Any]:
             summary["search_validation_accuracy"] = float(candidate["validation_accuracy"])
     elif kind == "topology_optimization":
         selected = group.get("selected_configuration")
+        dimension = group.get("dimension", "topology")
+        summary["dimension"] = dimension
         if isinstance(selected, dict):
-            summary["selected_topology"] = selected.get("topology")
             summary["topology"] = selected.get("topology")
+            if dimension == "topology":
+                summary["selected_topology"] = selected.get("topology")
+            elif dimension == "aggregation":
+                summary["selected_aggregation"] = selected.get("aggregation")
+            else:
+                summary["selected_sync_mode"] = selected.get("sync_mode")
     return summary
 
 

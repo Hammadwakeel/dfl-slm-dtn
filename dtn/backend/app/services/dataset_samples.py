@@ -20,6 +20,16 @@ SAMPLE_ARCHIVES = {
         "policy": {"type": "official_cifar10_npz"},
         "image_shape": (50_000, 32, 32, 3),
     },
+    "fashion_mnist": {
+        "filename": "fashion_mnist.npz",
+        "policy": {"type": "official_fashion_mnist_npz"},
+        "image_shape": (60_000, 28, 28),
+    },
+    "femnist": {
+        "filename": "femnist.npz",
+        "policy": {"type": "official_femnist_npz"},
+        "image_shape": (60_001, 28, 28),
+    },
 }
 
 
@@ -32,7 +42,7 @@ def get_dataset_samples(store: DatasetStore, dataset_name: str) -> list[dict[str
         or metadata.get("dataset_name") != dataset_name
         or metadata.get("source_split_policy") != archive_config["policy"]
         or not isinstance(classes, list)
-        or len(classes) != 10
+        or len(classes) < 2
         or any(not isinstance(name, str) for name in classes)
     ):
         raise DatasetError(f"Official sample data is not available for {dataset_name}", 404)

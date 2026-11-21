@@ -909,6 +909,11 @@ def _execute_action(
                     alphas=tuple(parameters.get("alphas", (0.3,))),
                     dataset_name=parameters.get("dataset_name", "mnist"),
                     augmentation=parameters.get("augmentation", "none"),
+                    dimension=parameters.get("dimension", "topology"),
+                    topology=parameters.get("topology", "mesh"),
+                    aggregation=parameters.get("aggregation", "fedavg"),
+                    sync_mode=parameters.get("sync_mode", "sync"),
+                    sync_deadline_seconds=parameters.get("sync_deadline_seconds"),
                 ),
             }
         if name in {"get_results", "suggest_next_action"}:

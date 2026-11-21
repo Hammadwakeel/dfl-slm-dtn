@@ -29,6 +29,7 @@ from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
     CONTINUATION_MIN_GAIN,
     DATASET_IMAGE_SIZES,
+    MEASURED_STEPS,
     PRUNE_MAX_ACCURACY_DROP,
     PRUNE_MIN_FINE_TUNE_ROUNDS,
     PRUNE_RATIO,
@@ -65,7 +66,28 @@ Dispatch = Callable[[dict[str, Any], str, str], dict[str, Any]]
 ModelCall = Callable[[list[dict[str, Any]], list[dict[str, Any]] | None], dict[str, Any]]
 
 
-SWEEP_ALPHAS = {"dirichlet_a01": 0.1, "dirichlet_a03": 0.3, "dirichlet_a05": 0.5}
+SWEEPABLE_TOPOLOGIES = ("directed_ring", "bidirectional_ring", "mesh", "chain", "star")
+
+
+def _sync_settings(goal: dict[str, Any], state: dict[str, Any], aggregation: str | None = None) -> dict[str, Any]:
+    """Aggregation rule and synchronization mode of the run: a sweep's choice, else the goal's."""
+    sync_mode = state.get("selected_sync_mode") or goal.get("sync_mode", "sync")
+    settings: dict[str, Any] = {
+        "aggregation": aggregation or state.get("selected_aggregation") or goal.get("aggregation", "fedavg"),
+        "sync_mode": sync_mode,
+    }
+    if sync_mode == "semi_sync" and goal.get("sync_deadline_seconds"):
+        settings["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
+    return settings
+
+
+SWEEP_ALPHAS = {
+    "dirichlet_a01": 0.1,
+    "dirichlet_a03": 0.3,
+    "dirichlet_a05": 0.5,
+    "dirichlet_a07": 0.7,
+    "dirichlet_a09": 0.9,
+}
 
 
 class SupervisorError(RuntimeError):
@@ -732,12 +754,9 @@ class Supervisor:
                 "epochs": epochs,
                 "dataset_name": goal["dataset"],
                 "dataset_split": goal["dataset_split"],
-                "aggregation": goal.get("aggregation", "fedavg"),
-                "sync_mode": goal.get("sync_mode", "sync"),
+                **_sync_settings(goal, state),
                 "augmentation": run_augmentation(goal),
             }
-            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
-                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
             data = _unwrap_result(
                 self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
             ).get("data") or {}
@@ -754,7 +773,7 @@ class Supervisor:
             topology = checkpoint.get("topology") or state.get("selected_topology") or goal["topology"]
             rounds = max(PRUNE_MIN_FINE_TUNE_ROUNDS, int(arguments.get("rounds", goal["rounds"])))
             epochs = int(goal["local_epochs"])
-            aggregation = checkpoint.get("aggregation") or goal.get("aggregation", "fedavg")
+            aggregation = checkpoint.get("aggregation") or _sync_settings(goal, state)["aggregation"]
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
             # Workers train their installed model: put the best checkpoint (with its
             # trained weights) there, whatever was trained after it.
@@ -778,12 +797,9 @@ class Supervisor:
                 "epochs": epochs,
                 "dataset_name": goal["dataset"],
                 "dataset_split": goal["dataset_split"],
-                "aggregation": aggregation,
-                "sync_mode": goal.get("sync_mode", "sync"),
+                **_sync_settings(goal, state, aggregation),
                 "augmentation": run_augmentation(goal),
             }
-            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
-                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
             state["last_trained_architecture"] = checkpoint.get("architecture")
             data = _unwrap_result(
                 self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
@@ -799,27 +815,40 @@ class Supervisor:
                     "source_worker": checkpoint.get("source_worker"),
                 },
             }
-        if step == "optimize_topology":
-            action = {
-                "action": "optimize_topology",
-                "parameters": {
-                    "rounds": min(TOPOLOGY_SWEEP_ROUNDS, int(goal["rounds"])),
-                    "epochs": int(goal["local_epochs"]),
-                    "seeds": [int(goal["seed"])],
-                    # Sweep on the run's own dataset and Dirichlet split.
-                    "alphas": [SWEEP_ALPHAS.get(goal["dataset_split"], 0.3)],
-                    "dataset_name": goal["dataset"],
-                    "augmentation": run_augmentation(goal),
-                },
+        if step in {"optimize_topology", "optimize_aggregation", "optimize_sync"}:
+            dimension = {"optimize_topology": "topology", "optimize_aggregation": "aggregation"}.get(step, "sync")
+            current = _sync_settings(goal, state)
+            # A learned graph cannot be one fixed sweep candidate; sweep around the goal's.
+            topology = state.get("selected_topology") or goal["topology"]
+            if topology not in SWEEPABLE_TOPOLOGIES:
+                topology = goal["topology"]
+            parameters = {
+                "rounds": min(TOPOLOGY_SWEEP_ROUNDS, int(goal["rounds"])),
+                "epochs": int(goal["local_epochs"]),
+                "seeds": [int(goal["seed"])],
+                # Sweep on the run's own dataset and Dirichlet split.
+                "alphas": [SWEEP_ALPHAS.get(goal["dataset_split"], 0.3)],
+                "dataset_name": goal["dataset"],
+                "augmentation": run_augmentation(goal),
+                "dimension": dimension,
+                "topology": topology,
+                "aggregation": current["aggregation"],
+                "sync_mode": current["sync_mode"],
             }
+            if goal.get("sync_deadline_seconds"):
+                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
+            action = {"action": "optimize_topology", "parameters": parameters}
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
-            return _group_id(data), {}
-        if step in {"baseline_training", "train_final", "learn_topology"}:
+            return _group_id(data), {"dimension": dimension, "topology": topology}
+        if step in {"baseline_training", "train_final", "learn_topology", "measure_step"}:
+            fair = bool(goal.get("measure_each_step"))
             architecture = state.get("nas_architecture") if step != "baseline_training" else None
             if step == "learn_topology":
                 topology = "learned"
             elif step == "train_final":
                 topology = arguments.get("topology") or state.get("selected_topology") or goal["topology"]
+            elif step == "measure_step":
+                topology = state.get("selected_topology") or goal["topology"]
             else:
                 topology = goal["topology"]
             rounds = int(arguments.get("rounds", goal["rounds"]))
@@ -828,8 +857,13 @@ class Supervisor:
                 # shorter than the goal's training length can only do worse.
                 rounds = max(rounds, int(goal["rounds"]))
             epochs = int(arguments.get("local_epochs", goal["local_epochs"]))
+            if fair:
+                # One training budget for every model the run compares with the baseline.
+                rounds, epochs = int(goal["rounds"]), int(goal["local_epochs"])
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
-            warm_start = self._warm_start_source(state, architecture) if step == "train_final" else None
+            warm_start = (
+                self._warm_start_source(state, architecture) if step == "train_final" and not fair else None
+            )
             if warm_start is not None:
                 # Continue from the run's best trained model instead of retraining the
                 # same architecture from its random initialization.
@@ -868,20 +902,19 @@ class Supervisor:
                         run_id,
                     )
                 )
-            aggregation = (
-                arguments.get("aggregation") if step == "train_final" else None
-            ) or goal.get("aggregation", "fedavg")
+            settings = (
+                _sync_settings(goal, {}) if step == "baseline_training"
+                else _sync_settings(goal, state, arguments.get("aggregation") if step == "train_final" else None)
+            )
+            aggregation = settings["aggregation"]
             parameters: dict[str, Any] = {
                 "rounds": rounds,
                 "epochs": epochs,
                 "dataset_name": goal["dataset"],
                 "dataset_split": goal["dataset_split"],
-                "aggregation": aggregation,
-                "sync_mode": goal.get("sync_mode", "sync"),
+                **settings,
                 "augmentation": run_augmentation(goal),
             }
-            if goal.get("sync_mode") == "semi_sync" and goal.get("sync_deadline_seconds"):
-                parameters["sync_deadline_seconds"] = int(goal["sync_deadline_seconds"])
             if architecture and warm_start is None:
                 parameters["architecture"] = architecture
             state["last_trained_architecture"] = architecture or state.get("baseline_architecture")
@@ -896,7 +929,9 @@ class Supervisor:
                 "rounds": rounds,
                 "local_epochs": epochs,
                 "aggregation": aggregation,
+                "sync_mode": settings["sync_mode"],
                 "config": key,
+                **({"measures": arguments.get("measures")} if step == "measure_step" else {}),
                 **({"warm_start": warm_start} if warm_start is not None else {}),
             }
         raise StepFailed(f"Unsupported step {step}")
@@ -991,6 +1026,13 @@ class Supervisor:
             summary.pop("selected_architecture", None)
         if step == "optimize_topology" and summary.get("selected_topology"):
             state["selected_topology"] = summary["selected_topology"]
+        if step == "optimize_aggregation" and summary.get("selected_aggregation"):
+            state["selected_aggregation"] = summary["selected_aggregation"]
+        if step == "optimize_sync" and summary.get("selected_sync_mode"):
+            state["selected_sync_mode"] = summary["selected_sync_mode"]
+        if step == "measure_step":
+            summary["measures"] = (active.get("arguments") or {}).get("measures") or active.get("measures")
+            summary["sync_mode"] = active.get("sync_mode")
         if step == "learn_topology":
             accuracy_now = summary.get("validation_accuracy")
             best_now = (state.get("best") or {}).get("validation_accuracy")
@@ -1006,10 +1048,13 @@ class Supervisor:
             accuracy_now = summary.get("validation_accuracy")
             # Accept the pruned model only if it keeps accuracy close to its source;
             # otherwise the unpruned model (still the run's best) is the result.
+            target = float(goal["target_accuracy"])
             state["pruning"]["accepted"] = bool(
                 isinstance(source, (int, float))
                 and isinstance(accuracy_now, (int, float))
                 and accuracy_now >= float(source) - PRUNE_MAX_ACCURACY_DROP
+                # A run that met its target must still meet it with the smaller model.
+                and (float(source) < target or accuracy_now >= target)
             )
             if not state["pruning"]["accepted"]:
                 # Put the unpruned trained model back on every worker.
@@ -1077,6 +1122,14 @@ class Supervisor:
                     f"Pruning {int(round(PRUNE_RATIO * 100))}% lost too much accuracy; "
                     f"retry once with {int(round(PRUNE_RETRY_RATIO * 100))}%."
                 ),
+                "source": "rule",
+            }
+            state["stage"] = "executing"
+        elif goal.get("measure_each_step") and step in MEASURED_STEPS:
+            state["pending_step"] = {
+                "step": "measure_step",
+                "arguments": {"measures": step},
+                "rationale": f"Measure the effect of {step} with the baseline's training budget.",
                 "source": "rule",
             }
             state["stage"] = "executing"

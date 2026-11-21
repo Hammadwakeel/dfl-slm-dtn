@@ -20,6 +20,13 @@ DIRICHLET_ALPHAS = {
     "dirichlet_a03": 0.3,
     "dirichlet_a05": 0.5,
     "dirichlet_a07": 0.7,
+    "dirichlet_a09": 0.9,
+}
+# Fixed NPZ datasets with an official (or fixed seeded) train/test split:
+# name -> (archive file, image height/width, channels).
+OFFICIAL_NPZ_DATASETS = {
+    "fashion_mnist": ("fashion_mnist.npz", 28, 1),
+    "femnist": ("femnist.npz", 28, 1),
 }
 SPLIT_STRATEGIES = frozenset({"stratified", *DIRICHLET_ALPHAS})
 
@@ -53,6 +60,10 @@ def validate_images(dataset_path: Path) -> dict[str, Any]:
         if split_policy == {"type": "official_cifar10_npz"}:
             raise PreprocessingError(
                 "Official CIFAR-10 is stored as NPZ arrays and does not contain image folders"
+            )
+        if split_policy in ({"type": f"official_{name}_npz"} for name in OFFICIAL_NPZ_DATASETS):
+            raise PreprocessingError(
+                "This official dataset is stored as NPZ arrays and does not contain image folders"
             )
         raise PreprocessingError("Dataset source split policy is unsupported")
 
@@ -412,6 +423,56 @@ def _load_official_cifar10(
     return validation | {"official_split": official_split}, images, labels
 
 
+def _load_official_npz(
+    dataset_path: Path,
+    name: str,
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+    """Fashion-MNIST / FEMNIST: fixed NPZ arrays with the train/test counts in metadata."""
+    filename, size, channels = OFFICIAL_NPZ_DATASETS[name]
+    try:
+        metadata = json.loads((dataset_path / "metadata.json").read_text(encoding="utf-8"))
+        with np.load(dataset_path / filename, allow_pickle=False) as archive:
+            train_images = np.asarray(archive["x_train"])
+            train_labels = np.asarray(archive["y_train"])
+            test_images = np.asarray(archive["x_test"])
+            test_labels = np.asarray(archive["y_test"])
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        raise PreprocessingError(f"Official {name} archive or metadata is invalid") from error
+    classes = metadata.get("classes")
+    counts = metadata.get("source_split_counts") or {}
+    shape = (size, size) if channels == 1 else (size, size, channels)
+    if (
+        metadata.get("dataset_name") != name
+        or not isinstance(classes, list)
+        or len(classes) < 2
+        or metadata.get("source_split_policy") != {"type": f"official_{name}_npz"}
+        or train_images.shape != (counts.get("train"), *shape)
+        or test_images.shape != (counts.get("test"), *shape)
+        or train_labels.shape != (counts.get("train"),)
+        or test_labels.shape != (counts.get("test"),)
+        or train_images.dtype != np.uint8
+        or test_images.dtype != np.uint8
+        or not np.isin(train_labels, np.arange(len(classes))).all()
+        or not np.isin(test_labels, np.arange(len(classes))).all()
+    ):
+        raise PreprocessingError(f"Official {name} does not match its metadata")
+    images = np.concatenate((train_images, test_images), axis=0)
+    if channels == 1:
+        images = images[..., np.newaxis]
+    labels = np.concatenate((train_labels, test_labels)).astype(np.int64, copy=False)
+    validation = {
+        "classes": classes,
+        "image_count": int(labels.size),
+        "class_counts": class_balance_report(labels, classes),
+        "invalid_images": [],
+    }
+    official_split = {
+        "train": np.arange(train_labels.size, dtype=np.int64),
+        "test": np.arange(train_labels.size, labels.size, dtype=np.int64),
+    }
+    return validation | {"official_split": official_split}, images, labels
+
+
 def preprocess_image_dataset(
     dataset_path: Path,
     *,
@@ -439,6 +500,14 @@ def preprocess_image_dataset(
         validation, images, labels = _load_official_cifar10(dataset_path)
         if target_size != (32, 32):
             raise PreprocessingError("The fixed official CIFAR-10 dataset uses 32x32 images")
+    elif source_split_policy in [
+        {"type": f"official_{name}_npz"} for name in OFFICIAL_NPZ_DATASETS
+    ]:
+        name = source_split_policy["type"][len("official_"):-len("_npz")]
+        validation, images, labels = _load_official_npz(dataset_path, name)
+        size = OFFICIAL_NPZ_DATASETS[name][1]
+        if target_size != (size, size):
+            raise PreprocessingError(f"The fixed official {name} dataset uses {size}x{size} images")
     else:
         validation = validate_images(dataset_path)
         images, labels = resize_images(validation, target_size)

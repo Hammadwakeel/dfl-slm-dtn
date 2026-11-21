@@ -272,7 +272,7 @@ export interface ExperimentGroup {
   topology: TrainingTopology | "centralized" | "candidate_sweep";
   dataset_split?: string;
   aggregation?: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";
-  sync_mode?: "sync" | "semi_sync";
+  sync_mode?: "sync" | "semi_sync" | "async";
   sync_deadline_seconds?: number | null;
   alphas?: number[];
   candidates?: TopologyCandidate[];
@@ -1005,21 +1005,22 @@ export async function deleteSlmConversation(token: string, conversationId: strin
 export type SupervisorRunStatus = "queued" | "running" | "stopping" | "completed" | "failed" | "stopped";
 
 export interface SupervisorGoal {
-  dataset: "mnist" | "cifar10";
+  dataset: "mnist" | "cifar10" | "fashion_mnist" | "femnist";
   target_accuracy: number;
   max_experiments: number;
   time_budget_minutes: number;
-  dataset_split: "stratified" | "dirichlet_a01" | "dirichlet_a03" | "dirichlet_a05" | "dirichlet_a07";
+  dataset_split: "stratified" | "dirichlet_a01" | "dirichlet_a03" | "dirichlet_a05" | "dirichlet_a07" | "dirichlet_a09";
   rounds: number;
   local_epochs: number;
   topology: "directed_ring" | "bidirectional_ring" | "mesh" | "chain" | "star";
   nas_budget_seconds: number;
   aggregation: "fedavg" | "uniform" | "metropolis" | "trimmed_mean";
-  sync_mode: "sync" | "semi_sync";
+  sync_mode: "sync" | "semi_sync" | "async";
   sync_deadline_seconds: number;
   seed?: number;
   /** v2: shared-split objective, extended CIFAR-10 space, federated finalist check. */
   nas_version?: "v1" | "v2";
+  measure_each_step?: boolean;
   /** Omitted = dataset default (flip_shift for CIFAR-10, none for MNIST). */
   augmentation?: "none" | "flip_shift";
 }

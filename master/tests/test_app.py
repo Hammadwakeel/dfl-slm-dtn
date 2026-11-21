@@ -155,7 +155,7 @@ def test_action_schema_accepts_valid_values_and_rejects_ranges_and_injection() -
         },
         {
             "action": "optimize_topology",
-            "parameters": {"alphas": [0.7]},
+            "parameters": {"alphas": [0.2]},
         },
         {
             "action": "optimize_topology",

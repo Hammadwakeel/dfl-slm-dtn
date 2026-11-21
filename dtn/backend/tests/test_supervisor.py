@@ -1175,3 +1175,24 @@ def test_fair_mode_finishes_only_after_every_search_step() -> None:
     assert "finish_workflow" in allowed_steps(goal, state)
     # Without fair mode the SLM may always finish.
     assert "finish_workflow" in allowed_steps(default_goal(), new_state())
+
+
+def test_fair_mode_reverts_a_step_whose_measurement_loses_accuracy(sessions) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    # measurements after NAS, HPO, learned topology, topology, aggregation, sync
+    cluster.accuracy["train_final"] = [0.91, 0.92, 0.5, 0.93, 0.80, 0.94]
+    cluster.accuracy["fine_tune"] = 0.935
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    run = supervisor.create_run(default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True))
+
+    finished = run_until_done(supervisor, run["id"], ticks=300)
+
+    state = finished["state"]
+    measured = {item["measures"]: item for item in state["experiments"] if item["step"] == "measure_step"}
+    assert measured["optimize_aggregation"]["accepted"] is False
+    assert measured["optimize_topology"]["accepted"] is True
+    assert state["selected_aggregation"] is None  # metropolis lost 13 points and was reverted
+    sync_training = [a["parameters"] for a in cluster.actions if a["action"] == "start_training"][-2]
+    assert sync_training["aggregation"] == "fedavg"
+    assert any(event["event_type"] == "step_reverted" for event in finished["events"])

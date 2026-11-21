@@ -141,6 +141,7 @@ def summarize_run(seed: int, run: dict[str, Any]) -> dict[str, Any]:
                 "test_min": (item.get("test") or {}).get("min_accuracy"),
                 "test_macro_f1": item.get("test_macro_f1"),
                 "measures": item.get("measures"),
+                "accepted": item.get("accepted"),
                 "aggregation": item.get("aggregation"),
                 "sync_mode": item.get("sync_mode"),
                 "rounds_completed": item.get("rounds_completed"),
@@ -266,6 +267,7 @@ def _step_impact(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "test_min": step.get("test_min"),
                 "delta_prev": _signed(val - previous_val) if previous_val is not None else "–",
                 "delta_base": _signed(val - baseline_val) if baseline_val is not None and name != "baseline_training" else "–",
+                "kept": "no (reverted)" if step.get("accepted") is False else ("yes" if name == "measure_step" else "–"),
             }
         )
         previous_val = val
@@ -351,13 +353,13 @@ def write_report(path: Path, dataset: str, goal: dict[str, Any], runs: list[dict
                 "",
                 "Step impact (every trained model uses the baseline's rounds x epochs):",
                 "",
-                "| After | Config change | Val | Weakest (val) | Test | Weakest (test) | Δ val vs previous | Δ val vs baseline |",
-                "|---|---|---|---|---|---|---|---|",
+                "| After | Config change | Val | Weakest (val) | Test | Weakest (test) | Δ val vs previous | Δ val vs baseline | Kept |",
+                "|---|---|---|---|---|---|---|---|---|",
             ]
             for row in impact:
                 lines.append(
                     f"| {row['label']} | {row['change']} | {_pct(row['val'])} | {_pct(row['val_min'])} | "
-                    f"{_pct(row['test'])} | {_pct(row['test_min'])} | {row['delta_prev']} | {row['delta_base']} |"
+                    f"{_pct(row['test'])} | {_pct(row['test_min'])} | {row['delta_prev']} | {row['delta_base']} | {row['kept']} |"
                 )
         lines += ["", "Agent decisions:", ""]
         lines += [f"1. {decision['message']}" for decision in item["decisions"]] or ["(none)"]

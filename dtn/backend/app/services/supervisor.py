@@ -61,6 +61,9 @@ ACTIVE_STATUSES = frozenset({"queued", "running", "stopping"})
 TERMINAL_GROUP_STATUSES = frozenset({"completed", "failed", "stopped", "cancelled"})
 MAX_CONSECUTIVE_FAILURES = 3
 MISSING_GROUP_TICKS = 6
+# Fair mode keeps a search step's change only if its measurement is at most this far
+# below the run's best validation accuracy (half a point absorbs run-to-run noise).
+STEP_ACCEPT_TOLERANCE = 0.005
 
 Dispatch = Callable[[dict[str, Any], str, str], dict[str, Any]]
 ModelCall = Callable[[list[dict[str, Any]], list[dict[str, Any]] | None], dict[str, Any]]
@@ -1020,6 +1023,15 @@ class Supervisor:
         if step not in state["completed_steps"]:
             state["completed_steps"].append(step)
         state["consecutive_failures"] = 0
+        if goal.get("measure_each_step") and step in MEASURED_STEPS:
+            # Kept until the step's measurement decides whether its change is accepted.
+            state["pending_revert"] = {
+                "step": step,
+                "nas_architecture": state.get("nas_architecture"),
+                "selected_topology": state.get("selected_topology"),
+                "selected_aggregation": state.get("selected_aggregation"),
+                "selected_sync_mode": state.get("selected_sync_mode"),
+            }
         if step in {"run_nas", "run_hpo"} and isinstance(summary.get("selected_architecture"), dict):
             state["nas_architecture"] = summary.pop("selected_architecture")
         else:
@@ -1033,6 +1045,7 @@ class Supervisor:
         if step == "measure_step":
             summary["measures"] = (active.get("arguments") or {}).get("measures") or active.get("measures")
             summary["sync_mode"] = active.get("sync_mode")
+            self._accept_or_revert(run_id, state, summary)
         if step == "learn_topology":
             accuracy_now = summary.get("validation_accuracy")
             best_now = (state.get("best") or {}).get("validation_accuracy")
@@ -1135,6 +1148,30 @@ class Supervisor:
             state["stage"] = "executing"
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
+
+    def _accept_or_revert(self, run_id: str, state: dict[str, Any], summary: dict[str, Any]) -> None:
+        """Keep a search step's change only if its equal-budget measurement did not lose accuracy."""
+        pending = state.pop("pending_revert", None)
+        accuracy = summary.get("validation_accuracy")
+        previous_best = (state.get("best") or {}).get("validation_accuracy")
+        if not isinstance(pending, dict) or not isinstance(accuracy, (int, float)) or not isinstance(previous_best, (int, float)):
+            summary["accepted"] = True
+            return
+        accepted = accuracy >= float(previous_best) - STEP_ACCEPT_TOLERANCE
+        summary["accepted"] = accepted
+        if accepted:
+            return
+        for key in ("nas_architecture", "selected_topology", "selected_aggregation", "selected_sync_mode"):
+            state[key] = pending.get(key)
+        if pending["step"] in {"run_nas", "run_hpo"} and state.get("nas_architecture") is None:
+            # Workers would keep the rejected model installed; train the baseline design again.
+            state["nas_architecture"] = state.get("baseline_architecture")
+        self._event(
+            run_id,
+            "step_reverted",
+            f"{pending['step']} reverted: its measurement {accuracy:.4f} is below the best {float(previous_best):.4f}; "
+            "the previous setting is kept.",
+        )
 
     def _save_best_checkpoint(
         self,
@@ -1533,6 +1570,10 @@ def _completion_message(step: str | None, summary: dict[str, Any]) -> str:
         return f"{step} completed: selected architecture {summary['architecture']}."
     if summary.get("selected_topology"):
         return f"{step} completed: selected topology {summary['selected_topology']}."
+    if summary.get("selected_aggregation"):
+        return f"{step} completed: selected aggregation {summary['selected_aggregation']}."
+    if summary.get("selected_sync_mode"):
+        return f"{step} completed: selected synchronization {summary['selected_sync_mode']}."
     return f"{step} completed."
 
 

@@ -27,6 +27,8 @@ from worker.model_factory import build_dataset_model
 # One search request; the HPO grid of a larger model on the slowest Jetson needs
 # just over 300 s, so allow up to 600 s (a search returns as soon as it is done).
 MAX_SEARCH_SECONDS = 600
+# NAS ranks candidates on at most this many training images per worker.
+NAS_MAX_TRAIN_SAMPLES = 6000
 MAX_SEARCH_RSS_MB = 3072
 MIN_SEARCH_AVAILABLE_MEMORY_MB = 1024
 # In-process (CIFAR-10) search shares the long-lived training service, whose RSS
@@ -119,6 +121,12 @@ def search_cifar10_architectures(
     if not devices:
         raise RuntimeError("NAS search requires an enumerated TensorFlow GPU")
     train_indices, validation_indices = _split_indices(labels, seed)
+    if train_indices.size > NAS_MAX_TRAIN_SAMPLES:
+        # Strongly non-IID shards differ in size by 10x; rank candidates on a seeded
+        # subset so the largest worker still finishes every candidate in the budget.
+        train_indices = np.sort(
+            np.random.default_rng(seed).choice(train_indices, NAS_MAX_TRAIN_SAMPLES, replace=False)
+        )
     started = time.monotonic()
     deadline = started + time_limit_seconds
     candidates = []
@@ -410,6 +418,12 @@ def search_dataset_architectures(
         tf.config.threading.set_intra_op_parallelism_threads(1)
         tf.config.threading.set_inter_op_parallelism_threads(1)
     train_indices, validation_indices = _split_indices(labels, seed)
+    if train_indices.size > NAS_MAX_TRAIN_SAMPLES:
+        # Strongly non-IID shards differ in size by 10x; rank candidates on a seeded
+        # subset so the largest worker still finishes every candidate in the budget.
+        train_indices = np.sort(
+            np.random.default_rng(seed).choice(train_indices, NAS_MAX_TRAIN_SAMPLES, replace=False)
+        )
     started = time.monotonic()
     deadline = started + time_limit_seconds
     candidates = []

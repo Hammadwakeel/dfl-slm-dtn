@@ -39,3 +39,13 @@ def test_classification_metrics_report_classification_scores_and_confusion_matri
     assert metrics["confusion_matrix_counts"][0][0] == 1
     assert metrics["confusion_matrix_row_normalized_percent"][0][0] == 100.0
     assert metrics["loss"] < 0.01
+
+
+def test_classification_metrics_support_more_than_ten_classes():
+    labels = np.array([0, 61, 30, 30])
+    logits = np.zeros((4, 62))
+    logits[np.arange(4), [0, 61, 30, 5]] = 5.0
+    metrics = classification_metrics(labels, logits)
+    assert metrics["accuracy"] == 0.75
+    assert len(metrics["confusion_matrix_counts"]) == 62
+    assert len(metrics["per_class_f1"]) == 62

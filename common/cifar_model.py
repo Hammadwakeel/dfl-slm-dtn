@@ -62,12 +62,13 @@ def classification_metrics(labels: np.ndarray, logits: np.ndarray) -> dict[str, 
     predictions = np.asarray(logits)
     if predictions.ndim != 2 or predictions.shape[0] != truth.shape[0]:
         raise ValueError("logits must have shape (number of labels, number of classes)")
-    if truth.size == 0 or predictions.shape[1] != 10:
-        raise ValueError("CIFAR-10 metrics require non-empty data with ten classes")
+    num_classes = predictions.shape[1]
+    if truth.size == 0 or num_classes < 2:
+        raise ValueError("classification metrics require non-empty data with at least two classes")
     if truth.min() < 0 or truth.max() >= predictions.shape[1]:
         raise ValueError("labels must be within the model's class range")
     predicted = predictions.argmax(axis=1)
-    confusion = np.zeros((10, 10), dtype=np.int64)
+    confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
     np.add.at(confusion, (truth, predicted), 1)
     true_positive = np.diag(confusion).astype(np.float64)
     predicted_count = confusion.sum(axis=0)

@@ -44,7 +44,12 @@ EXPERIMENT_STEPS = (
     "train_final",
     "continue_training",
     "prune_model",
+    "ablation_training",
 )
+# Ablation runs (goal["ablation_configs"]): after the baseline, the supervisor trains each
+# listed configuration (architecture, topology, aggregation, sync mode) in order with the
+# baseline's budget; no search step and no language-model decision is involved.
+ABLATION_STEP = "ablation_training"
 # Fair, step-by-step evaluation (goal["measure_each_step"]): after each of these steps
 # the supervisor trains the configuration found so far with exactly the baseline's
 # rounds x epochs from the same initial weights, so every step's effect is measured
@@ -542,8 +547,29 @@ def parse_decision(message: dict[str, Any], allowed: list[str]) -> Decision:
     return Decision(recovered[0], arguments, _pop_reason(arguments, content), "slm_text")
 
 
+def ablation_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: float) -> Decision:
+    """Next listed ablation configuration, or finish when every one is measured."""
+    configs = goal["ablation_configs"]
+    done = sum(
+        1 for item in state.get("experiments", [])
+        if item.get("step") == ABLATION_STEP and item.get("status") == "completed"
+    )
+    if done < len(configs) and minutes_left > 0:
+        config = configs[done]
+        return Decision(ABLATION_STEP, {**config, "index": done}, f"Ablation configuration {done + 1}/{len(configs)}: {config['label']}.", "rule")
+    summary = f"{done} of {len(configs)} ablation configurations measured."
+    return Decision(
+        "finish_workflow",
+        {"outcome": "no_worthwhile_action" if done == len(configs) else "blocked", "summary": summary},
+        "The ablation list is done." if done == len(configs) else "No time budget remains.",
+        "rule",
+    )
+
+
 def rule_decision(goal: dict[str, Any], state: dict[str, Any], minutes_left: float) -> Decision | None:
     """Deterministic stop rules that never need the language model."""
+    if goal.get("ablation_configs"):
+        return ablation_decision(goal, state, minutes_left)
     best = state.get("best") or {}
     accuracy = best.get("validation_accuracy")
     target_met = isinstance(accuracy, (int, float)) and accuracy >= float(goal["target_accuracy"])

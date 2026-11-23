@@ -1196,3 +1196,36 @@ def test_fair_mode_reverts_a_step_whose_measurement_loses_accuracy(sessions) -> 
     sync_training = [a["parameters"] for a in cluster.actions if a["action"] == "start_training"][-2]
     assert sync_training["aggregation"] == "fedavg"
     assert any(event["event_type"] == "step_reverted" for event in finished["events"])
+
+
+def test_ablation_run_trains_each_listed_configuration_without_the_slm(sessions) -> None:
+    cluster = FakeCluster()
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    nas = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    configs = [
+        {"label": "full", "architecture": nas, "topology": "mesh", "aggregation": "uniform", "sync_mode": "sync"},
+        {"label": "without topology", "architecture": nas, "topology": "directed_ring", "aggregation": "uniform", "sync_mode": "sync"},
+        {"label": "without sync", "architecture": nas, "topology": "mesh", "aggregation": "uniform", "sync_mode": "semi_sync"},
+    ]
+    goal = default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True, ablation_configs=configs)
+    run = supervisor.create_run(goal)
+
+    finished = run_until_done(supervisor, run["id"], ticks=200)
+
+    assert finished["status"] == "completed"
+    experiments = finished["state"]["experiments"]
+    assert [item["step"] for item in experiments] == ["baseline_training"] + ["ablation_training"] * 3
+    assert [item["measures"] for item in experiments[1:]] == ["full", "without topology", "without sync"]
+    trainings = [a["parameters"] for a in cluster.actions if a["action"] == "start_training"]
+    assert all(p["rounds"] == 10 and p["epochs"] == 5 for p in trainings)
+    assert [p["aggregation"] for p in trainings[1:]] == ["uniform"] * 3
+    assert [p["sync_mode"] for p in trainings[1:]] == ["sync", "sync", "semi_sync"]
+    assert trainings[3]["sync_deadline_seconds"] == 300
+    topologies = [a["parameters"]["topology"] for a in cluster.actions if a["action"] == "set_topology"]
+    assert topologies[-3:] == ["mesh", "directed_ring", "mesh"]
+    installed = [a["parameters"] for a in cluster.actions if a["action"] == "create_initial_model" and a["parameters"].get("architecture")]
+    assert [p["architecture"]["id"] for p in installed] == ["nas-cnn"] * 3
+    assert all(p["replace_existing"] and not p.get("from_trained_model") for p in installed)
+    # No search step and no language-model call.
+    assert not any(a["action"] in {"enable_nas", "optimize_topology"} for a in cluster.actions)
+    assert finished["state"]["counters"].get("slm_decisions", 0) == 0

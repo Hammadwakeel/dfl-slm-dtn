@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import AgentRun, AgentRunEvent, AutonomyState, Device
 from app.services.supervisor_policy import (
+    ABLATION_STEP,
     CONTINUATION_MIN_GAIN,
     DATASET_IMAGE_SIZES,
     MEASURED_STEPS,
@@ -843,10 +844,13 @@ class Supervisor:
             action = {"action": "optimize_topology", "parameters": parameters}
             data = _unwrap_result(self._dispatch(action, reason, run_id)).get("data") or {}
             return _group_id(data), {"dimension": dimension, "topology": topology}
-        if step in {"baseline_training", "train_final", "learn_topology", "measure_step"}:
-            fair = bool(goal.get("measure_each_step"))
+        if step in {"baseline_training", "train_final", "learn_topology", "measure_step", ABLATION_STEP}:
+            fair = bool(goal.get("measure_each_step")) or step == ABLATION_STEP
             architecture = state.get("nas_architecture") if step != "baseline_training" else None
-            if step == "learn_topology":
+            if step == ABLATION_STEP:
+                architecture = arguments["architecture"]
+                topology = arguments["topology"]
+            elif step == "learn_topology":
                 topology = "learned"
             elif step == "train_final":
                 topology = arguments.get("topology") or state.get("selected_topology") or goal["topology"]
@@ -905,10 +909,14 @@ class Supervisor:
                         run_id,
                     )
                 )
-            settings = (
-                _sync_settings(goal, {}) if step == "baseline_training"
-                else _sync_settings(goal, state, arguments.get("aggregation") if step == "train_final" else None)
-            )
+            if step == ABLATION_STEP:
+                settings = _sync_settings(
+                    goal, {"selected_sync_mode": arguments["sync_mode"]}, arguments["aggregation"]
+                )
+            elif step == "baseline_training":
+                settings = _sync_settings(goal, {})
+            else:
+                settings = _sync_settings(goal, state, arguments.get("aggregation") if step == "train_final" else None)
             aggregation = settings["aggregation"]
             parameters: dict[str, Any] = {
                 "rounds": rounds,
@@ -935,6 +943,7 @@ class Supervisor:
                 "sync_mode": settings["sync_mode"],
                 "config": key,
                 **({"measures": arguments.get("measures")} if step == "measure_step" else {}),
+                **({"measures": arguments.get("label")} if step == ABLATION_STEP else {}),
                 **({"warm_start": warm_start} if warm_start is not None else {}),
             }
         raise StepFailed(f"Unsupported step {step}")
@@ -1042,6 +1051,11 @@ class Supervisor:
             state["selected_aggregation"] = summary["selected_aggregation"]
         if step == "optimize_sync" and summary.get("selected_sync_mode"):
             state["selected_sync_mode"] = summary["selected_sync_mode"]
+        if step == ABLATION_STEP:
+            summary["measures"] = active.get("measures")
+            summary["sync_mode"] = active.get("sync_mode")
+            summary["aggregation"] = active.get("aggregation")
+            summary["ablation_index"] = (active.get("arguments") or {}).get("index")
         if step == "measure_step":
             summary["measures"] = (active.get("arguments") or {}).get("measures") or active.get("measures")
             summary["sync_mode"] = active.get("sync_mode")

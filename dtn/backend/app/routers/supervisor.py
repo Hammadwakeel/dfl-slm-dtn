@@ -16,6 +16,16 @@ router = APIRouter(
 )
 
 
+class AblationConfig(BaseModel):
+    """One configuration an ablation run trains with the baseline's budget."""
+
+    label: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _.,()+-]+$")
+    architecture: dict[str, Any]
+    topology: Literal["directed_ring", "bidirectional_ring", "mesh", "chain", "star"]
+    aggregation: Literal["fedavg", "uniform", "metropolis", "trimmed_mean"]
+    sync_mode: Literal["sync", "semi_sync", "async"]
+
+
 class GoalRequest(BaseModel):
     dataset: Literal["mnist", "cifar10", "fashion_mnist", "femnist"]
     target_accuracy: float = Field(0.95, ge=0.1, le=0.999)
@@ -39,6 +49,9 @@ class GoalRequest(BaseModel):
     # Fair evaluation: every training uses rounds x local_epochs from the same initial
     # weights, and each search step is followed by a measurement of its effect.
     measure_each_step: bool = False
+    # Ablation: train these configurations in order after the baseline (no search,
+    # no language-model decisions), each with the baseline's rounds x local_epochs.
+    ablation_configs: list[AblationConfig] | None = Field(None, min_length=1, max_length=12)
 
 
 class StopRequest(BaseModel):

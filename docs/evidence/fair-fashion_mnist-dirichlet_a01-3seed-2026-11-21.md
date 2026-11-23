@@ -1,6 +1,6 @@
 # Agentic end-to-end supervisor runs: FASHION_MNIST, 3 seeds
 
-Generated 2026-11-21 15:00 UTC by `scripts/paper_campaign.py`.
+Generated 2026-11-23 04:14 UTC by `scripts/paper_campaign.py`.
 
 Each seed is one independent run of the autonomous supervisor on the real
 8-Jetson cluster. The on-device SLM (Qwen3.5 4B on the master Jetson) chooses
@@ -26,60 +26,65 @@ test split (mean over the 8 workers); decisions use the global validation split.
 
 | Metric | Mean ± std over seeds |
 |---|---|
-| Baseline test accuracy | 41.85% ± 2.60 |
-| Best model test accuracy | 74.32% ± 9.81 |
+| Baseline test accuracy | 42.22% ± 2.67 |
+| Best model test accuracy | 73.25% ± 8.61 |
 | Pruned model test accuracy | n/a |
-| Model installed on the workers at the end (test) | 74.32% ± 9.81 |
+| Model installed on the workers at the end (test) | 73.25% ± 8.61 |
 | Target met (seeds) | 0 / 3 |
 
 ## Per seed
 
 | Seed | Status | Baseline test | Best step | Topology | Params | Best test | Pruned test (params) | SLM / rule / fallback decisions | Wall time |
 |---|---|---|---|---|---|---|---|---|---|
-| 17 | completed | 42.03% | Measurement | mesh | 129,770 | 85.62% ± 0.00% | n/a | 6 / 1 / 0 | 1.83 h |
+| 17 | completed | 43.13% | Measurement | mesh | 129,770 | 82.40% ± 0.00% | n/a | 6 / 1 / 0 | 3.79 h |
 | 42 | completed | 44.94% | Measurement | mesh | 109,450 | 61.71% ± 0.00% | n/a | 6 / 1 / 0 | 1.90 h |
 | 2026 | completed | 38.58% | Measurement | mesh | 51,754 | 75.64% ± 0.00% | n/a | 6 / 1 / 0 | 1.81 h |
 
-### Seed 17 (run `2184fee2-c451-43ab-b3c6-baf0f610a1c2`)
+### Seed 17 (run `98432cc6-4ce3-450a-8e00-28dd7f8e5afa`)
 
 | Step | Status | Topology | Architecture | Params | Global val | Global test | Worker-reported |
 |---|---|---|---|---|---|---|---|
-| Baseline | completed | directed_ring | baseline | 28,810 | 42.24% | 42.03% ± 6.81% | 71.94% |
+| Baseline | completed | directed_ring | baseline | 28,810 | 43.29% | 43.13% ± 9.36% | 75.80% |
+| NAS | failed |  |  |  |  |  |  |
 | NAS | completed |  | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 |  |  |  |
-| Measurement | completed | directed_ring | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 53.00% | 52.73% ± 6.30% | 75.38% |
+| Measurement | completed | directed_ring | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 53.71% | 53.32% ± 7.78% | 76.74% |
 | Topology sweep | completed | mesh |  |  |  |  |  |
-| Measurement | completed | mesh | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 86.43% | 85.62% ± 0.00% | 87.40% |
+| Measurement | completed | mesh | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 81.55% | 80.67% ± 0.00% | 82.00% |
 | Aggregation sweep | completed | mesh |  |  |  |  |  |
-| Measurement | completed | mesh | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 82.35% | 81.65% ± 0.00% | 82.87% |
-| HPO | completed |  | hpo-adam-lr1e-3-bs32 | 129,770 |  |  |  |
-| Measurement | completed | mesh | hpo-adam-lr1e-3-bs32 | 129,770 | 84.92% | 84.13% ± 0.00% | 85.71% |
+| Measurement | completed | mesh | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 81.57% | 80.65% ± 0.00% | 82.63% |
+| HPO | completed |  | hpo-adam-lr3e-3-bs32 | 129,770 |  |  |  |
+| Measurement | completed | mesh | hpo-adam-lr3e-3-bs32 | 129,770 | 77.03% | 75.45% ± 0.00% | 76.20% |
 | Synchronization sweep | completed | mesh |  |  |  |  |  |
-| Measurement | completed | mesh | hpo-adam-lr1e-3-bs32 | 129,770 | 84.13% | 83.95% ± 0.00% | 85.47% |
-| APG learned topology | completed | learned | hpo-adam-lr1e-3-bs32 | 129,770 | 59.58% | 59.05% ± 8.95% | 82.13% |
+| Measurement | completed | mesh | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 82.83% | 82.40% ± 0.00% | 84.49% |
+| APG learned topology | completed | learned | nas-d3-w16x64x64-k5-conv-h0-drop35 | 129,770 | 59.56% | 59.07% ± 9.53% | 83.95% |
 
 Step impact (every trained model uses the baseline's rounds x epochs):
 
 | After | Config change | Val | Weakest (val) | Test | Weakest (test) | Δ val vs previous | Δ val vs baseline | Kept |
 |---|---|---|---|---|---|---|---|---|
-| Baseline | directed_ring, fedavg, semi_sync | 42.24% | 31.17% | 42.03% | 31.08% | – | – | – |
-| NAS | architecture nas-d3-w16x64x64-k5-conv-h0-drop35 (129770 params) | 53.00% | 40.62% | 52.73% | 40.28% | +10.75 | +10.75 | yes |
-| Topology sweep | topology mesh | 86.43% | 86.43% | 85.62% | 85.62% | +33.44 | +44.19 | yes |
-| Aggregation sweep | aggregation fedavg | 82.35% | 82.35% | 81.65% | 81.65% | -4.08 | +40.11 | yes |
-| HPO | lr 0.001, batch 32 | 84.92% | 84.92% | 84.13% | 84.13% | +2.57 | +42.67 | yes |
-| Synchronization sweep | sync sync | 84.13% | 84.13% | 83.95% | 83.95% | -0.78 | +41.89 | yes |
-| APG learned topology | learned (APG) topology | 59.58% | 41.68% | 59.05% | 41.32% | -24.55 | +17.34 | – |
+| Baseline | directed_ring, fedavg, semi_sync | 43.29% | 28.95% | 43.13% | 28.95% | – | – | – |
+| NAS | architecture nas-d3-w16x64x64-k5-conv-h0-drop35 (129770 params) | 53.71% | 40.02% | 53.32% | 39.85% | +10.42 | +10.42 | yes |
+| Topology sweep | topology mesh | 81.55% | 81.55% | 80.67% | 80.67% | +27.84 | +38.26 | yes |
+| Aggregation sweep | aggregation fedavg | 81.57% | 81.57% | 80.65% | 80.65% | +0.02 | +38.28 | yes |
+| HPO | lr 0.003, batch 32 | 77.03% | 77.03% | 75.45% | 75.45% | -4.53 | +33.75 | no (reverted) |
+| Synchronization sweep | sync sync | 82.83% | 82.83% | 82.40% | 82.40% | +5.80 | +39.55 | yes |
+| APG learned topology | learned (APG) topology | 59.56% | 44.33% | 59.07% | 43.71% | -23.27 | +16.28 | – |
 
 Agent decisions:
 
-1. run_nas chosen by slm: Current baseline accuracy (0.42) is far from target (0.99). Need to search for a better CNN architecture on worker data before optimizing other hyperparameters or topology.
-1. optimize_topology chosen by slm: Improve topology selection to boost validation accuracy toward 0.99 target on non-IID fashion_mnist data after NAS completion.
+1. run_nas chosen by slm: Baseline model is too small with only 0.43 accuracy; need to search for a better architecture on worker data before further optimization.
+1. optimize_topology chosen by slm: Current directed_ring topology yields only 53.7% accuracy; need to find a better topology for non-IID fashion_mnist data with 12 experiments remaining and 652 minutes budget.
 1. optimize_aggregation chosen by slm: Workers' models may disagree on non-IID fashion_mnist data; need to select best aggregation rule (fedavg, uniform, metropolis, trimmed_mean) to improve validation accuracy toward 0.99 target.
-1. run_hpo chosen by slm: Tune learning rate and batch size on best NAS architecture to improve validation accuracy before final experiments.
+1. run_hpo chosen by slm: Tune learning rate and batch size on worker data to improve validation accuracy toward 0.99 target.
 1. optimize_sync chosen by slm: Select best synchronization mode to improve validation accuracy within remaining budget
-1. learn_topology chosen by slm: The current mesh topology achieved only 0.864 validation accuracy, far from the 0.99 target. Learning a new peer-to-peer topology from measured losses and waiting times on real workers is the most promising next step to improve convergence and performance, especially gi
+1. learn_topology chosen by slm: The current mesh topology yields only 0.828 validation accuracy, far from the 0.99 target. Learning a new peer-to-peer topology from measured losses and waiting times on real workers may improve convergence and final accuracy within the remaining 514 minutes budget.
 1. finish_workflow chosen by rule: No further step is available.
 
-Model left on every worker: Measurement (worker1), global val 86.43%, test 85.62%, installed.
+Model left on every worker: Measurement (worker1), global val 82.83%, test 82.40%, installed.
+
+Errors recorded during the run:
+
+- run_nas failed: TrainingError: Worker request failed: worker6: worker6 returned HTTP 409 for /v1/nas/search: {"error":"Isolated dataset NAS search exited with code 1: TimeoutError: Dataset NAS candidate nas-d3-w16x64x64-k5-conv-h0-drop35 exceeded the time budget (RSS 1535.8 MiB)"}; worker5: worker5 
 
 ### Seed 42 (run `46d4b307-9f60-42c8-afef-3d7af367b75f`)
 

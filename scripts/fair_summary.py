@@ -79,6 +79,134 @@ def step_effects(run: dict) -> dict[str, dict]:
     return effects
 
 
+WORKERS = 8
+FLOAT_BYTES = 4
+# Directed edges per round (one model sent per edge), eight workers.
+TOPOLOGY_EDGES = {"directed_ring": WORKERS, "bidirectional_ring": 2 * WORKERS, "chain": 2 * (WORKERS - 1),
+                  "star": 2 * (WORKERS - 1), "mesh": WORKERS * (WORKERS - 1)}
+
+
+def _apg_runs(date: str) -> list[dict]:
+    path = EVIDENCE / f"fair-apg-probes-{date}.json"
+    return json.loads(path.read_text(encoding="utf-8"))["runs"] if path.is_file() else []
+
+
+def _learned_edges(apg: list[dict], dataset: str, split: str, seed: int) -> int | None:
+    for item in apg:
+        if (item["dataset"], item["split"], item["seed"]) == (dataset, split, seed):
+            return sum(len(senders) for senders in item["senders"].values())
+    return None
+
+
+def communication_section(data: dict, date: str) -> list[str]:
+    """Models sent per training (rounds x directed edges) and the bytes they carry."""
+    apg = _apg_runs(date)
+    lines = [
+        "## Communication per training",
+        "",
+        "Every training runs 10 rounds; in each round every directed edge carries one model",
+        f"(float32 weights). Directed edges per round: directed ring {TOPOLOGY_EDGES['directed_ring']},",
+        f"mesh {TOPOLOGY_EDGES['mesh']}; the learned (APG) graph is measured per run. The baseline uses",
+        "the baseline CNN on the directed ring; the final model is the run's best model on its topology.",
+        "The search steps (NAS, sweeps) are not counted; they cost the same for every seed.",
+        "",
+        "| Dataset | α | Baseline: models / MB | Final model: models / MB | Learned (APG): edges / models / MB | Final test (%) | Learned test (%) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            runs = data.get((dataset, split), [])
+            if not runs:
+                continue
+            base_mb, final_mb, final_msgs, learned_mb, learned_edges, learned_test = [], [], [], [], [], []
+            base_msgs = 10 * TOPOLOGY_EDGES["directed_ring"]
+            for run in runs:
+                rounds = 10
+                baseline = next((s for s in run["steps"] if s["step"] == "baseline_training"), {})
+                base_mb.append(base_msgs * (baseline.get("parameter_count") or 0) * FLOAT_BYTES / 1e6)
+                edges = TOPOLOGY_EDGES.get(run.get("best_topology") or "", 0)
+                final_msgs.append(rounds * edges)
+                final_mb.append(rounds * edges * (run.get("best_parameter_count") or 0) * FLOAT_BYTES / 1e6)
+                learned = next((s for s in run["steps"] if s["step"] == "learn_topology" and s.get("status") == "completed"), None)
+                count = _learned_edges(apg, dataset, split, run["seed"])
+                if learned and count:
+                    learned_edges.append(count)
+                    learned_mb.append(rounds * count * (learned.get("parameter_count") or 0) * FLOAT_BYTES / 1e6)
+                    if isinstance(learned.get("test_accuracy"), (int, float)):
+                        learned_test.append(learned["test_accuracy"])
+            best = [r["best_test_accuracy"] for r in runs if isinstance(r.get("best_test_accuracy"), (int, float))]
+            mean = statistics.fmean
+            learned_cell = (f"{mean(learned_edges):.1f} / {10 * mean(learned_edges):.0f} / {mean(learned_mb):.1f}"
+                            if learned_edges else "n/a")
+            lines.append(
+                f"| {dname} | {alpha} | {base_msgs} / {mean(base_mb):.1f} | {mean(final_msgs):.0f} / {mean(final_mb):.1f} | "
+                f"{learned_cell} | {_pct(best)} | {_pct(learned_test)} |"
+            )
+    return lines + [""]
+
+
+def apg_section(date: str) -> list[str]:
+    """Why the learned topology trails the mesh: whom APG keeps, measured on the probe."""
+    apg = _apg_runs(date)
+    if not apg:
+        return []
+    import numpy as np
+
+    lines = [
+        "## Learned topology (APG) diagnostics",
+        "",
+        "APG runs on a 2-round mesh probe. It keeps, for each receiver, the senders whose models",
+        "have a low loss on the receiver's own validation data and arrive quickly; a small balance",
+        "term pulls the neighbourhood label mix toward the global one. The table compares the kept",
+        "and dropped senders and the label gap (total-variation distance) between the data a worker",
+        "aggregates over (itself and its senders) and the global label mix; on the mesh that gap is 0.",
+        "",
+        "| Dataset | α | Senders kept per worker | Peer loss: kept / dropped | Label cosine: kept / dropped | Label gap vs global |",
+        "|---|---|---|---|---|---|",
+    ]
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for item in apg:
+        groups.setdefault((item["dataset"], item["split"]), []).append(item)
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            items = groups.get((dataset, split))
+            if not items:
+                continue
+            kept_n, loss_k, loss_d, sim_k, sim_d, gap = [], [], [], [], [], []
+            for item in items:
+                ids = sorted(item["probe"])
+                index = {worker: i for i, worker in enumerate(ids)}
+                hist = np.array([item["probe"][w]["class_histogram"] for w in ids], dtype=float)
+                unit = hist / np.linalg.norm(hist, axis=1, keepdims=True)
+                global_mix = hist.sum(axis=0) / hist.sum()
+                for receiver in ids:
+                    i = index[receiver]
+                    kept = [index[s] for s in item["senders"][receiver]]
+                    dropped = [j for j in range(len(ids)) if j != i and j not in kept]
+                    losses = item["probe"][receiver].get("peer_losses") or {}
+                    kept_n.append(len(kept))
+                    loss_k += [losses[ids[j]] for j in kept if ids[j] in losses]
+                    loss_d += [losses[ids[j]] for j in dropped if ids[j] in losses]
+                    sim_k += [float(unit[i] @ unit[j]) for j in kept]
+                    sim_d += [float(unit[i] @ unit[j]) for j in dropped]
+                    neighbourhood = hist[[i, *kept]].sum(axis=0)
+                    gap.append(0.5 * float(np.abs(neighbourhood / neighbourhood.sum() - global_mix).sum()))
+            m = statistics.fmean
+            lines.append(
+                f"| {dname} | {alpha} | {m(kept_n):.1f} of {WORKERS - 1} | {m(loss_k):.2f} / {m(loss_d):.2f} | "
+                f"{m(sim_k):.2f} / {m(sim_d):.2f} | {m(gap):.2f} |"
+            )
+    return lines + [
+        "",
+        "APG optimizes each worker's local fit and waiting time, not global accuracy. It keeps",
+        "peers whose models already suit the receiver's data, so each worker averages over only part",
+        "of the label space. The label gap and the accuracy loss of the learned topology are both",
+        "largest at α 0.1, where the label skew is strongest. The learned graph sends about half as",
+        "many models as the mesh, so it trades accuracy for communication.",
+        "",
+    ]
+
+
 def load(date: str) -> dict[tuple[str, str], list[dict]]:
     found = {}
     for dataset, _ in DATASETS:
@@ -144,7 +272,9 @@ def build(date: str) -> str:
             lines.append(f"| {label} | " + " | ".join(cells) + " |")
         lines.append("")
 
-    lines += ["## Per-seed accuracy after each step (validation %, test %)", ""]
+    lines += communication_section(data, date)
+    lines += apg_section(date)
+    lines += ["## Per-seed accuracy after each step (validation %)", ""]
     for dataset, dname in DATASETS:
         for split, alpha in SPLITS:
             runs = data.get((dataset, split), [])

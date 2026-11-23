@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-23 04:14 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-23 04:36 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -47,7 +47,47 @@ and is reported without a keep/revert decision.
 | Synchronization sweep | +0.13 ± 1.45 | -0.07 ± 1.13 | 1/3 | -0.23 ± 0.70 | +0.10 ± 0.38 | 2/3 | +0.03 ± 0.41 | +0.35 ± 0.38 | 3/3 |
 | Learned topology (APG) | -15.35 ± 4.64 | -15.26 ± 4.40 | – | -3.52 ± 0.85 | -3.15 ± 0.89 | – | -1.37 ± 1.06 | -1.62 ± 0.86 | – |
 
-## Per-seed accuracy after each step (validation %, test %)
+## Communication per training
+
+Every training runs 10 rounds; in each round every directed edge carries one model
+(float32 weights). Directed edges per round: directed ring 8,
+mesh 56; the learned (APG) graph is measured per run. The baseline uses
+the baseline CNN on the directed ring; the final model is the run's best model on its topology.
+The search steps (NAS, sweeps) are not counted; they cost the same for every seed.
+
+| Dataset | α | Baseline: models / MB | Final model: models / MB | Learned (APG): edges / models / MB | Final test (%) | Learned test (%) |
+|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 80 / 9.2 | 560 / 217.3 | 31.7 / 317 / 120.3 | 73.25 ± 10.55 | 60.51 ± 4.32 |
+| Fashion-MNIST | 0.5 | 80 / 9.2 | 560 / 230.7 | 27.3 / 273 / 112.2 | 89.67 ± 1.29 | 87.68 ± 1.39 |
+| Fashion-MNIST | 0.9 | 80 / 9.2 | 560 / 135.3 | 28.3 / 283 / 68.0 | 89.98 ± 0.90 | 88.75 ± 1.01 |
+| FEMNIST | 0.1 | 80 / 11.4 | 560 / 238.3 | 31.0 / 310 / 132.7 | 70.57 ± 4.49 | 55.31 ± 1.45 |
+| FEMNIST | 0.5 | 80 / 11.4 | 560 / 238.3 | 26.3 / 263 / 111.1 | 82.73 ± 1.23 | 79.58 ± 1.89 |
+| FEMNIST | 0.9 | 80 / 11.4 | 560 / 224.8 | 28.7 / 287 / 117.8 | 83.62 ± 1.13 | 81.97 ± 1.89 |
+
+## Learned topology (APG) diagnostics
+
+APG runs on a 2-round mesh probe. It keeps, for each receiver, the senders whose models
+have a low loss on the receiver's own validation data and arrive quickly; a small balance
+term pulls the neighbourhood label mix toward the global one. The table compares the kept
+and dropped senders and the label gap (total-variation distance) between the data a worker
+aggregates over (itself and its senders) and the global label mix; on the mesh that gap is 0.
+
+| Dataset | α | Senders kept per worker | Peer loss: kept / dropped | Label cosine: kept / dropped | Label gap vs global |
+|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 4.0 of 7 | 2.12 / 3.00 | 0.14 / 0.11 | 0.37 |
+| Fashion-MNIST | 0.5 | 3.4 of 7 | 1.40 / 1.72 | 0.45 / 0.37 | 0.18 |
+| Fashion-MNIST | 0.9 | 3.5 of 7 | 1.42 / 1.70 | 0.55 / 0.55 | 0.12 |
+| FEMNIST | 0.1 | 3.9 of 7 | 4.47 / 5.42 | 0.11 / 0.09 | 0.33 |
+| FEMNIST | 0.5 | 3.3 of 7 | 2.93 / 3.40 | 0.40 / 0.38 | 0.17 |
+| FEMNIST | 0.9 | 3.6 of 7 | 2.86 / 3.12 | 0.52 / 0.49 | 0.12 |
+
+APG optimizes each worker's local fit and waiting time, not global accuracy. It keeps
+peers whose models already suit the receiver's data, so each worker averages over only part
+of the label space. The label gap and the accuracy loss of the learned topology are both
+largest at α 0.1, where the label skew is strongest. The learned graph sends about half as
+many models as the mesh, so it trades accuracy for communication.
+
+## Per-seed accuracy after each step (validation %)
 
 ### Fashion-MNIST, α 0.1
 

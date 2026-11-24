@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-24 16:32 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-24 22:54 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -144,6 +144,26 @@ Per seed (mean ± std over the repeats; the campaign value comes first):
 | FEMNIST | 0.9 | 17 | 73.53 ± 0.83 (74.11, 72.95) | 84.75 ± 0.10 (84.68, 84.82) |
 | FEMNIST | 0.9 | 42 | 71.05 ± 0.05 (71.08, 71.01) | 83.68 ± 0.09 (83.75, 83.62) |
 | FEMNIST | 0.9 | 2026 | 70.90 ± 1.06 (70.14, 71.65) | 82.53 ± 0.14 (82.43, 82.63) |
+
+## Topology or communication volume? (in-degree study)
+
+The mesh's gain could come from receiving 7 models per round instead of 1. Each seed's final
+configuration (everything else unchanged) is trained on circulant graphs where worker i averages
+with workers i-1 .. i-k, with the same 10 × 5 budget, and on the directed ring for 70 rounds × 1
+epoch, which receives as many models as the mesh (70 per worker) with more local compute.
+k = 1 and k = 7 come from the ablation passes. The spectral gap (1 − |λ2| of the uniform averaging
+matrix) measures how much one round mixes the workers' models. The learned (APG) graph of the
+same seed, which keeps about 4 senders per worker, is listed for comparison with k = 4. Test %,
+mean ± std over seeds; details in `topology-degree-2026-11-21.md`.
+
+| Dataset | α | Graph | Models received per worker | Spectral gap | Test (%) | Seeds |
+|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | in-degree 1 (ring) | 10 | 0.076 | 49.94 ± 3.26 | 3 |
+| Fashion-MNIST | 0.1 | in-degree 2 | 20 | 0.195 | 58.52 ± 8.87 | 3 |
+| Fashion-MNIST | 0.1 | in-degree 4 | 40 | 0.517 | 68.68 ± 7.13 | 3 |
+| Fashion-MNIST | 0.1 | in-degree 7 (mesh) | 70 | 1.000 | 72.12 ± 10.10 | 3 |
+| Fashion-MNIST | 0.1 | ring 70x1 | 70 | 0.076 (7× rounds) | 56.96 ± 9.29 | 3 |
+| Fashion-MNIST | 0.1 | learned (APG), 4.0 senders | 40 | varies | 60.51 ± 4.32 | 3 |
 
 ## Are the keep-or-revert decisions above noise?
 

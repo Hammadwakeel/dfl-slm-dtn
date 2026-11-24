@@ -11,9 +11,12 @@ Every model in these runs is trained with the same budget as the baseline (same
 rounds x local epochs, same installed initial weights). A step's effect is measured
 against the configuration that was active just before it: the baseline, or the last
 measurement whose change was kept. The supervisor reverts a change whose measurement
-falls more than 0.5 points below the best so far, so the active configuration never
-includes a harmful change. Steps run in the order the on-device SLM chose, so effects
-are grouped by step type, not by position.
+falls more than 0.5 points below the best so far. Steps run in the order the on-device
+SLM chose, so effects are grouped by step type, not by position.
+
+When present, it also folds in the in-degree study (``topology-degree-<date>.json``,
+``scripts/topology_degree_study.py``) and the noise analysis of the keep-or-revert
+decisions (``scripts/decision_robustness.py``), and ends with the limitations.
 """
 
 from __future__ import annotations
@@ -327,6 +330,153 @@ def ablation_section(data: dict, date: str) -> list[str]:
     return lines
 
 
+def topology_degree_section(data: dict, date: str) -> list[str]:
+    """Graph or communication volume: accuracy against in-degree, and the APG graph at a similar budget."""
+    path = EVIDENCE / f"topology-degree-{date}.json"
+    if not path.is_file():
+        return []
+    import topology_degree_study as study
+
+    runs = [r for r in json.loads(path.read_text(encoding="utf-8"))["runs"] if r["status"] == "completed"]
+    if not runs:
+        return []
+    apg = _apg_runs(date)
+    lines = [
+        "## Topology or communication volume? (in-degree study)",
+        "",
+        "The mesh's gain could come from receiving 7 models per round instead of 1. Each seed's final",
+        "configuration (everything else unchanged) is trained on circulant graphs where worker i averages",
+        "with workers i-1 .. i-k, with the same 10 × 5 budget, and on the directed ring for 70 rounds × 1",
+        "epoch, which receives as many models as the mesh (70 per worker) with more local compute.",
+        "k = 1 and k = 7 come from the ablation passes. The spectral gap (1 − |λ2| of the uniform averaging",
+        "matrix) measures how much one round mixes the workers' models. The learned (APG) graph of the",
+        "same seed, which keeps about 4 senders per worker, is listed for comparison with k = 4. Test %,",
+        f"mean ± std over seeds; details in `topology-degree-{date}.md`.",
+        "",
+        "| Dataset | α | Graph | Models received per worker | Spectral gap | Test (%) | Seeds |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            rows = [r for r in runs if (r["dataset"], r["split"]) == (dataset, split)]
+            if not rows:
+                continue
+            for label, (degree, rounds, _epochs) in study.GRAPHS.items():
+                values = [statistics.fmean(r["tests"][label]) for r in rows if r["tests"].get(label)]
+                gap = f"{study.spectral_gap(degree):.3f}" + ("" if rounds == study.ROUNDS else " (7× rounds)")
+                lines.append(f"| {dname} | {alpha} | {label} | {degree * rounds} | {gap} | {_pct(values)} | {len(values)} |")
+            learned, edges = [], []
+            for run in data.get((dataset, split), []):
+                if not any(r["seed"] == run["seed"] for r in rows):
+                    continue
+                step = next((s for s in run["steps"] if s["step"] == "learn_topology" and s.get("status") == "completed"), None)
+                count = _learned_edges(apg, dataset, split, run["seed"])
+                if step and isinstance(step.get("test_accuracy"), (int, float)) and count:
+                    learned.append(step["test_accuracy"])
+                    edges.append(count / WORKERS)
+            if learned:
+                lines.append(
+                    f"| {dname} | {alpha} | learned (APG), {statistics.fmean(edges):.1f} senders | {10 * statistics.fmean(edges):.0f} | "
+                    f"varies | {_pct(learned)} | {len(learned)} |"
+                )
+    return lines + [""]
+
+
+def decision_section(date: str) -> list[str]:
+    """How many keep-or-revert decisions stand out from run-to-run noise."""
+    import decision_robustness as robust
+
+    campaign = robust.load_campaign(date)
+    ablations = robust.load_ablations(date)
+    sigma = robust.pooled_sigma(campaign, ablations)
+    if not campaign or not sigma:
+        return []
+    lines = [
+        "## Are the keep-or-revert decisions above noise?",
+        "",
+        "σ is the pooled within-seed standard deviation of global validation accuracy over repeated",
+        "trainings of the same configuration and seed. A decision compares two measurements, so a",
+        "difference beyond 2·σ·√2 (about 95 %) is *clear*; smaller differences are *within noise*. The",
+        "default rule keeps changes down to 0.5 points below the best, well inside that band, so a single",
+        "kept HPO, aggregation or synchronization decision is not evidence of an improvement; the paired",
+        "test below shows where repeats do settle it. The supervisor now takes the tolerance from the goal",
+        "(`accept_tolerance`), so a run can require a",
+        f"gain larger than the noise. Every decision is listed in `decision-robustness-{date}.md`.",
+        "",
+        "| Dataset | α | σ (points) | 95 % band | Decisions | Clear gain | Clear loss | Within noise |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    per_step: dict[str, list[int]] = {}
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            runs = campaign.get((dataset, split))
+            if not runs or (dataset, split) not in sigma:
+                continue
+            s, _dof = sigma[(dataset, split)]
+            band = 2 * s * 2 ** 0.5
+            counts = [0, 0, 0]
+            for run in runs:
+                for row in robust.decisions(run):
+                    index = 0 if row["delta"] > band else 1 if row["delta"] < -band else 2
+                    counts[index] += 1
+                    per_step.setdefault(robust.STEPS.get(row["step"], row["step"]), [0, 0, 0])[index] += 1
+            lines.append(f"| {dname} | {alpha} | {100 * s:.2f} | ±{100 * band:.2f} | {sum(counts)} | {counts[0]} | {counts[1]} | {counts[2]} |")
+    lines += ["", "| Step | Decisions | Clear gain | Clear loss | Within noise |", "|---|---|---|---|---|"]
+    for step in robust.STEPS.values():
+        if step in per_step:
+            gain, loss, noise = per_step[step]
+            lines.append(f"| {step} | {gain + loss + noise} | {gain} | {loss} | {noise} |")
+    paired = [row for row in robust.paired_components(ablations) if row["half_width"] is not None]
+    if paired:
+        lines += [
+            "",
+            "Components that only one seed kept, tested over the repeated ablation passes (full minus without,",
+            "test points, 95 % t interval):",
+            "",
+            "| Dataset | α | Seed | Component | Passes | Mean | 95 % interval |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for row in paired:
+            lines.append(
+                f"| {dict(DATASETS)[row['dataset']]} | {dict(SPLITS)[row['split']]} | {row['seed']} | {row['component']} | "
+                f"{len(row['deltas'])} | {100 * row['mean']:+.2f} | "
+                f"[{100 * (row['mean'] - row['half_width']):+.2f}, {100 * (row['mean'] + row['half_width']):+.2f}] |"
+            )
+    return lines + [""]
+
+
+def limitations_section(data: dict) -> list[str]:
+    """What these results do not show."""
+    best = [
+        r["best_test_accuracy"]
+        for runs in data.values()
+        for r in runs
+        if isinstance(r.get("best_test_accuracy"), (int, float))
+    ]
+    target = next((r.get("target_accuracy") for runs in data.values() for r in runs if r.get("target_accuracy")), 0.99)
+    return [
+        "## Limitations",
+        "",
+        f"* **Target accuracy.** Every run's goal was {100 * target:.0f} % so that the supervisor would never stop",
+        f"  early and every step would be measured. No run reached it (best final test {100 * max(best):.2f} %);",
+        "  the target is a stopping rule, not a claim. Results are reported as gains over the baseline at",
+        "  an equal training budget.",
+        "* **Run-to-run noise.** Training on the real cluster is not deterministic. At Fashion-MNIST α 0.1 the",
+        "  same configuration and seed vary by up to about 9 points, and the spread between seeds is larger",
+        "  still, so that setting is reported over repeats and its per-step effects are wide.",
+        "* **Small effects.** HPO, aggregation and synchronization change accuracy by about ±1 point on",
+        "  average, inside the noise band; only NAS and the topology change it clearly.",
+        "* **Communication.** The selected mesh sends 7 times as many models per round as the directed ring.",
+        "  The in-degree study separates graph connectivity from the number of models received.",
+        "* **Learned topology (APG).** APG halves the mesh's communication but loses accuracy, most at α 0.1;",
+        "  it optimizes each worker's local fit and waiting time, not global accuracy.",
+        "* **Scope.** One cluster of 8 Jetson workers on Wi-Fi, two 28 × 28 grayscale datasets and three",
+        "  label-skew levels. CIFAR-10 was run with the non-fair (search-budget) supervisor, not in this",
+        "  equal-budget mode, so it is not part of these tables.",
+        "",
+    ]
+
+
 def load(date: str) -> dict[tuple[str, str], list[dict]]:
     found = {}
     for dataset, _ in DATASETS:
@@ -395,6 +545,9 @@ def build(date: str) -> str:
     lines += communication_section(data, date)
     lines += apg_section(date)
     lines += ablation_section(data, date)
+    lines += topology_degree_section(data, date)
+    lines += decision_section(date)
+    lines += limitations_section(data)
     lines += ["## Per-seed accuracy after each step (validation %)", ""]
     for dataset, dname in DATASETS:
         for split, alpha in SPLITS:

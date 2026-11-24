@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-24 14:09 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-24 16:32 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -144,6 +144,61 @@ Per seed (mean ± std over the repeats; the campaign value comes first):
 | FEMNIST | 0.9 | 17 | 73.53 ± 0.83 (74.11, 72.95) | 84.75 ± 0.10 (84.68, 84.82) |
 | FEMNIST | 0.9 | 42 | 71.05 ± 0.05 (71.08, 71.01) | 83.68 ± 0.09 (83.75, 83.62) |
 | FEMNIST | 0.9 | 2026 | 70.90 ± 1.06 (70.14, 71.65) | 82.53 ± 0.14 (82.43, 82.63) |
+
+## Are the keep-or-revert decisions above noise?
+
+σ is the pooled within-seed standard deviation of global validation accuracy over repeated
+trainings of the same configuration and seed. A decision compares two measurements, so a
+difference beyond 2·σ·√2 (about 95 %) is *clear*; smaller differences are *within noise*. The
+default rule keeps changes down to 0.5 points below the best, well inside that band, so a single
+kept HPO, aggregation or synchronization decision is not evidence of an improvement; the paired
+test below shows where repeats do settle it. The supervisor now takes the tolerance from the goal
+(`accept_tolerance`), so a run can require a
+gain larger than the noise. Every decision is listed in `decision-robustness-2026-11-21.md`.
+
+| Dataset | α | σ (points) | 95 % band | Decisions | Clear gain | Clear loss | Within noise |
+|---|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 3.58 | ±10.13 | 15 | 5 | 0 | 10 |
+| Fashion-MNIST | 0.5 | 1.59 | ±4.51 | 15 | 5 | 0 | 10 |
+| Fashion-MNIST | 0.9 | 1.72 | ±4.88 | 15 | 1 | 0 | 14 |
+| FEMNIST | 0.1 | 0.78 | ±2.21 | 15 | 6 | 0 | 9 |
+| FEMNIST | 0.5 | 1.52 | ±4.29 | 15 | 5 | 0 | 10 |
+| FEMNIST | 0.9 | 0.75 | ±2.13 | 15 | 6 | 0 | 9 |
+
+| Step | Decisions | Clear gain | Clear loss | Within noise |
+|---|---|---|---|---|
+| NAS | 18 | 11 | 0 | 7 |
+| HPO | 18 | 0 | 0 | 18 |
+| topology | 18 | 16 | 0 | 2 |
+| aggregation | 18 | 1 | 0 | 17 |
+| sync | 18 | 0 | 0 | 18 |
+
+Components that only one seed kept, tested over the repeated ablation passes (full minus without,
+test points, 95 % t interval):
+
+| Dataset | α | Seed | Component | Passes | Mean | 95 % interval |
+|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 17 | sync | 3 | -3.92 | [-8.99, +1.16] |
+| Fashion-MNIST | 0.1 | 2026 | HPO | 3 | +2.82 | [+1.82, +3.82] |
+
+## Limitations
+
+* **Target accuracy.** Every run's goal was 99 % so that the supervisor would never stop
+  early and every step would be measured. No run reached it (best final test 90.85 %);
+  the target is a stopping rule, not a claim. Results are reported as gains over the baseline at
+  an equal training budget.
+* **Run-to-run noise.** Training on the real cluster is not deterministic. At Fashion-MNIST α 0.1 the
+  same configuration and seed vary by up to about 9 points, and the spread between seeds is larger
+  still, so that setting is reported over repeats and its per-step effects are wide.
+* **Small effects.** HPO, aggregation and synchronization change accuracy by about ±1 point on
+  average, inside the noise band; only NAS and the topology change it clearly.
+* **Communication.** The selected mesh sends 7 times as many models per round as the directed ring.
+  The in-degree study separates graph connectivity from the number of models received.
+* **Learned topology (APG).** APG halves the mesh's communication but loses accuracy, most at α 0.1;
+  it optimizes each worker's local fit and waiting time, not global accuracy.
+* **Scope.** One cluster of 8 Jetson workers on Wi-Fi, two 28 × 28 grayscale datasets and three
+  label-skew levels. CIFAR-10 was run with the non-fair (search-budget) supervisor, not in this
+  equal-budget mode, so it is not part of these tables.
 
 ## Per-seed accuracy after each step (validation %)
 

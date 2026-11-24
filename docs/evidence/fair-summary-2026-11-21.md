@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-24 03:50 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-24 14:09 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -98,7 +98,7 @@ in `fair-ablation-2026-11-21.md`.
 
 | Dataset | α | Ablation passes | Full test (%) | NAS (n) | HPO (n) | Topology (n) | Aggregation (n) | Sync (n) |
 |---|---|---|---|---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 1 | 71.41 ± 14.45 | +10.27 ± 15.94 (3) | +3.12 (1) | +21.57 ± 13.53 (3) | – (0) | -1.82 (1) |
+| Fashion-MNIST | 0.1 | 3 | 72.12 ± 10.10 | +10.79 ± 12.52 (3) | +2.82 (1) | +22.18 ± 7.75 (3) | – (0) | -3.92 (1) |
 | Fashion-MNIST | 0.5 | 1 | 89.21 ± 2.23 | +1.98 ± 1.69 (3) | -0.34 (1) | +6.38 ± 0.85 (3) | -0.29 ± 0.98 (2) | +0.30 ± 0.29 (2) |
 | Fashion-MNIST | 0.9 | 1 | 89.72 ± 0.98 | +1.27 ± 1.34 (2) | -0.11 (1) | +4.23 ± 1.21 (3) | +0.14 (1) | – (0) |
 | FEMNIST | 0.1 | 1 | 70.18 ± 4.20 | +6.89 ± 5.40 (3) | – (0) | +29.52 ± 0.23 (3) | +2.55 ± 1.22 (2) | – (0) |
@@ -115,7 +115,7 @@ the largest per-seed range (max − min), in test points.
 
 | Dataset | α | Trainings per seed | Baseline: mean std / max range | Full: mean std / max range |
 |---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 2 | 3.83 / 14.29 | 1.80 / 6.32 |
+| Fashion-MNIST | 0.1 | 4 | 2.83 / 14.29 | 2.31 / 9.38 |
 | Fashion-MNIST | 0.5 | 2 | 1.25 / 3.91 | 0.43 / 1.57 |
 | Fashion-MNIST | 0.9 | 2 | 1.27 / 3.28 | 0.19 / 0.36 |
 | FEMNIST | 0.1 | 2 | 0.61 / 1.54 | 0.36 / 1.15 |
@@ -126,9 +126,9 @@ Per seed (mean ± std over the repeats; the campaign value comes first):
 
 | Dataset | α | Seed | Baseline test (%) | Full test (%) |
 |---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 17 | 43.12 ± 0.02 (43.13, 43.11) | 82.93 ± 0.74 (82.40, 83.45) |
-| Fashion-MNIST | 0.1 | 42 | 45.89 ± 1.35 (44.94, 46.85) | 58.55 ± 4.47 (61.71, 55.39) |
-| Fashion-MNIST | 0.1 | 2026 | 45.73 ± 10.11 (38.58, 52.88) | 75.52 ± 0.18 (75.64, 75.39) |
+| Fashion-MNIST | 0.1 | 17 | 42.25 ± 1.08 (43.13, 43.11, 40.90, 41.87) | 81.05 ± 2.22 (82.40, 83.45, 78.82, 79.55) |
+| Fashion-MNIST | 0.1 | 42 | 45.77 ± 0.99 (44.94, 46.85, 46.37, 44.93) | 61.14 ± 4.04 (61.71, 55.39, 64.77, 62.68) |
+| Fashion-MNIST | 0.1 | 2026 | 48.07 ± 6.43 (38.58, 52.88, 50.39, 50.43) | 75.00 ± 0.66 (75.64, 75.39, 74.85, 74.14) |
 | Fashion-MNIST | 0.5 | 17 | 79.89 ± 0.28 (79.69, 80.08) | 90.64 ± 0.02 (90.65, 90.62) |
 | Fashion-MNIST | 0.5 | 42 | 74.67 ± 2.76 (76.62, 72.72) | 87.42 ± 1.11 (88.21, 86.64) |
 | Fashion-MNIST | 0.5 | 2026 | 79.44 ± 0.71 (78.93, 79.94) | 90.26 ± 0.17 (90.14, 90.38) |

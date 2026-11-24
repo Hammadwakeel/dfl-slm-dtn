@@ -163,6 +163,30 @@ def resize_images(
     return images, labels
 
 
+NORMALIZATION_CHUNK = 4096
+
+
+def _channel_mean_std(values: np.ndarray, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel mean and population std of ``values[indices]``, in float64.
+
+    Two passes over chunks of images, so the peak extra memory is one chunk in float64
+    instead of a float64 copy of the whole training set (323 MiB for 54,000 28x28 images,
+    which failed to allocate on a busy coordinator).
+    """
+    channels = values.shape[-1]
+    count = len(indices) * values.shape[1] * values.shape[2]
+    total = np.zeros(channels, dtype=np.float64)
+    for start in range(0, len(indices), NORMALIZATION_CHUNK):
+        chunk = values[indices[start:start + NORMALIZATION_CHUNK]]
+        total += chunk.sum(axis=(0, 1, 2), dtype=np.float64)
+    mean = total / count
+    squares = np.zeros(channels, dtype=np.float64)
+    for start in range(0, len(indices), NORMALIZATION_CHUNK):
+        deviation = values[indices[start:start + NORMALIZATION_CHUNK]].astype(np.float64) - mean
+        squares += np.square(deviation).sum(axis=(0, 1, 2))
+    return mean, np.sqrt(squares / count)
+
+
 def normalize_images(
     images: np.ndarray,
     method: str,
@@ -185,12 +209,12 @@ def normalize_images(
     if min(training_indices) < 0 or max(training_indices) >= len(images):
         raise PreprocessingError("Training indices are outside the image array")
 
-    values = images.astype(np.float32) / 255.0
+    # In place: ``images.astype(...) / 255.0`` would hold a second full-size copy.
+    values = images.astype(np.float32)
+    values /= 255.0
     if method == "minmax":
         return values, {"method": method, "minimum": 0.0, "maximum": 1.0}
-    training_values = values[np.asarray(training_indices, dtype=np.int64)]
-    mean = training_values.mean(axis=(0, 1, 2), dtype=np.float64)
-    standard_deviation = training_values.std(axis=(0, 1, 2), dtype=np.float64)
+    mean, standard_deviation = _channel_mean_std(values, np.asarray(training_indices, dtype=np.int64))
     standard_deviation[standard_deviation == 0] = 1.0
     values -= mean.astype(np.float32)
     values /= standard_deviation.astype(np.float32)

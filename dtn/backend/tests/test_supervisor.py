@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.models import AutonomyState, Base, Device
 from app.services.supervisor import Supervisor, SupervisorError
 from app.services.supervisor_policy import (
+    is_transient_failure,
     DecisionError,
     allowed_steps,
     default_goal,
@@ -1229,3 +1230,10 @@ def test_ablation_run_trains_each_listed_configuration_without_the_slm(sessions)
     # No search step and no language-model call.
     assert not any(a["action"] in {"enable_nas", "optimize_topology"} for a in cluster.actions)
     assert finished["state"]["counters"].get("slm_decisions", 0) == 0
+
+
+def test_numpy_allocation_failure_counts_as_transient() -> None:
+    assert is_transient_failure(
+        "Unable to allocate 323. MiB for an array with shape (54000, 28, 28, 1) and data type float64"
+    )
+    assert not is_transient_failure("Dataset fashion_mnist is not registered")

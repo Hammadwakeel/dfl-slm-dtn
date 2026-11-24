@@ -437,3 +437,21 @@ def test_preprocess_action_pipeline_checks_and_installs_all_worker_shards(
             server.server_close()
         for thread in threads:
             thread.join(timeout=3)
+
+
+def test_standard_normalization_matches_numpy_and_streams_in_chunks(monkeypatch) -> None:
+    monkeypatch.setattr(preprocessing, "NORMALIZATION_CHUNK", 7)
+    rng = np.random.default_rng(3)
+    images = rng.integers(0, 256, size=(50, 6, 5, 3)).astype(np.uint8)
+    train = [i for i in range(50) if i % 4]
+
+    normalized, report = normalize_images(images, "standard", train)
+
+    values = images.astype(np.float32) / 255.0
+    expected_mean = values[train].mean(axis=(0, 1, 2), dtype=np.float64)
+    expected_std = values[train].std(axis=(0, 1, 2), dtype=np.float64)
+    np.testing.assert_allclose(report["mean"], expected_mean, rtol=1e-12)
+    np.testing.assert_allclose(report["standard_deviation"], expected_std, rtol=1e-10)
+    expected = (values - expected_mean.astype(np.float32)) / expected_std.astype(np.float32)
+    np.testing.assert_allclose(normalized, expected, rtol=1e-6, atol=1e-6)
+    assert normalized.dtype == np.float32

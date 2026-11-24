@@ -1258,9 +1258,15 @@ def test_ablation_config_can_fix_the_graph_and_the_budget(sessions) -> None:
     nas = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
     workers = [f"worker{index}" for index in range(1, 9)]
     circulant = {worker: [workers[(index - 1) % 8], workers[(index - 2) % 8]] for index, worker in enumerate(workers)}
+    from app.routers.supervisor import AblationConfig
+
+    # Through the API model, as the router stores them: unset fields become None.
     configs = [
-        {"label": "in-degree 2", "architecture": nas, "topology": "learned", "senders": circulant, "aggregation": "fedavg", "sync_mode": "semi_sync"},
-        {"label": "ring 50x1", "architecture": nas, "topology": "directed_ring", "aggregation": "fedavg", "sync_mode": "semi_sync", "rounds": 50, "local_epochs": 1},
+        AblationConfig(**config).model_dump()
+        for config in (
+            {"label": "in-degree 2", "architecture": nas, "topology": "learned", "senders": circulant, "aggregation": "fedavg", "sync_mode": "semi_sync"},
+            {"label": "ring 50x1", "architecture": nas, "topology": "directed_ring", "aggregation": "fedavg", "sync_mode": "semi_sync", "rounds": 50, "local_epochs": 1},
+        )
     ]
     run = supervisor.create_run(default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True, ablation_configs=configs))
 

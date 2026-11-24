@@ -858,12 +858,13 @@ class Supervisor:
                 topology = state.get("selected_topology") or goal["topology"]
             else:
                 topology = goal["topology"]
-            rounds = int(arguments.get("rounds", goal["rounds"]))
+            # Ablation configurations carry rounds/local_epochs = None when they keep the goal's.
+            rounds = int(arguments.get("rounds") or goal["rounds"])
             if step == "train_final":
                 # Every run starts from the installed initial weights, so a final run
                 # shorter than the goal's training length can only do worse.
                 rounds = max(rounds, int(goal["rounds"]))
-            epochs = int(arguments.get("local_epochs", goal["local_epochs"]))
+            epochs = int(arguments.get("local_epochs") or goal["local_epochs"])
             if fair:
                 # One training budget for every model the run compares with the baseline.
                 rounds, epochs = int(goal["rounds"]), int(goal["local_epochs"])

@@ -1360,6 +1360,45 @@ def test_learned_topology_probes_a_mesh_then_trains_on_the_apg_graph(tmp_path: P
     assert group["topology_learning"]["edges"] <= group["topology_learning"]["mesh_edges"]
 
 
+def test_explicit_senders_skip_the_probe_and_train_on_the_given_graph(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    worker_ids = [worker.node_id for worker in coordinator.config.workers]
+    count = len(worker_ids)
+    senders = {
+        worker_ids[index]: [worker_ids[(index - offset) % count] for offset in (1, 2)]
+        for index in range(count)
+    }
+    seen: list[dict] = []
+
+    def fake_seed(group_id, group, run):
+        seen.append({"topology": group["topology"], "senders": group.get("learned_senders")})
+
+    coordinator._run_distributed_seed = fake_seed
+    coordinator.configure(topology="learned")
+    accepted = coordinator.start_training(rounds=2, epochs=1, seeds=(17,), senders=senders)
+    deadline = time.monotonic() + 3
+    while coordinator.results()["active_group_id"] is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    group = next(item for item in coordinator.results()["groups"] if item["group_id"] == accepted["group_id"])
+    assert group["status"] == "completed", group.get("error")
+    assert seen == [{"topology": "learned", "senders": {key: sorted(value) for key, value in senders.items()}}]
+    assert "topology_learning" not in group
+
+
+def test_explicit_senders_are_validated(tmp_path: Path) -> None:
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    worker_ids = [worker.node_id for worker in coordinator.config.workers]
+    ring = {worker_ids[index]: [worker_ids[index - 1]] for index in range(len(worker_ids))}
+    with pytest.raises(ValueError, match="learned topology"):
+        coordinator.start_training(rounds=2, epochs=1, senders=ring)
+    coordinator.configure(topology="learned")
+    with pytest.raises(ValueError, match="one entry per configured worker"):
+        coordinator.start_training(rounds=2, epochs=1, senders={worker_ids[0]: [worker_ids[1]]})
+    with pytest.raises(ValueError, match="distinct other workers"):
+        coordinator.start_training(rounds=2, epochs=1, senders={**ring, worker_ids[0]: [worker_ids[0]]})
+
+
 def test_learned_topology_requires_a_dataset_run(tmp_path: Path) -> None:
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
     coordinator.configure(topology="learned")

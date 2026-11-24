@@ -867,6 +867,11 @@ class Supervisor:
             if fair:
                 # One training budget for every model the run compares with the baseline.
                 rounds, epochs = int(goal["rounds"]), int(goal["local_epochs"])
+            if step == ABLATION_STEP:
+                # A configuration may set its own budget, e.g. more rounds of fewer local
+                # epochs to match another topology's communication at the same compute.
+                rounds = int(arguments.get("rounds") or rounds)
+                epochs = int(arguments.get("local_epochs") or epochs)
             _unwrap_result(self._dispatch({"action": "set_topology", "parameters": {"topology": topology}}, reason, run_id))
             warm_start = (
                 self._warm_start_source(state, architecture) if step == "train_final" and not fair else None
@@ -928,6 +933,8 @@ class Supervisor:
             }
             if architecture and warm_start is None:
                 parameters["architecture"] = architecture
+            if step == ABLATION_STEP and arguments.get("senders"):
+                parameters["senders"] = arguments["senders"]
             state["last_trained_architecture"] = architecture or state.get("baseline_architecture")
             data = _unwrap_result(
                 self._dispatch({"action": "start_training", "parameters": parameters}, reason, run_id)
@@ -1059,7 +1066,7 @@ class Supervisor:
         if step == "measure_step":
             summary["measures"] = (active.get("arguments") or {}).get("measures") or active.get("measures")
             summary["sync_mode"] = active.get("sync_mode")
-            self._accept_or_revert(run_id, state, summary)
+            self._accept_or_revert(run_id, goal, state, summary)
         if step == "learn_topology":
             accuracy_now = summary.get("validation_accuracy")
             best_now = (state.get("best") or {}).get("validation_accuracy")
@@ -1163,7 +1170,9 @@ class Supervisor:
         self._save(run_id, state)
         self._event(run_id, "step_completed", _completion_message(step, summary), {"summary": summary})
 
-    def _accept_or_revert(self, run_id: str, state: dict[str, Any], summary: dict[str, Any]) -> None:
+    def _accept_or_revert(
+        self, run_id: str, goal: dict[str, Any], state: dict[str, Any], summary: dict[str, Any]
+    ) -> None:
         """Keep a search step's change only if its equal-budget measurement did not lose accuracy."""
         pending = state.pop("pending_revert", None)
         accuracy = summary.get("validation_accuracy")
@@ -1171,7 +1180,10 @@ class Supervisor:
         if not isinstance(pending, dict) or not isinstance(accuracy, (int, float)) or not isinstance(previous_best, (int, float)):
             summary["accepted"] = True
             return
-        accepted = accuracy >= float(previous_best) - STEP_ACCEPT_TOLERANCE
+        # goal["accept_tolerance"] calibrates the rule to measured run-to-run noise; a
+        # negative value keeps a change only when it gains at least that much.
+        tolerance = float(goal.get("accept_tolerance", STEP_ACCEPT_TOLERANCE))
+        accepted = accuracy >= float(previous_best) - tolerance
         summary["accepted"] = accepted
         if accepted:
             return

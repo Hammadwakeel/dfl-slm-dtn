@@ -4,7 +4,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.security import require_api_token
 from app.services.supervisor import Supervisor, SupervisorError
@@ -21,9 +21,21 @@ class AblationConfig(BaseModel):
 
     label: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _.,()+-]+$")
     architecture: dict[str, Any]
-    topology: Literal["directed_ring", "bidirectional_ring", "mesh", "chain", "star"]
+    topology: Literal["directed_ring", "bidirectional_ring", "mesh", "chain", "star", "learned"]
     aggregation: Literal["fedavg", "uniform", "metropolis", "trimmed_mean"]
     sync_mode: Literal["sync", "semi_sync", "async"]
+    # Receiver -> the workers it receives from; required by (and only for) "learned",
+    # so an ablation can train on a fixed graph such as a k-regular circulant.
+    senders: dict[str, list[str]] | None = Field(None, min_length=2, max_length=64)
+    # Overrides of the baseline's budget, e.g. more rounds of fewer local epochs.
+    rounds: int | None = Field(None, ge=1, le=100)
+    local_epochs: int | None = Field(None, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def senders_match_topology(self) -> "AblationConfig":
+        if (self.topology == "learned") != (self.senders is not None):
+            raise ValueError("senders are required for, and only allowed with, the learned topology")
+        return self
 
 
 class GoalRequest(BaseModel):
@@ -49,6 +61,10 @@ class GoalRequest(BaseModel):
     # Fair evaluation: every training uses rounds x local_epochs from the same initial
     # weights, and each search step is followed by a measurement of its effect.
     measure_each_step: bool = False
+    # Fair mode keeps a step's change when its measurement is at least the best
+    # accuracy minus this tolerance. Set it from measured run-to-run noise; a negative
+    # value keeps a change only when it gains at least that much.
+    accept_tolerance: float = Field(0.005, ge=-0.2, le=0.2)
     # Ablation: train these configurations in order after the baseline (no search,
     # no language-model decisions), each with the baseline's rounds x local_epochs.
     ablation_configs: list[AblationConfig] | None = Field(None, min_length=1, max_length=12)

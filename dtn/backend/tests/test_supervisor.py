@@ -1232,6 +1232,61 @@ def test_ablation_run_trains_each_listed_configuration_without_the_slm(sessions)
     assert finished["state"]["counters"].get("slm_decisions", 0) == 0
 
 
+@pytest.mark.parametrize(("tolerance", "nas_kept"), [(0.005, True), (-0.02, False)])
+def test_accept_tolerance_sets_how_much_gain_a_kept_step_needs(sessions, tolerance, nas_kept) -> None:
+    cluster = FakeCluster()
+    cluster.nas_architecture = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    # measurements after NAS, HPO, learned topology, topology, aggregation, sync
+    cluster.accuracy["train_final"] = [0.91, 0.92, 0.5, 0.93, 0.80, 0.94]
+    cluster.accuracy["fine_tune"] = 0.935
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    goal = default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True, accept_tolerance=tolerance)
+    run = supervisor.create_run(goal)
+
+    finished = run_until_done(supervisor, run["id"], ticks=300)
+
+    measured = {item["measures"]: item for item in finished["state"]["experiments"] if item["step"] == "measure_step"}
+    # NAS gains one point over the 0.90 baseline: kept by the default rule, reverted
+    # when a two-point gain is required.
+    assert measured["run_nas"]["accepted"] is nas_kept
+    assert ("run_hpo" in measured) is nas_kept
+
+
+def test_ablation_config_can_fix_the_graph_and_the_budget(sessions) -> None:
+    cluster = FakeCluster()
+    supervisor = make_supervisor(sessions, cluster, FakeSLM([]))
+    nas = {**NAS_ARCHITECTURE, "id": "nas-cnn", "layers": CNN_LAYERS}
+    workers = [f"worker{index}" for index in range(1, 9)]
+    circulant = {worker: [workers[(index - 1) % 8], workers[(index - 2) % 8]] for index, worker in enumerate(workers)}
+    configs = [
+        {"label": "in-degree 2", "architecture": nas, "topology": "learned", "senders": circulant, "aggregation": "fedavg", "sync_mode": "semi_sync"},
+        {"label": "ring 50x1", "architecture": nas, "topology": "directed_ring", "aggregation": "fedavg", "sync_mode": "semi_sync", "rounds": 50, "local_epochs": 1},
+    ]
+    run = supervisor.create_run(default_goal(target_accuracy=0.999, max_experiments=20, measure_each_step=True, ablation_configs=configs))
+
+    finished = run_until_done(supervisor, run["id"], ticks=200)
+
+    assert finished["status"] == "completed"
+    trainings = [a["parameters"] for a in cluster.actions if a["action"] == "start_training"]
+    assert trainings[1]["senders"] == circulant and (trainings[1]["rounds"], trainings[1]["epochs"]) == (10, 5)
+    assert "senders" not in trainings[2] and (trainings[2]["rounds"], trainings[2]["epochs"]) == (50, 1)
+    topologies = [a["parameters"]["topology"] for a in cluster.actions if a["action"] == "set_topology"]
+    assert topologies[-2:] == ["learned", "directed_ring"]
+
+
+def test_ablation_config_rejects_senders_without_the_learned_topology() -> None:
+    from pydantic import ValidationError
+
+    from app.routers.supervisor import AblationConfig
+
+    ring = {"worker1": ["worker2"], "worker2": ["worker1"]}
+    with pytest.raises(ValidationError):
+        AblationConfig(label="x", architecture={}, topology="mesh", senders=ring, aggregation="fedavg", sync_mode="sync")
+    with pytest.raises(ValidationError):
+        AblationConfig(label="x", architecture={}, topology="learned", aggregation="fedavg", sync_mode="sync")
+    assert AblationConfig(label="x", architecture={}, topology="learned", senders=ring, aggregation="fedavg", sync_mode="sync").senders == ring
+
+
 def test_numpy_allocation_failure_counts_as_transient() -> None:
     assert is_transient_failure(
         "Unable to allocate 323. MiB for an array with shape (54000, 28, 28, 1) and data type float64"

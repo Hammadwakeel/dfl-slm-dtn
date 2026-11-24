@@ -321,7 +321,20 @@
                   "uniqueItems": true,
                   "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
                 },
-                "augmentation": {"enum": ["none", "flip_shift"]}
+                "augmentation": {"enum": ["none", "flip_shift"]},
+                "senders": {
+                  "type": "object",
+                  "description": "Receiver -> workers it receives from; fixes the graph of the learned topology.",
+                  "minProperties": 2,
+                  "maxProperties": 64,
+                  "additionalProperties": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 63,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 64}
+                  }
+                }
               },
               "required": ["rounds", "epochs", "dataset_name"],
               "additionalProperties": false

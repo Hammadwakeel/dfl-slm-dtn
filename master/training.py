@@ -642,7 +642,14 @@ class TrainingCoordinator:
         sync_mode: str | None = None,
         sync_deadline_seconds: int | None = None,
         augmentation: str | None = None,
+        senders: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
+        """Start one decentralized training group.
+
+        ``senders`` (receiver -> the workers it receives from) fixes the graph of the
+        "learned" topology directly instead of probing for it, so experiments can
+        train on any directed graph, for example one with a chosen in-degree.
+        """
         if augmentation is not None and augmentation not in TRAINING_AUGMENTATIONS:
             raise ValueError(f"augmentation must be one of {', '.join(TRAINING_AUGMENTATIONS)}")
         if augmentation not in (None, "none") and dataset_name is None:
@@ -713,7 +720,11 @@ class TrainingCoordinator:
                 }
             else:
                 selected_architecture = architecture_spec(architecture)
-            if self._settings["topology"] == "learned" and dataset_name is None:
+            if senders is not None:
+                if self._settings["topology"] != "learned":
+                    raise ValueError("A senders map needs the learned topology")
+                senders = self._validated_senders(senders)
+            elif self._settings["topology"] == "learned" and dataset_name is None:
                 raise ValueError("The learned topology measures validation loss, so it needs a dataset run")
             settings = self.configure(
                 rounds=rounds,
@@ -748,6 +759,8 @@ class TrainingCoordinator:
             }
             if dataset_name is not None:
                 group["dataset_name"] = dataset_name
+            if senders is not None:
+                group["learned_senders"] = senders
             self._groups.append(group)
             self._active_group_id = group_id
             self._stop.clear()
@@ -767,6 +780,23 @@ class TrainingCoordinator:
             "dataset_name": dataset_name,
             "augmentation": augmentation,
         }
+
+    def _validated_senders(self, senders: Any) -> dict[str, list[str]]:
+        """Every configured worker receives from one or more distinct other workers."""
+        worker_ids = {worker.node_id for worker in self.config.workers}
+        if not isinstance(senders, dict) or set(senders) != worker_ids:
+            raise ValueError("The senders map needs exactly one entry per configured worker")
+        validated: dict[str, list[str]] = {}
+        for receiver, peers in senders.items():
+            if (
+                not isinstance(peers, list)
+                or not peers
+                or len(set(peers)) != len(peers)
+                or any(peer not in worker_ids or peer == receiver for peer in peers)
+            ):
+                raise ValueError(f"{receiver} needs one or more distinct other workers as senders")
+            validated[receiver] = sorted(peers)
+        return validated
 
     def start_nas_experiment(
         self,

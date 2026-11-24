@@ -879,6 +879,7 @@ def _execute_action(
                         if "augmentation" in parameters
                         else {}
                     ),
+                    **({"senders": parameters["senders"]} if "senders" in parameters else {}),
                 ),
             }
         if name == "stop_training":

@@ -3,7 +3,9 @@
     python scripts/fair_summary.py --date 2026-11-21
 
 Reads every ``docs/evidence/fair-<dataset>-<split>-3seed-<date>.json`` written by
-``scripts/paper_campaign.py --measure-each-step`` and writes one Markdown summary.
+``scripts/paper_campaign.py --measure-each-step``, plus the leave-one-out ablation
+(``fair-ablation-<date>.json`` and any ``fair-ablation-<date>-repeat<N>.json``) written
+by ``scripts/ablation_campaign.py``, and writes one Markdown summary.
 
 Every model in these runs is trained with the same budget as the baseline (same
 rounds x local epochs, same installed initial weights). A step's effect is measured
@@ -206,6 +208,124 @@ def apg_section(date: str) -> list[str]:
         "",
     ]
 
+ABLATION_VARIANTS = (
+    ("without NAS", "NAS"),
+    ("without HPO", "HPO"),
+    ("without topology", "Topology"),
+    ("without aggregation", "Aggregation"),
+    ("without sync", "Sync"),
+)
+
+
+def _ablation_passes(date: str) -> list[list[dict]]:
+    """Completed runs of the leave-one-out ablation and of each later repeat of it."""
+    paths = [EVIDENCE / f"fair-ablation-{date}.json", *sorted(EVIDENCE.glob(f"fair-ablation-{date}-repeat*.json"))]
+    return [
+        [r for r in json.loads(path.read_text(encoding="utf-8"))["runs"] if r["status"] == "completed"]
+        for path in paths
+        if path.is_file()
+    ]
+
+
+def _test(run: dict, label: str) -> float | None:
+    value = run["accuracy"].get(label, {}).get("test")
+    return value if isinstance(value, (int, float)) else None
+
+
+def ablation_section(data: dict, date: str) -> list[str]:
+    """Order-independent component contributions and run-to-run noise."""
+    passes = _ablation_passes(date)
+    if not passes:
+        return []
+    by_seed: dict[tuple[str, str, int], list[dict]] = {}
+    for runs in passes:
+        for run in runs:
+            by_seed.setdefault((run["dataset"], run["split"], run["seed"]), []).append(run)
+    lines = [
+        "## Leave-one-out ablation (order-independent)",
+        "",
+        "The step effects above depend on the order the SLM chose. To remove that dependence, each",
+        "run's final configuration is retrained with the same budget, once as it is (full) and once",
+        "without each component the run kept. A component's contribution is full minus without (test",
+        "points). When a seed was ablated more than once, its contribution is the mean over those",
+        "repeats; values are mean ± std over the seeds that kept the component (n). Details per run are",
+        f"in `fair-ablation-{date}.md`.",
+        "",
+        "| Dataset | α | Ablation passes | Full test (%) | " + " | ".join(f"{name} (n)" for _, name in ABLATION_VARIANTS) + " |",
+        "|---|---|---|---|" + "---|" * len(ABLATION_VARIANTS),
+    ]
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            seeds = {k: v for k, v in by_seed.items() if k[:2] == (dataset, split)}
+            if not seeds:
+                continue
+            full = [statistics.fmean(t for r in runs if (t := _test(r, "full")) is not None) for runs in seeds.values()]
+            cells = []
+            for variant, _ in ABLATION_VARIANTS:
+                deltas = []
+                for runs in seeds.values():
+                    pairs = [(_test(r, "full"), _test(r, variant)) for r in runs]
+                    pairs = [f - w for f, w in pairs if f is not None and w is not None]
+                    if pairs:
+                        deltas.append(statistics.fmean(pairs))
+                cells.append(f"{_signed(deltas)} ({len(deltas)})" if deltas else "– (0)")
+            count = max(len(runs) for runs in seeds.values())
+            lines.append(f"| {dname} | {alpha} | {count} | {_pct(full)} | " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "## Run-to-run noise",
+        "",
+        "The baseline and the full configuration are retrained with the same seed in the campaign",
+        "and in every ablation pass. The spread between those repeats is run-to-run noise on the",
+        "cluster (thread scheduling, network timing and semi-synchronous deadlines are not",
+        "deterministic). The table gives the mean over seeds of the per-seed standard deviation and",
+        "the largest per-seed range (max − min), in test points.",
+        "",
+        "| Dataset | α | Trainings per seed | Baseline: mean std / max range | Full: mean std / max range |",
+        "|---|---|---|---|---|",
+    ]
+    detail: list[str] = []
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            seeds = {k: v for k, v in by_seed.items() if k[:2] == (dataset, split)}
+            if not seeds:
+                continue
+            source = {r["seed"]: r for r in data.get((dataset, split), [])}
+            spread: dict[str, tuple[list[float], list[float]]] = {"baseline": ([], []), "full": ([], [])}
+            counts = []
+            for (_, _, seed), runs in sorted(seeds.items()):
+                campaign = source.get(seed, {})
+                values = {
+                    "baseline": [campaign.get("baseline_test_accuracy"), *(_test(r, "baseline") for r in runs)],
+                    "full": [campaign.get("best_test_accuracy"), *(_test(r, "full") for r in runs)],
+                }
+                row = []
+                for label, vals in values.items():
+                    vals = [v for v in vals if isinstance(v, (int, float))]
+                    if len(vals) >= 2:
+                        spread[label][0].append(statistics.stdev(vals))
+                        spread[label][1].append(max(vals) - min(vals))
+                    row.append(f"{_pct(vals)} ({', '.join(f'{100 * v:.2f}' for v in vals)})")
+                counts.append(len(runs) + 1)
+                detail.append(f"| {dname} | {alpha} | {seed} | {row[0]} | {row[1]} |")
+            cells = [
+                f"{100 * statistics.fmean(s):.2f} / {100 * max(rng):.2f}" if s else "n/a"
+                for s, rng in spread.values()
+            ]
+            span = str(min(counts)) if min(counts) == max(counts) else f"{min(counts)}–{max(counts)}"
+            lines.append(f"| {dname} | {alpha} | {span} | {cells[0]} | {cells[1]} |")
+    lines += [
+        "",
+        "Per seed (mean ± std over the repeats; the campaign value comes first):",
+        "",
+        "| Dataset | α | Seed | Baseline test (%) | Full test (%) |",
+        "|---|---|---|---|---|",
+        *detail,
+        "",
+    ]
+    return lines
+
 
 def load(date: str) -> dict[tuple[str, str], list[dict]]:
     found = {}
@@ -274,6 +394,7 @@ def build(date: str) -> str:
 
     lines += communication_section(data, date)
     lines += apg_section(date)
+    lines += ablation_section(data, date)
     lines += ["## Per-seed accuracy after each step (validation %)", ""]
     for dataset, dname in DATASETS:
         for split, alpha in SPLITS:

@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-23 04:36 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-24 03:50 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -86,6 +86,64 @@ peers whose models already suit the receiver's data, so each worker averages ove
 of the label space. The label gap and the accuracy loss of the learned topology are both
 largest at α 0.1, where the label skew is strongest. The learned graph sends about half as
 many models as the mesh, so it trades accuracy for communication.
+
+## Leave-one-out ablation (order-independent)
+
+The step effects above depend on the order the SLM chose. To remove that dependence, each
+run's final configuration is retrained with the same budget, once as it is (full) and once
+without each component the run kept. A component's contribution is full minus without (test
+points). When a seed was ablated more than once, its contribution is the mean over those
+repeats; values are mean ± std over the seeds that kept the component (n). Details per run are
+in `fair-ablation-2026-11-21.md`.
+
+| Dataset | α | Ablation passes | Full test (%) | NAS (n) | HPO (n) | Topology (n) | Aggregation (n) | Sync (n) |
+|---|---|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 1 | 71.41 ± 14.45 | +10.27 ± 15.94 (3) | +3.12 (1) | +21.57 ± 13.53 (3) | – (0) | -1.82 (1) |
+| Fashion-MNIST | 0.5 | 1 | 89.21 ± 2.23 | +1.98 ± 1.69 (3) | -0.34 (1) | +6.38 ± 0.85 (3) | -0.29 ± 0.98 (2) | +0.30 ± 0.29 (2) |
+| Fashion-MNIST | 0.9 | 1 | 89.72 ± 0.98 | +1.27 ± 1.34 (2) | -0.11 (1) | +4.23 ± 1.21 (3) | +0.14 (1) | – (0) |
+| FEMNIST | 0.1 | 1 | 70.18 ± 4.20 | +6.89 ± 5.40 (3) | – (0) | +29.52 ± 0.23 (3) | +2.55 ± 1.22 (2) | – (0) |
+| FEMNIST | 0.5 | 1 | 82.60 ± 1.50 | +3.31 ± 0.65 (3) | – (0) | +10.96 ± 2.10 (3) | +0.20 ± 0.23 (2) | +0.07 ± 0.14 (2) |
+| FEMNIST | 0.9 | 1 | 83.69 ± 1.10 | +2.71 ± 2.06 (3) | +0.43 (1) | +6.88 ± 1.17 (3) | +0.11 ± 0.06 (2) | +0.00 ± 0.13 (3) |
+
+## Run-to-run noise
+
+The baseline and the full configuration are retrained with the same seed in the campaign
+and in every ablation pass. The spread between those repeats is run-to-run noise on the
+cluster (thread scheduling, network timing and semi-synchronous deadlines are not
+deterministic). The table gives the mean over seeds of the per-seed standard deviation and
+the largest per-seed range (max − min), in test points.
+
+| Dataset | α | Trainings per seed | Baseline: mean std / max range | Full: mean std / max range |
+|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 2 | 3.83 / 14.29 | 1.80 / 6.32 |
+| Fashion-MNIST | 0.5 | 2 | 1.25 / 3.91 | 0.43 / 1.57 |
+| Fashion-MNIST | 0.9 | 2 | 1.27 / 3.28 | 0.19 / 0.36 |
+| FEMNIST | 0.1 | 2 | 0.61 / 1.54 | 0.36 / 1.15 |
+| FEMNIST | 0.5 | 2 | 1.36 / 3.01 | 0.32 / 0.57 |
+| FEMNIST | 0.9 | 2 | 0.65 / 1.51 | 0.11 / 0.20 |
+
+Per seed (mean ± std over the repeats; the campaign value comes first):
+
+| Dataset | α | Seed | Baseline test (%) | Full test (%) |
+|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 17 | 43.12 ± 0.02 (43.13, 43.11) | 82.93 ± 0.74 (82.40, 83.45) |
+| Fashion-MNIST | 0.1 | 42 | 45.89 ± 1.35 (44.94, 46.85) | 58.55 ± 4.47 (61.71, 55.39) |
+| Fashion-MNIST | 0.1 | 2026 | 45.73 ± 10.11 (38.58, 52.88) | 75.52 ± 0.18 (75.64, 75.39) |
+| Fashion-MNIST | 0.5 | 17 | 79.89 ± 0.28 (79.69, 80.08) | 90.64 ± 0.02 (90.65, 90.62) |
+| Fashion-MNIST | 0.5 | 42 | 74.67 ± 2.76 (76.62, 72.72) | 87.42 ± 1.11 (88.21, 86.64) |
+| Fashion-MNIST | 0.5 | 2026 | 79.44 ± 0.71 (78.93, 79.94) | 90.26 ± 0.17 (90.14, 90.38) |
+| Fashion-MNIST | 0.9 | 17 | 83.76 ± 0.60 (84.19, 83.34) | 90.75 ± 0.14 (90.85, 90.65) |
+| Fashion-MNIST | 0.9 | 42 | 82.65 ± 0.87 (83.27, 82.03) | 88.87 ± 0.25 (89.05, 88.69) |
+| Fashion-MNIST | 0.9 | 2026 | 85.02 ± 2.32 (83.38, 86.67) | 89.92 ± 0.16 (90.04, 89.81) |
+| FEMNIST | 0.1 | 17 | 28.78 ± 0.55 (28.39, 29.17) | 73.62 ± 0.81 (74.20, 73.05) |
+| FEMNIST | 0.1 | 42 | 34.41 ± 1.09 (35.18, 33.64) | 65.46 ± 0.14 (65.56, 65.36) |
+| FEMNIST | 0.1 | 2026 | 36.44 ± 0.19 (36.58, 36.31) | 72.06 ± 0.13 (71.97, 72.15) |
+| FEMNIST | 0.5 | 17 | 65.80 ± 2.13 (67.30, 64.29) | 83.75 ± 0.21 (83.90, 83.60) |
+| FEMNIST | 0.5 | 42 | 66.20 ± 1.67 (67.37, 65.02) | 83.08 ± 0.35 (82.84, 83.33) |
+| FEMNIST | 0.5 | 2026 | 65.31 ± 0.30 (65.52, 65.10) | 81.16 ± 0.40 (81.45, 80.88) |
+| FEMNIST | 0.9 | 17 | 73.53 ± 0.83 (74.11, 72.95) | 84.75 ± 0.10 (84.68, 84.82) |
+| FEMNIST | 0.9 | 42 | 71.05 ± 0.05 (71.08, 71.01) | 83.68 ± 0.09 (83.75, 83.62) |
+| FEMNIST | 0.9 | 2026 | 70.90 ± 1.06 (70.14, 71.65) | 82.53 ± 0.14 (82.43, 82.63) |
 
 ## Per-seed accuracy after each step (validation %)
 

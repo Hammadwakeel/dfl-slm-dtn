@@ -20,7 +20,8 @@ epochs, same seed, same installed initial weights):
 A variant is skipped when the run kept the default for that component (for example
 the sweep chose FedAvg, or the HPO change was reverted). The supervisor also re-trains
 the baseline first. Results go to ``docs/evidence/fair-ablation-<date>.json`` / ``.md``;
-re-running resumes finished seeds. The API token is read from ``.env`` and never printed.
+re-running resumes finished seeds. ``--repeat N`` runs the same ablation again into
+``fair-ablation-<date>-repeat<N>.json`` / ``.md``, to measure run-to-run noise. The API token is read from ``.env`` and never printed.
 """
 
 from __future__ import annotations
@@ -187,10 +188,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--splits", nargs="+", default=[s for s, _ in SPLITS])
     parser.add_argument("--time-budget", type=int, default=240, help="minutes per ablation run")
     parser.add_argument("--api", default="http://127.0.0.1:8000")
+    parser.add_argument("--repeat", type=int, default=0,
+                        help="repeat number N > 0 writes fair-ablation-<date>-repeat<N>.json/.md, to measure run-to-run noise")
     parser.add_argument("--dry-run", action="store_true", help="print the configurations and exit")
     args = parser.parse_args(argv)
 
-    out = EVIDENCE / f"fair-ablation-{args.date}.md"
+    if args.repeat < 0:
+        parser.error("--repeat must be 0 or positive")
+    suffix = f"-repeat{args.repeat}" if args.repeat else ""
+    out = EVIDENCE / f"fair-ablation-{args.date}{suffix}.md"
     progress_path = out.with_suffix(".json")
     progress = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.is_file() else {"runs": [], "active": None}
     api = Api(args.api, api_token())

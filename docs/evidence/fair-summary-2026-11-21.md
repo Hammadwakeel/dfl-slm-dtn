@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-25 15:16 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-25 16:48 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026 (Fashion-MNIST α 0.1 also 7 and 99). Runs whose baseline started from
@@ -15,7 +15,7 @@ the mean over the 8 workers on the dataset's shared test split. Values are mean 
 |---|---|---|---|---|---|---|
 | Fashion-MNIST | 0.1 | 5 | 44.26 ± 3.69 | 71.60 ± 8.55 | +27.33 ± 10.52 | 109,450, 129,770, 34,154, 51,754, 8,403 |
 | Fashion-MNIST | 0.5 | 3 | 78.41 ± 1.60 | 89.67 ± 1.29 | +11.25 ± 0.32 | 109,450, 129,770, 69,770 |
-| Fashion-MNIST | 0.9 | 2 | 83.73 ± 0.65 | 89.95 ± 1.27 | +6.22 ± 0.62 | 129,770, 28,810 |
+| Fashion-MNIST | 0.9 | 3 | 83.56 ± 0.54 | 90.05 ± 0.92 | +6.49 ± 0.63 | 129,770, 22,682, 28,810 |
 | FEMNIST | 0.1 | 3 | 33.38 ± 4.38 | 70.57 ± 4.49 | +37.19 ± 7.87 | 112,830, 133,150, 73,150 |
 | FEMNIST | 0.5 | 3 | 66.73 ± 1.05 | 82.73 ± 1.23 | +16.00 ± 0.57 | 112,830, 133,150, 73,150 |
 | FEMNIST | 0.9 | 3 | 71.78 ± 2.08 | 83.62 ± 1.13 | +11.84 ± 1.12 | 112,830, 133,150, 55,134 |
@@ -31,12 +31,12 @@ and is reported without a keep/revert decision.
 
 | Step | α 0.1: Δ val | α 0.1: Δ test | α 0.1: kept | α 0.5: Δ val | α 0.5: Δ test | α 0.5: kept | α 0.9: Δ val | α 0.9: Δ test | α 0.9: kept |
 |---|---|---|---|---|---|---|---|---|---|
-| NAS | +6.32 ± 5.16 | +6.25 ± 5.02 | 5/5 | +4.00 ± 1.88 | +3.86 ± 2.08 | 3/3 | +1.86 ± 2.23 | +1.71 ± 2.16 | 2/2 |
-| Topology sweep | +15.91 ± 10.51 | +15.76 ± 10.32 | 5/5 | +7.38 ± 2.26 | +7.02 ± 2.09 | 3/3 | +4.44 ± 1.37 | +4.48 ± 1.58 | 2/2 |
-| Aggregation sweep | +1.60 ± 1.94 | +1.56 ± 1.81 | 5/5 | +0.18 ± 0.16 | +0.44 ± 0.37 | 3/3 | -0.52 ± 0.35 | -0.81 ± 0.47 | 1/2 |
-| HPO | -1.67 ± 4.52 | -1.42 ± 4.88 | 2/5 | -0.86 ± 0.38 | -0.80 ± 0.74 | 1/3 | -0.44 ± 0.20 | -0.15 ± 0.53 | 0/2 |
-| Synchronization sweep | -1.70 ± 4.46 | -1.82 ± 4.25 | 4/5 | -0.61 ± 1.10 | -0.59 ± 0.99 | 2/3 | +0.05 ± 0.57 | -0.15 ± 0.98 | 2/2 |
-| Learned topology (APG) | -8.07 ± 10.90 | -7.98 ± 10.85 | – | -2.07 ± 0.35 | -2.05 ± 0.20 | – | -1.02 ± 0.20 | -0.62 ± 0.50 | – |
+| NAS | +6.32 ± 5.16 | +6.25 ± 5.02 | 5/5 | +4.00 ± 1.88 | +3.86 ± 2.08 | 3/3 | +1.96 ± 1.58 | +1.94 ± 1.58 | 3/3 |
+| Topology sweep | +15.91 ± 10.51 | +15.76 ± 10.32 | 5/5 | +7.38 ± 2.26 | +7.02 ± 2.09 | 3/3 | +4.42 ± 0.97 | +4.50 ± 1.12 | 3/3 |
+| Aggregation sweep | +1.60 ± 1.94 | +1.56 ± 1.81 | 5/5 | +0.18 ± 0.16 | +0.44 ± 0.37 | 3/3 | -0.37 ± 0.36 | -0.53 ± 0.60 | 2/3 |
+| HPO | -1.67 ± 4.52 | -1.42 ± 4.88 | 2/5 | -0.86 ± 0.38 | -0.80 ± 0.74 | 1/3 | -0.35 ± 0.21 | -0.16 ± 0.38 | 1/3 |
+| Synchronization sweep | -1.70 ± 4.46 | -1.82 ± 4.25 | 4/5 | -0.61 ± 1.10 | -0.59 ± 0.99 | 2/3 | +0.16 ± 0.44 | -0.03 ± 0.73 | 3/3 |
+| Learned topology (APG) | -8.07 ± 10.90 | -7.98 ± 10.85 | – | -2.07 ± 0.35 | -2.05 ± 0.20 | – | -1.29 ± 0.48 | -1.12 ± 0.93 | – |
 
 ### FEMNIST
 
@@ -61,7 +61,7 @@ The search steps (NAS, sweeps) are not counted; they cost the same for every see
 |---|---|---|---|---|---|---|
 | Fashion-MNIST | 0.1 | 80 / 9.2 | 448 / 145.7 | 31.7 / 317 / 120.3 | 71.60 ± 8.55 | 60.51 ± 4.32 |
 | Fashion-MNIST | 0.5 | 80 / 9.2 | 560 / 230.7 | 27.3 / 273 / 112.2 | 89.67 ± 1.29 | 87.68 ± 1.39 |
-| Fashion-MNIST | 0.9 | 80 / 9.2 | 560 / 177.6 | 28.0 / 280 / 88.8 | 89.95 ± 1.27 | 88.90 ± 1.38 |
+| Fashion-MNIST | 0.9 | 80 / 9.2 | 560 / 135.3 | 28.3 / 283 / 68.0 | 90.05 ± 0.92 | 88.65 ± 1.07 |
 | FEMNIST | 0.1 | 80 / 11.4 | 560 / 238.3 | 31.0 / 310 / 132.7 | 70.57 ± 4.49 | 55.31 ± 1.45 |
 | FEMNIST | 0.5 | 80 / 11.4 | 560 / 238.3 | 26.3 / 263 / 111.1 | 82.73 ± 1.23 | 79.58 ± 1.89 |
 | FEMNIST | 0.9 | 80 / 11.4 | 560 / 224.8 | 28.7 / 287 / 117.8 | 83.62 ± 1.13 | 81.97 ± 1.89 |
@@ -119,7 +119,7 @@ the largest per-seed range (max − min), in test points.
 |---|---|---|---|---|
 | Fashion-MNIST | 0.1 | 4 | 1.03 / 2.23 | 2.31 / 9.38 |
 | Fashion-MNIST | 0.5 | 2 | 1.25 / 3.91 | 0.43 / 1.57 |
-| Fashion-MNIST | 0.9 | 2 | 0.74 / 1.24 | 0.20 / 0.36 |
+| Fashion-MNIST | 0.9 | 2 | 0.74 / 1.24 | 0.24 / 0.44 |
 | FEMNIST | 0.1 | 2 | 0.61 / 1.54 | 0.36 / 1.15 |
 | FEMNIST | 0.5 | 2 | 1.36 / 3.01 | 0.32 / 0.57 |
 | FEMNIST | 0.9 | 2 | 0.65 / 1.51 | 0.11 / 0.20 |
@@ -136,7 +136,7 @@ Per seed (mean ± std over the repeats; the campaign value comes first):
 | Fashion-MNIST | 0.5 | 2026 | 79.44 ± 0.71 (78.93, 79.94) | 90.26 ± 0.17 (90.14, 90.38) |
 | Fashion-MNIST | 0.9 | 17 | 83.76 ± 0.60 (84.19, 83.34) | 90.75 ± 0.14 (90.85, 90.65) |
 | Fashion-MNIST | 0.9 | 42 | 82.65 ± 0.87 (83.27, 82.03) | 88.87 ± 0.25 (89.05, 88.69) |
-| Fashion-MNIST | 0.9 | 2026 | n/a () | 89.81 (89.81) |
+| Fashion-MNIST | 0.9 | 2026 | 83.24 (83.24) | 90.03 ± 0.31 (90.25, 89.81) |
 | FEMNIST | 0.1 | 17 | 28.78 ± 0.55 (28.39, 29.17) | 73.62 ± 0.81 (74.20, 73.05) |
 | FEMNIST | 0.1 | 42 | 34.41 ± 1.09 (35.18, 33.64) | 65.46 ± 0.14 (65.56, 65.36) |
 | FEMNIST | 0.1 | 2026 | 36.44 ± 0.19 (36.58, 36.31) | 72.06 ± 0.13 (71.97, 72.15) |
@@ -188,18 +188,18 @@ gain larger than the noise. Every decision is listed in `decision-robustness-202
 |---|---|---|---|---|---|---|---|
 | Fashion-MNIST | 0.1 | 2.34 | ±6.63 | 25 | 6 | 2 | 17 |
 | Fashion-MNIST | 0.5 | 1.59 | ±4.51 | 15 | 5 | 0 | 10 |
-| Fashion-MNIST | 0.9 | 0.74 | ±2.09 | 10 | 3 | 0 | 7 |
+| Fashion-MNIST | 0.9 | 0.74 | ±2.09 | 15 | 5 | 0 | 10 |
 | FEMNIST | 0.1 | 0.78 | ±2.21 | 15 | 6 | 0 | 9 |
 | FEMNIST | 0.5 | 1.52 | ±4.29 | 15 | 5 | 0 | 10 |
 | FEMNIST | 0.9 | 0.75 | ±2.13 | 15 | 6 | 0 | 9 |
 
 | Step | Decisions | Clear gain | Clear loss | Within noise |
 |---|---|---|---|---|
-| NAS | 19 | 12 | 0 | 7 |
-| HPO | 19 | 0 | 1 | 18 |
-| topology | 19 | 18 | 0 | 1 |
-| aggregation | 19 | 1 | 0 | 18 |
-| sync | 19 | 0 | 1 | 18 |
+| NAS | 20 | 13 | 0 | 7 |
+| HPO | 20 | 0 | 1 | 19 |
+| topology | 20 | 19 | 0 | 1 |
+| aggregation | 20 | 1 | 0 | 19 |
+| sync | 20 | 0 | 1 | 19 |
 
 Components that only one seed kept, tested over the repeated ablation passes (full minus without,
 test points, 95 % t interval):
@@ -254,6 +254,7 @@ test points, 95 % t interval):
 |---|---|---|
 | 17 | Baseline 84.90 → NAS 88.34 → Topology sweep 91.80 → Aggregation sweep 91.53 → HPO 91.23 (reverted) → Synchronization sweep 91.98 → Learned topology (APG) 90.82 | 90.85 |
 | 42 | Baseline 83.34 → NAS 83.62 → Topology sweep 89.03 → Aggregation sweep 88.27 (reverted) → HPO 88.45 (reverted) → Synchronization sweep 88.68 → Learned topology (APG) 87.80 | 89.05 |
+| 2026 | Baseline 83.87 → NAS 86.02 → Topology sweep 90.40 → Aggregation sweep 90.33 → HPO 90.17 → Synchronization sweep 90.55 → Learned topology (APG) 88.72 | 90.25 |
 
 ### FEMNIST, α 0.1
 

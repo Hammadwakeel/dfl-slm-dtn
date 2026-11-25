@@ -726,14 +726,150 @@
           "hyperparameters": null
         }
       ]
+    },
+    {
+      "dataset": "femnist",
+      "split": "dirichlet_a01",
+      "seed": 2026,
+      "source_run_id": "98aa1112-12c7-4ebe-b209-536e148d6f7d",
+      "run_id": "b8090e77-7db8-4ba3-86f0-81436722b975",
+      "status": "completed",
+      "error": null,
+      "final_config": {
+        "architecture": "nas-d3-w16x32x64-k5-conv-h64-drop0",
+        "parameter_count": 73150,
+        "training": {
+          "batch_size": 32,
+          "learning_rate": 0.001,
+          "optimizer": "adam"
+        },
+        "topology": "mesh",
+        "aggregation": "uniform",
+        "sync_mode": "semi_sync",
+        "nas_kept": true,
+        "hpo_kept": false
+      },
+      "baseline_test": 0.369112,
+      "tests": {
+        "in-degree 7 (mesh)": [
+          0.721472
+        ],
+        "in-degree 1 (ring)": [
+          0.428843
+        ],
+        "in-degree 2": [
+          0.539029
+        ],
+        "in-degree 4": [
+          0.649177
+        ],
+        "ring 70x1": [
+          0.581971
+        ]
+      },
+      "steps": [
+        {
+          "step": "baseline_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "baseline",
+          "parameter_count": 35518,
+          "validation_accuracy": 0.370853,
+          "validation_min": 0.282547,
+          "macro_f1": 0.171789,
+          "local_validation_accuracy": 0.520717,
+          "test_accuracy": 0.369112,
+          "test_std": 0.044411,
+          "test_min": 0.282428,
+          "test_macro_f1": 0.172022,
+          "measures": null,
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "nas-d3-w16x32x64-k5-conv-h64-drop0",
+          "parameter_count": 73150,
+          "validation_accuracy": 0.542257,
+          "validation_min": 0.488415,
+          "macro_f1": 0.342613,
+          "local_validation_accuracy": 0.687721,
+          "test_accuracy": 0.539029,
+          "test_std": 0.030875,
+          "test_min": 0.479048,
+          "test_macro_f1": 0.337761,
+          "measures": "in-degree 2",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "nas-d3-w16x32x64-k5-conv-h64-drop0",
+          "parameter_count": 73150,
+          "validation_accuracy": 0.653984,
+          "validation_min": 0.621437,
+          "macro_f1": 0.458775,
+          "local_validation_accuracy": 0.720108,
+          "test_accuracy": 0.649177,
+          "test_std": 0.024898,
+          "test_min": 0.616062,
+          "test_macro_f1": 0.451589,
+          "measures": "in-degree 4",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "nas-d3-w16x32x64-k5-conv-h64-drop0",
+          "parameter_count": 73150,
+          "validation_accuracy": 0.585806,
+          "validation_min": 0.511585,
+          "macro_f1": 0.414756,
+          "local_validation_accuracy": 0.806909,
+          "test_accuracy": 0.581971,
+          "test_std": 0.038147,
+          "test_min": 0.50105,
+          "test_macro_f1": 0.406841,
+          "measures": "ring 70x1",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 70,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        }
+      ]
     }
   ],
-  "active": {
-    "key": [
-      "femnist",
-      "dirichlet_a01",
-      2026
-    ],
-    "run_id": "b8090e77-7db8-4ba3-86f0-81436722b975"
-  }
+  "active": null
 }

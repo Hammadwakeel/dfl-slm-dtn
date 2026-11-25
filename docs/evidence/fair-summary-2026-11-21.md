@@ -1,6 +1,6 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-25 03:57 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-25 06:53 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
 seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
@@ -164,12 +164,12 @@ mean ± std over seeds; details in `topology-degree-2026-11-21.md`.
 | Fashion-MNIST | 0.1 | in-degree 7 (mesh) | 70 | 1.000 | 72.12 ± 10.10 | 3 |
 | Fashion-MNIST | 0.1 | ring 70x1 | 70 | 0.076 (7× rounds) | 56.96 ± 9.29 | 3 |
 | Fashion-MNIST | 0.1 | learned (APG), 4.0 senders | 40 | varies | 60.51 ± 4.32 | 3 |
-| FEMNIST | 0.1 | in-degree 1 (ring) | 10 | 0.076 | 39.56 ± 5.36 | 2 |
-| FEMNIST | 0.1 | in-degree 2 | 20 | 0.195 | 51.26 ± 6.84 | 2 |
-| FEMNIST | 0.1 | in-degree 4 | 40 | 0.517 | 60.09 ± 5.76 | 2 |
-| FEMNIST | 0.1 | in-degree 7 (mesh) | 70 | 1.000 | 69.20 ± 5.44 | 2 |
-| FEMNIST | 0.1 | ring 70x1 | 70 | 0.076 (7× rounds) | 54.87 ± 1.02 | 2 |
-| FEMNIST | 0.1 | learned (APG), 3.9 senders | 39 | varies | 56.05 ± 0.97 | 2 |
+| FEMNIST | 0.1 | in-degree 1 (ring) | 10 | 0.076 | 40.67 ± 4.25 | 3 |
+| FEMNIST | 0.1 | in-degree 2 | 20 | 0.195 | 52.14 ± 5.07 | 3 |
+| FEMNIST | 0.1 | in-degree 4 | 40 | 0.517 | 61.70 ± 4.93 | 3 |
+| FEMNIST | 0.1 | in-degree 7 (mesh) | 70 | 1.000 | 70.18 ± 4.20 | 3 |
+| FEMNIST | 0.1 | ring 70x1 | 70 | 0.076 (7× rounds) | 55.98 ± 2.05 | 3 |
+| FEMNIST | 0.1 | learned (APG), 3.9 senders | 39 | varies | 55.31 ± 1.45 | 3 |
 
 ## Are the keep-or-revert decisions above noise?
 

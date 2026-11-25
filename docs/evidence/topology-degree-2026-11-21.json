@@ -440,14 +440,300 @@
           "hyperparameters": null
         }
       ]
+    },
+    {
+      "dataset": "femnist",
+      "split": "dirichlet_a01",
+      "seed": 17,
+      "source_run_id": "fd67969e-17bd-443d-8922-77215b31529d",
+      "run_id": "07d39119-69b9-4d74-bd05-b7643aee6221",
+      "status": "completed",
+      "error": null,
+      "final_config": {
+        "architecture": "hpo-adam-lr1e-3-bs32",
+        "parameter_count": 133150,
+        "training": {
+          "batch_size": 32,
+          "learning_rate": 0.001,
+          "optimizer": "adam"
+        },
+        "topology": "mesh",
+        "aggregation": "uniform",
+        "sync_mode": "semi_sync",
+        "nas_kept": true,
+        "hpo_kept": false
+      },
+      "baseline_test": 0.295629,
+      "tests": {
+        "in-degree 7 (mesh)": [
+          0.730473
+        ],
+        "in-degree 1 (ring)": [
+          0.433443
+        ],
+        "in-degree 2": [
+          0.560894
+        ],
+        "in-degree 4": [
+          0.641576
+        ],
+        "ring 70x1": [
+          0.555918
+        ]
+      },
+      "steps": [
+        {
+          "step": "baseline_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "baseline",
+          "parameter_count": 35518,
+          "validation_accuracy": 0.298779,
+          "validation_min": 0.184697,
+          "macro_f1": 0.142438,
+          "local_validation_accuracy": 0.314804,
+          "test_accuracy": 0.295629,
+          "test_std": 0.066383,
+          "test_min": 0.178918,
+          "test_macro_f1": 0.141298,
+          "measures": null,
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "hpo-adam-lr1e-3-bs32",
+          "parameter_count": 133150,
+          "validation_accuracy": 0.564032,
+          "validation_min": 0.508251,
+          "macro_f1": 0.360578,
+          "local_validation_accuracy": 0.659458,
+          "test_accuracy": 0.560894,
+          "test_std": 0.0423,
+          "test_min": 0.50105,
+          "test_macro_f1": 0.353307,
+          "measures": "in-degree 2",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "hpo-adam-lr1e-3-bs32",
+          "parameter_count": 133150,
+          "validation_accuracy": 0.643461,
+          "validation_min": 0.599767,
+          "macro_f1": 0.446719,
+          "local_validation_accuracy": 0.729503,
+          "test_accuracy": 0.641576,
+          "test_std": 0.027926,
+          "test_min": 0.60386,
+          "test_macro_f1": 0.436194,
+          "measures": "in-degree 4",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "hpo-adam-lr1e-3-bs32",
+          "parameter_count": 133150,
+          "validation_accuracy": 0.559468,
+          "validation_min": 0.477746,
+          "macro_f1": 0.379543,
+          "local_validation_accuracy": 0.771909,
+          "test_accuracy": 0.555918,
+          "test_std": 0.066419,
+          "test_min": 0.474447,
+          "test_macro_f1": 0.370483,
+          "measures": "ring 70x1",
+          "accepted": null,
+          "aggregation": "uniform",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 70,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        }
+      ]
+    },
+    {
+      "dataset": "femnist",
+      "split": "dirichlet_a01",
+      "seed": 42,
+      "source_run_id": "146962c7-0ad3-4453-9862-3a136f1f6b19",
+      "run_id": "e05eaf80-1d5e-4e49-ac96-e241525ad415",
+      "status": "completed",
+      "error": null,
+      "final_config": {
+        "architecture": "nas-d2-w64x64-k5-conv-h64-drop35",
+        "parameter_count": 112830,
+        "training": {
+          "batch_size": 32,
+          "learning_rate": 0.001,
+          "optimizer": "adam"
+        },
+        "topology": "mesh",
+        "aggregation": "fedavg",
+        "sync_mode": "semi_sync",
+        "nas_kept": true,
+        "hpo_kept": false
+      },
+      "baseline_test": 0.343509,
+      "tests": {
+        "in-degree 7 (mesh)": [
+          0.653565
+        ],
+        "in-degree 1 (ring)": [
+          0.357698
+        ],
+        "in-degree 2": [
+          0.464222
+        ],
+        "in-degree 4": [
+          0.560169
+        ],
+        "ring 70x1": [
+          0.541529
+        ]
+      },
+      "steps": [
+        {
+          "step": "baseline_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "baseline",
+          "parameter_count": 35518,
+          "validation_accuracy": 0.34362,
+          "validation_min": 0.27738,
+          "macro_f1": 0.180031,
+          "local_validation_accuracy": 0.4828,
+          "test_accuracy": 0.343509,
+          "test_std": 0.066136,
+          "test_min": 0.273827,
+          "test_macro_f1": 0.179467,
+          "measures": null,
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "nas-d2-w64x64-k5-conv-h64-drop35",
+          "parameter_count": 112830,
+          "validation_accuracy": 0.463619,
+          "validation_min": 0.390232,
+          "macro_f1": 0.265994,
+          "local_validation_accuracy": 0.537886,
+          "test_accuracy": 0.464222,
+          "test_std": 0.058093,
+          "test_min": 0.388139,
+          "test_macro_f1": 0.264679,
+          "measures": "in-degree 2",
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "learned",
+          "architecture": "nas-d2-w64x64-k5-conv-h64-drop35",
+          "parameter_count": 112830,
+          "validation_accuracy": 0.563156,
+          "validation_min": 0.490748,
+          "macro_f1": 0.350095,
+          "local_validation_accuracy": 0.553322,
+          "test_accuracy": 0.560169,
+          "test_std": 0.040546,
+          "test_min": 0.484448,
+          "test_macro_f1": 0.346591,
+          "measures": "in-degree 4",
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 10,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        },
+        {
+          "step": "ablation_training",
+          "status": "completed",
+          "topology": "directed_ring",
+          "architecture": "nas-d2-w64x64-k5-conv-h64-drop35",
+          "parameter_count": 112830,
+          "validation_accuracy": 0.543236,
+          "validation_min": 0.43924,
+          "macro_f1": 0.355411,
+          "local_validation_accuracy": 0.716125,
+          "test_accuracy": 0.541529,
+          "test_std": 0.043676,
+          "test_min": 0.443844,
+          "test_macro_f1": 0.35704,
+          "measures": "ring 70x1",
+          "accepted": null,
+          "aggregation": "fedavg",
+          "sync_mode": "semi_sync",
+          "rounds_completed": 70,
+          "search_validation_accuracy": null,
+          "selected_topology": null,
+          "selected_aggregation": null,
+          "selected_sync_mode": null,
+          "hyperparameters": null
+        }
+      ]
     }
   ],
   "active": {
     "key": [
       "femnist",
       "dirichlet_a01",
-      17
+      2026
     ],
-    "run_id": "07d39119-69b9-4d74-bd05-b7643aee6221"
+    "run_id": "b8090e77-7db8-4ba3-86f0-81436722b975"
   }
 }

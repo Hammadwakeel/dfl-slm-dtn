@@ -1,6 +1,6 @@
 # Robustness of the keep-or-revert decisions
 
-Generated 2026-11-24 16:30 UTC by `scripts/decision_robustness.py`.
+Generated 2026-11-25 11:11 UTC by `scripts/decision_robustness.py`.
 
 The fair campaign keeps a step's change when its measurement is at least the best global
 validation accuracy so far minus 0.5 points. σ is the pooled within-seed standard
@@ -13,23 +13,23 @@ decision compares two measurements, so its noise band is 2·σ·√2 (about 95 %
 
 | Dataset | α | σ (points) | dof | 95 % band (points) | Decisions | Kept | Reverted | Clear gain | Clear loss | Within noise |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 3.58 | 15 | ±10.13 | 15 | 12 | 3 | 5 | 0 | 10 |
+| Fashion-MNIST | 0.1 | 2.34 | 12 | ±6.63 | 15 | 12 | 3 | 5 | 2 | 8 |
 | Fashion-MNIST | 0.5 | 1.59 | 3 | ±4.51 | 15 | 12 | 3 | 5 | 0 | 10 |
-| Fashion-MNIST | 0.9 | 1.72 | 3 | ±4.88 | 15 | 12 | 3 | 1 | 0 | 14 |
+| Fashion-MNIST | 0.9 | 0.74 | 2 | ±2.09 | 10 | 7 | 3 | 3 | 0 | 7 |
 | FEMNIST | 0.1 | 0.78 | 3 | ±2.21 | 15 | 11 | 4 | 6 | 0 | 9 |
 | FEMNIST | 0.5 | 1.52 | 3 | ±4.29 | 15 | 12 | 3 | 5 | 0 | 10 |
 | FEMNIST | 0.9 | 0.75 | 3 | ±2.13 | 15 | 14 | 1 | 6 | 0 | 9 |
-| **All** | | | | | 90 | 73 | 17 | 28 | 0 | 62 |
+| **All** | | | | | 85 | 68 | 17 | 30 | 2 | 53 |
 
 ## Decisions per step
 
 | Step | Decisions | Clear gain | Clear loss | Within noise |
 |---|---|---|---|---|
-| NAS | 18 | 11 | 0 | 7 |
-| HPO | 18 | 0 | 0 | 18 |
-| topology | 18 | 16 | 0 | 2 |
-| aggregation | 18 | 1 | 0 | 17 |
-| sync | 18 | 0 | 0 | 18 |
+| NAS | 17 | 12 | 0 | 5 |
+| HPO | 17 | 0 | 1 | 16 |
+| topology | 17 | 17 | 0 | 0 |
+| aggregation | 17 | 1 | 0 | 16 |
+| sync | 17 | 0 | 1 | 16 |
 
 ## Paired test of the components a single seed kept
 
@@ -66,21 +66,21 @@ passes. An interval that contains 0 means the component's effect is not distingu
 
 | Dataset | α | Seed | Step | Measured (%) | Best before (%) | Difference (points) | Kept | Verdict |
 |---|---|---|---|---|---|---|---|---|
+| Fashion-MNIST | 0.1 | 17 | NAS | 53.71 | 43.29 | +10.42 | yes | clear gain |
+| Fashion-MNIST | 0.1 | 17 | topology | 81.55 | 53.71 | +27.84 | yes | clear gain |
+| Fashion-MNIST | 0.1 | 17 | aggregation | 81.57 | 81.55 | +0.02 | yes | within noise |
+| Fashion-MNIST | 0.1 | 17 | HPO | 77.03 | 81.57 | -4.53 | no | within noise |
+| Fashion-MNIST | 0.1 | 17 | sync | 82.83 | 81.57 | +1.27 | yes | within noise |
 | Fashion-MNIST | 0.1 | 42 | NAS | 46.72 | 45.32 | +1.40 | yes | within noise |
 | Fashion-MNIST | 0.1 | 42 | aggregation | 50.46 | 46.72 | +3.74 | yes | within noise |
-| Fashion-MNIST | 0.1 | 42 | sync | 40.86 | 50.46 | -9.59 | no | within noise |
-| Fashion-MNIST | 0.1 | 42 | HPO | 42.96 | 50.46 | -7.49 | no | within noise |
+| Fashion-MNIST | 0.1 | 42 | sync | 40.86 | 50.46 | -9.59 | no | clear loss |
+| Fashion-MNIST | 0.1 | 42 | HPO | 42.96 | 50.46 | -7.49 | no | clear loss |
 | Fashion-MNIST | 0.1 | 42 | topology | 61.95 | 50.46 | +11.49 | yes | clear gain |
 | Fashion-MNIST | 0.1 | 2026 | NAS | 51.11 | 38.61 | +12.50 | yes | clear gain |
 | Fashion-MNIST | 0.1 | 2026 | topology | 70.93 | 51.11 | +19.82 | yes | clear gain |
 | Fashion-MNIST | 0.1 | 2026 | aggregation | 71.07 | 70.93 | +0.13 | yes | within noise |
 | Fashion-MNIST | 0.1 | 2026 | HPO | 75.22 | 71.07 | +4.15 | yes | within noise |
 | Fashion-MNIST | 0.1 | 2026 | sync | 75.07 | 75.22 | -0.15 | yes | within noise |
-| Fashion-MNIST | 0.1 | 17 | NAS | 53.71 | 43.29 | +10.42 | yes | clear gain |
-| Fashion-MNIST | 0.1 | 17 | topology | 81.55 | 53.71 | +27.84 | yes | clear gain |
-| Fashion-MNIST | 0.1 | 17 | aggregation | 81.57 | 81.55 | +0.02 | yes | within noise |
-| Fashion-MNIST | 0.1 | 17 | HPO | 77.03 | 81.57 | -4.53 | no | within noise |
-| Fashion-MNIST | 0.1 | 17 | sync | 82.83 | 81.57 | +1.27 | yes | within noise |
 | Fashion-MNIST | 0.5 | 17 | NAS | 86.21 | 80.67 | +5.54 | yes | clear gain |
 | Fashion-MNIST | 0.5 | 17 | topology | 91.73 | 86.21 | +5.52 | yes | clear gain |
 | Fashion-MNIST | 0.5 | 17 | aggregation | 91.93 | 91.73 | +0.20 | yes | within noise |
@@ -96,8 +96,8 @@ passes. An interval that contains 0 means the component's effect is not distingu
 | Fashion-MNIST | 0.5 | 2026 | aggregation | 90.62 | 90.28 | +0.33 | yes | within noise |
 | Fashion-MNIST | 0.5 | 2026 | HPO | 89.48 | 90.62 | -1.13 | no | within noise |
 | Fashion-MNIST | 0.5 | 2026 | sync | 90.70 | 90.62 | +0.08 | yes | within noise |
-| Fashion-MNIST | 0.9 | 17 | NAS | 88.34 | 84.90 | +3.43 | yes | within noise |
-| Fashion-MNIST | 0.9 | 17 | topology | 91.80 | 88.34 | +3.46 | yes | within noise |
+| Fashion-MNIST | 0.9 | 17 | NAS | 88.34 | 84.90 | +3.43 | yes | clear gain |
+| Fashion-MNIST | 0.9 | 17 | topology | 91.80 | 88.34 | +3.46 | yes | clear gain |
 | Fashion-MNIST | 0.9 | 17 | aggregation | 91.53 | 91.80 | -0.27 | yes | within noise |
 | Fashion-MNIST | 0.9 | 17 | HPO | 91.23 | 91.80 | -0.57 | no | within noise |
 | Fashion-MNIST | 0.9 | 17 | sync | 91.98 | 91.80 | +0.18 | yes | within noise |
@@ -106,11 +106,6 @@ passes. An interval that contains 0 means the component's effect is not distingu
 | Fashion-MNIST | 0.9 | 42 | aggregation | 88.27 | 89.03 | -0.77 | no | within noise |
 | Fashion-MNIST | 0.9 | 42 | HPO | 88.45 | 89.03 | -0.58 | no | within noise |
 | Fashion-MNIST | 0.9 | 42 | sync | 88.68 | 89.03 | -0.35 | yes | within noise |
-| Fashion-MNIST | 0.9 | 2026 | NAS | 86.46 | 83.47 | +2.99 | yes | within noise |
-| Fashion-MNIST | 0.9 | 2026 | topology | 90.45 | 86.46 | +3.99 | yes | within noise |
-| Fashion-MNIST | 0.9 | 2026 | aggregation | 90.25 | 90.45 | -0.20 | yes | within noise |
-| Fashion-MNIST | 0.9 | 2026 | HPO | 89.98 | 90.45 | -0.47 | yes | within noise |
-| Fashion-MNIST | 0.9 | 2026 | sync | 90.20 | 90.45 | -0.25 | yes | within noise |
 | FEMNIST | 0.1 | 17 | NAS | 43.66 | 28.65 | +15.02 | yes | clear gain |
 | FEMNIST | 0.1 | 17 | topology | 70.56 | 43.66 | +26.90 | yes | clear gain |
 | FEMNIST | 0.1 | 17 | aggregation | 73.30 | 70.56 | +2.73 | yes | clear gain |

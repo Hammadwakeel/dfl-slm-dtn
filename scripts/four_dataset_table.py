@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from evidence_runs import campaign_runs  # noqa: E402
 from fair_summary import STEPS, _pct, _signed, step_effects  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,18 +31,14 @@ OUT = EVIDENCE / "fair-four-datasets.md"
 
 
 def load() -> dict[tuple[str, str], list[dict]]:
-    """Completed runs per (dataset, split); a seed run twice keeps its newest report."""
-    found: dict[tuple[str, str], dict[int, dict]] = {}
+    """Completed runs per (dataset, split), with extra seeds and re-runs, minus excluded runs."""
+    found = {}
     for dataset, _ in DATASETS:
         for split, _ in SPLITS:
-            paths = sorted(EVIDENCE.glob(f"fair-{dataset}-{split}-3seed-*.json")) + sorted(
-                EVIDENCE.glob(f"fair-{dataset}-{split}-extra-seeds-*.json")
-            )
-            for path in paths:
-                for run in json.loads(path.read_text(encoding="utf-8"))["runs"]:
-                    if run["status"] == "completed":
-                        found.setdefault((dataset, split), {})[run["seed"]] = run
-    return {key: [runs[seed] for seed in sorted(runs)] for key, runs in found.items()}
+            runs = campaign_runs(dataset, split)
+            if runs:
+                found[(dataset, split)] = runs
+    return found
 
 
 def _num(value) -> bool:

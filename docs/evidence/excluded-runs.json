@@ -1,0 +1,13 @@
+{
+  "description": "Supervisor runs whose baseline training started from a previous run's trained weights. A run installs its best model (trained weights) when it ends; until the 2026-11-25 fix, the next run of the same dataset reused an installed model of the baseline design unchanged, so its baseline_training was warm-started. Found by replaying every run's installed model in order (scripts/warm_start_audit.py). scope 'baseline': only that run's baseline value is invalid (every later training in the run replaced the model with a fresh seeded one). scope 'run': the run's keep-or-revert decisions compared against the inflated baseline, so the whole run is excluded and was re-run.",
+  "runs": {
+    "6c220b8e-49eb-448d-bbc7-70bad254f70f": {"scope": "run", "what": "fair campaign Fashion-MNIST alpha 0.9 seed 2026"},
+    "84e487ed-94e9-433c-be70-4838ba569f38": {"scope": "run", "what": "fair campaign Fashion-MNIST alpha 0.1 extra seed 7"},
+    "39006d6d-aa43-42e1-b807-c581ae29ddb5": {"scope": "run", "what": "fair campaign Fashion-MNIST alpha 0.1 extra seed 99"},
+    "095b3343-f10d-42ab-829b-d5a52738b925": {"scope": "baseline", "what": "ablation pass 0 Fashion-MNIST alpha 0.1 seed 2026"},
+    "951127ed-0da9-4621-9f46-7112952e6480": {"scope": "baseline", "what": "ablation pass 0 Fashion-MNIST alpha 0.9 seed 2026"},
+    "13bf2ff5-9c21-4ceb-9cdb-4a8d202b4208": {"scope": "baseline", "what": "ablation repeat 1 Fashion-MNIST alpha 0.1 seed 2026"},
+    "155bb412-1d37-4ea0-b32c-f93827e57e37": {"scope": "baseline", "what": "ablation repeat 2 Fashion-MNIST alpha 0.1 seed 2026"},
+    "607b94d0-73bc-4dcd-b51d-792473edc58e": {"scope": "baseline", "what": "in-degree study Fashion-MNIST alpha 0.1 seed 42 (its baseline is not used)"}
+  }
+}

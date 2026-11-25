@@ -190,6 +190,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--api", default="http://127.0.0.1:8000")
     parser.add_argument("--repeat", type=int, default=0,
                         help="repeat number N > 0 writes fair-ablation-<date>-repeat<N>.json/.md, to measure run-to-run noise")
+    parser.add_argument("--seeds", type=int, nargs="+", default=None, help="only these seeds (default: every seed)")
     parser.add_argument("--dry-run", action="store_true", help="print the configurations and exit")
     args = parser.parse_args(argv)
 
@@ -206,7 +207,7 @@ def main(argv: list[str]) -> int:
             if not report.is_file():
                 continue
             for source in json.loads(report.read_text(encoding="utf-8"))["runs"]:
-                if source["status"] != "completed":
+                if source["status"] != "completed" or (args.seeds and source["seed"] not in args.seeds):
                     continue
                 key = (dataset, split, source["seed"])
                 if any((r["dataset"], r["split"], r["seed"]) == key and r["status"] == "completed" for r in progress["runs"]):

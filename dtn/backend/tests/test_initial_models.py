@@ -400,6 +400,27 @@ def test_create_and_distribute_initial_model_from_preprocessed_dataset(tmp_path,
         assert healed["architecture_sha256"] == report["architecture_sha256"]
         assert [handler.post_calls for handler in handlers] == [1, 2, 2]
         monkeypatch.undo()
+        # restore_baseline reuses only an untrained initialization from the same seed.
+        same_seed = create_and_distribute_initial_model(
+            store, workers, "sample-dataset", seed=21, restore_baseline=True
+        )
+        assert same_seed["reused_existing_model"] is True
+        other_seed = create_and_distribute_initial_model(
+            store, workers, "sample-dataset", seed=22, restore_baseline=True
+        )
+        assert other_seed["reused_existing_model"] is False
+        assert other_seed["weights_sha256"] != report["weights_sha256"]
+        metadata_path = model_path / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert metadata["initialization"] == {"trained": False, "seed": 22}
+        # A run ends by installing its trained best model; the next run must not reuse it.
+        metadata["initialization"] = {"trained": True, "seed": None}
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        after_checkpoint = create_and_distribute_initial_model(
+            store, workers, "sample-dataset", seed=22, restore_baseline=True
+        )
+        assert after_checkpoint["reused_existing_model"] is False
+        assert after_checkpoint["weights_sha256"] == other_seed["weights_sha256"]
         deleted = delete_initial_model(store, workers, "sample-dataset")
         assert deleted["deleted"] is True
         assert deleted["workers"] == ["worker1", "worker2", "worker3"]

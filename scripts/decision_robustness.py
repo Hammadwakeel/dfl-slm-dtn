@@ -27,10 +27,14 @@ import argparse
 import json
 import math
 import statistics
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from evidence_runs import baseline_excluded, campaign_runs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "docs" / "evidence"
@@ -57,9 +61,9 @@ def load_campaign(date: str) -> dict[tuple[str, str], list[dict[str, Any]]]:
     runs: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for dataset in DATASETS:
         for split in SPLITS:
-            path = EVIDENCE / f"fair-{dataset}-{split}-3seed-{date}.json"
-            if path.is_file():
-                runs[(dataset, split)] = [r for r in json.loads(path.read_text(encoding="utf-8"))["runs"] if r["status"] == "completed"]
+            found = campaign_runs(dataset, split, date)
+            if found:
+                runs[(dataset, split)] = found
     return runs
 
 
@@ -78,6 +82,8 @@ def pooled_sigma(campaign: dict, ablations: list[dict]) -> dict[tuple[str, str],
             groups[(dataset, split, run["seed"], "baseline")].append(run["baseline_validation_accuracy"])
     for run in ablations:
         for label in ("baseline", "full"):
+            if label == "baseline" and baseline_excluded(run):
+                continue
             value = run["accuracy"].get(label, {}).get("validation")
             if value is not None:
                 groups[(run["dataset"], run["split"], run["seed"], label)].append(value)

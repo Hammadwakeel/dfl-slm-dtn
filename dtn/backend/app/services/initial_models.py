@@ -58,6 +58,24 @@ def _same_design(
         return False
     return left == right
 
+def _seeded_with(model_path: Path, seed: int) -> bool:
+    """True when the installed initial model is an untrained initialization from ``seed``.
+
+    Bundles written before this was recorded carry no ``initialization`` and count as
+    unknown, so they are rebuilt rather than reused.
+    """
+    try:
+        metadata = json.loads((model_path / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    initialization = metadata.get("initialization") if isinstance(metadata, dict) else None
+    return (
+        isinstance(initialization, dict)
+        and initialization.get("trained") is False
+        and initialization.get("seed") == int(seed)
+    )
+
+
 def _normalization_matches(stored: Any, current: Any, tolerance: float = 1e-3) -> bool:
     """Compare normalization settings, tolerating tiny drift in recomputed statistics.
 
@@ -325,11 +343,22 @@ def create_and_distribute_initial_model(
         if local_model_path.exists() or local_model_path.is_symlink()
         else None
     )
-    if restore_baseline and architecture is None and baseline_path.is_file():
-        architecture = json.loads(baseline_path.read_text(encoding="utf-8"))
-        replace_existing = True
+    if restore_baseline and architecture is None:
+        if baseline_path.is_file():
+            architecture = json.loads(baseline_path.read_text(encoding="utf-8"))
+            replace_existing = True
+        elif existing_report is not None and not _seeded_with(local_model_path, seed):
+            # No recorded baseline: rebuild the installed design from this seed.
+            architecture = existing_report["architecture"]
+            replace_existing = True
+        if isinstance(architecture, dict) and isinstance(architecture.get("design"), dict):
+            # A built-in CNN manifest is rebuilt from its design entry.
+            architecture = architecture["design"]
     if existing_report is not None and architecture is not None and replace_existing:
-        if initial_weights is None and _same_design(
+        # Reuse only a seeded initialization with this seed. A previous run installs its
+        # best model (trained weights) when it ends; reusing that would warm-start the
+        # next run's baseline and every same-design measurement.
+        if initial_weights is None and _seeded_with(local_model_path, seed) and _same_design(
             existing_report["architecture"], architecture, input_shape, len(classes)
         ):
             architecture = None  # already deployed: reuse it unchanged
@@ -491,6 +520,12 @@ def create_and_distribute_initial_model(
                         "parameter_count": architecture["parameter_count"],
                         "architecture_sha256": architecture_sha256,
                         "weights_sha256": weights_sha256,
+                        # How the weights were made: a seeded initialization, or
+                        # supplied (trained) weights such as an installed checkpoint.
+                        "initialization": {
+                            "trained": initial_weights is not None,
+                            "seed": None if initial_weights is not None else int(seed),
+                        },
                     },
                     indent=2,
                 )

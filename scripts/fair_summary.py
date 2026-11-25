@@ -24,8 +24,12 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from evidence_runs import baseline_excluded, campaign_runs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "docs" / "evidence"
@@ -231,6 +235,8 @@ def _ablation_passes(date: str) -> list[list[dict]]:
 
 
 def _test(run: dict, label: str) -> float | None:
+    if label == "baseline" and baseline_excluded(run):
+        return None
     value = run["accuracy"].get(label, {}).get("test")
     return value if isinstance(value, (int, float)) else None
 
@@ -478,13 +484,13 @@ def limitations_section(data: dict) -> list[str]:
 
 
 def load(date: str) -> dict[tuple[str, str], list[dict]]:
+    """Completed campaign runs per setting, with extra seeds and re-runs, minus excluded runs."""
     found = {}
     for dataset, _ in DATASETS:
         for split, _ in SPLITS:
-            path = EVIDENCE / f"fair-{dataset}-{split}-3seed-{date}.json"
-            if path.is_file():
-                runs = json.loads(path.read_text(encoding="utf-8"))["runs"]
-                found[(dataset, split)] = sorted((r for r in runs if r["status"] == "completed"), key=lambda r: r["seed"])
+            runs = campaign_runs(dataset, split, date)
+            if runs:
+                found[(dataset, split)] = runs
     return found
 
 

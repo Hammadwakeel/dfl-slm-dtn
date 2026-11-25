@@ -1,9 +1,11 @@
 # Fair step-by-step evaluation: Fashion-MNIST and FEMNIST
 
-Generated 2026-11-25 11:11 UTC by `scripts/fair_summary.py`.
+Generated 2026-11-25 15:16 UTC by `scripts/fair_summary.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label split with α = 0.1, 0.5 and 0.9,
-seeds 17, 42 and 2026. Every trained model (baseline and each step's measurement) uses the
+seeds 17, 42 and 2026 (Fashion-MNIST α 0.1 also 7 and 99). Runs whose baseline started from
+trained weights are excluded and re-run (`excluded-runs.json`). Every trained model (baseline
+and each step's measurement) uses the
 same budget: 10 rounds × 5 local epochs from the same installed initial weights. Accuracy is
 the mean over the 8 workers on the dataset's shared test split. Values are mean ± std over seeds.
 
@@ -11,7 +13,7 @@ the mean over the 8 workers on the dataset's shared test split. Values are mean 
 
 | Dataset | α | Seeds | Baseline test (%) | Final model test (%) | Gain (points) | Final params |
 |---|---|---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 3 | 42.22 ± 3.28 | 73.25 ± 10.55 | +31.03 ± 12.40 | 109,450, 129,770, 51,754 |
+| Fashion-MNIST | 0.1 | 5 | 44.26 ± 3.69 | 71.60 ± 8.55 | +27.33 ± 10.52 | 109,450, 129,770, 34,154, 51,754, 8,403 |
 | Fashion-MNIST | 0.5 | 3 | 78.41 ± 1.60 | 89.67 ± 1.29 | +11.25 ± 0.32 | 109,450, 129,770, 69,770 |
 | Fashion-MNIST | 0.9 | 2 | 83.73 ± 0.65 | 89.95 ± 1.27 | +6.22 ± 0.62 | 129,770, 28,810 |
 | FEMNIST | 0.1 | 3 | 33.38 ± 4.38 | 70.57 ± 4.49 | +37.19 ± 7.87 | 112,830, 133,150, 73,150 |
@@ -29,12 +31,12 @@ and is reported without a keep/revert decision.
 
 | Step | α 0.1: Δ val | α 0.1: Δ test | α 0.1: kept | α 0.5: Δ val | α 0.5: Δ test | α 0.5: kept | α 0.9: Δ val | α 0.9: Δ test | α 0.9: kept |
 |---|---|---|---|---|---|---|---|---|---|
-| NAS | +8.11 ± 5.90 | +8.03 ± 5.73 | 3/3 | +4.00 ± 1.88 | +3.86 ± 2.08 | 3/3 | +1.86 ± 2.23 | +1.71 ± 2.16 | 2/2 |
-| Topology sweep | +19.72 ± 8.17 | +19.57 ± 7.84 | 3/3 | +7.38 ± 2.26 | +7.02 ± 2.09 | 3/3 | +4.44 ± 1.37 | +4.48 ± 1.58 | 2/2 |
-| Aggregation sweep | +1.30 ± 2.12 | +1.21 ± 2.05 | 3/3 | +0.18 ± 0.16 | +0.44 ± 0.37 | 3/3 | -0.52 ± 0.35 | -0.81 ± 0.47 | 1/2 |
-| HPO | -2.63 ± 6.05 | -2.48 ± 6.47 | 1/3 | -0.86 ± 0.38 | -0.80 ± 0.74 | 1/3 | -0.44 ± 0.20 | -0.15 ± 0.53 | 0/2 |
-| Synchronization sweep | -2.83 ± 5.90 | -2.79 ± 5.71 | 2/3 | -0.61 ± 1.10 | -0.59 ± 0.99 | 2/3 | +0.05 ± 0.57 | -0.15 ± 0.98 | 2/2 |
-| Learned topology (APG) | -12.67 ± 9.57 | -12.43 ± 9.74 | – | -2.07 ± 0.35 | -2.05 ± 0.20 | – | -1.02 ± 0.20 | -0.62 ± 0.50 | – |
+| NAS | +6.32 ± 5.16 | +6.25 ± 5.02 | 5/5 | +4.00 ± 1.88 | +3.86 ± 2.08 | 3/3 | +1.86 ± 2.23 | +1.71 ± 2.16 | 2/2 |
+| Topology sweep | +15.91 ± 10.51 | +15.76 ± 10.32 | 5/5 | +7.38 ± 2.26 | +7.02 ± 2.09 | 3/3 | +4.44 ± 1.37 | +4.48 ± 1.58 | 2/2 |
+| Aggregation sweep | +1.60 ± 1.94 | +1.56 ± 1.81 | 5/5 | +0.18 ± 0.16 | +0.44 ± 0.37 | 3/3 | -0.52 ± 0.35 | -0.81 ± 0.47 | 1/2 |
+| HPO | -1.67 ± 4.52 | -1.42 ± 4.88 | 2/5 | -0.86 ± 0.38 | -0.80 ± 0.74 | 1/3 | -0.44 ± 0.20 | -0.15 ± 0.53 | 0/2 |
+| Synchronization sweep | -1.70 ± 4.46 | -1.82 ± 4.25 | 4/5 | -0.61 ± 1.10 | -0.59 ± 0.99 | 2/3 | +0.05 ± 0.57 | -0.15 ± 0.98 | 2/2 |
+| Learned topology (APG) | -8.07 ± 10.90 | -7.98 ± 10.85 | – | -2.07 ± 0.35 | -2.05 ± 0.20 | – | -1.02 ± 0.20 | -0.62 ± 0.50 | – |
 
 ### FEMNIST
 
@@ -57,7 +59,7 @@ The search steps (NAS, sweeps) are not counted; they cost the same for every see
 
 | Dataset | α | Baseline: models / MB | Final model: models / MB | Learned (APG): edges / models / MB | Final test (%) | Learned test (%) |
 |---|---|---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 80 / 9.2 | 560 / 217.3 | 31.7 / 317 / 120.3 | 73.25 ± 10.55 | 60.51 ± 4.32 |
+| Fashion-MNIST | 0.1 | 80 / 9.2 | 448 / 145.7 | 31.7 / 317 / 120.3 | 71.60 ± 8.55 | 60.51 ± 4.32 |
 | Fashion-MNIST | 0.5 | 80 / 9.2 | 560 / 230.7 | 27.3 / 273 / 112.2 | 89.67 ± 1.29 | 87.68 ± 1.39 |
 | Fashion-MNIST | 0.9 | 80 / 9.2 | 560 / 177.6 | 28.0 / 280 / 88.8 | 89.95 ± 1.27 | 88.90 ± 1.38 |
 | FEMNIST | 0.1 | 80 / 11.4 | 560 / 238.3 | 31.0 / 310 / 132.7 | 70.57 ± 4.49 | 55.31 ± 1.45 |
@@ -184,7 +186,7 @@ gain larger than the noise. Every decision is listed in `decision-robustness-202
 
 | Dataset | α | σ (points) | 95 % band | Decisions | Clear gain | Clear loss | Within noise |
 |---|---|---|---|---|---|---|---|
-| Fashion-MNIST | 0.1 | 2.34 | ±6.63 | 15 | 5 | 2 | 8 |
+| Fashion-MNIST | 0.1 | 2.34 | ±6.63 | 25 | 6 | 2 | 17 |
 | Fashion-MNIST | 0.5 | 1.59 | ±4.51 | 15 | 5 | 0 | 10 |
 | Fashion-MNIST | 0.9 | 0.74 | ±2.09 | 10 | 3 | 0 | 7 |
 | FEMNIST | 0.1 | 0.78 | ±2.21 | 15 | 6 | 0 | 9 |
@@ -193,11 +195,11 @@ gain larger than the noise. Every decision is listed in `decision-robustness-202
 
 | Step | Decisions | Clear gain | Clear loss | Within noise |
 |---|---|---|---|---|
-| NAS | 17 | 12 | 0 | 5 |
-| HPO | 17 | 0 | 1 | 16 |
-| topology | 17 | 17 | 0 | 0 |
-| aggregation | 17 | 1 | 0 | 16 |
-| sync | 17 | 0 | 1 | 16 |
+| NAS | 19 | 12 | 0 | 7 |
+| HPO | 19 | 0 | 1 | 18 |
+| topology | 19 | 18 | 0 | 1 |
+| aggregation | 19 | 1 | 0 | 18 |
+| sync | 19 | 0 | 1 | 18 |
 
 Components that only one seed kept, tested over the repeated ablation passes (full minus without,
 test points, 95 % t interval):
@@ -232,8 +234,10 @@ test points, 95 % t interval):
 
 | Seed | Order of steps (validation % → kept?) | Final test |
 |---|---|---|
+| 7 | Baseline 48.73 → NAS 49.84 → Topology sweep 70.03 → Aggregation sweep 73.75 → HPO 74.40 → Synchronization sweep 74.83 → Learned topology (APG) 65.49 | 74.09 |
 | 17 | Baseline 43.29 → NAS 53.71 → Topology sweep 81.55 → Aggregation sweep 81.57 → HPO 77.03 (reverted) → Synchronization sweep 82.83 → Learned topology (APG) 59.56 | 82.40 |
 | 42 | Baseline 45.32 → NAS 46.72 → Aggregation sweep 50.46 → Synchronization sweep 40.86 (reverted) → HPO 42.96 (reverted) → Topology sweep 61.95 → Learned topology (APG) 57.29 | 61.71 |
+| 99 | Baseline 46.49 → NAS 52.64 → Aggregation sweep 53.06 → Synchronization sweep 52.61 → HPO 51.48 (reverted) → Topology sweep 52.83 → Learned topology (APG) 59.83 | 64.14 |
 | 2026 | Baseline 38.61 → NAS 51.11 → Topology sweep 70.93 → Aggregation sweep 71.07 → HPO 75.22 → Synchronization sweep 75.07 → Learned topology (APG) 64.98 | 75.64 |
 
 ### Fashion-MNIST, α 0.5

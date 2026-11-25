@@ -1386,6 +1386,26 @@ def test_explicit_senders_skip_the_probe_and_train_on_the_given_graph(tmp_path: 
     assert "topology_learning" not in group
 
 
+def test_only_the_newest_groups_stay_in_memory_and_older_ones_are_read_back(tmp_path: Path, monkeypatch) -> None:
+    from master import training
+
+    monkeypatch.setattr(training, "MEMORY_GROUP_LIMIT", 3)
+    coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    with coordinator._lock:
+        for index in range(6):
+            coordinator._groups.append({"group_id": f"g{index}", "status": "completed", "runs": [], "topology": "mesh"})
+            coordinator._persist_locked()
+    assert [group["group_id"] for group in coordinator._groups] == ["g3", "g4", "g5"]
+    old = coordinator.results(group_id="g0")["groups"]
+    assert [group["group_id"] for group in old] == ["g0"]
+    assert [group["group_id"] for group in coordinator.results(limit=20)["groups"]] == ["g3", "g4", "g5"]
+
+    reloaded = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
+    assert [group["group_id"] for group in reloaded._groups] == ["g3", "g4", "g5"]
+    assert reloaded.delete_group("g1") == {"deleted": True, "group_id": "g1"}
+    assert reloaded.results(group_id="g1")["groups"] == []
+
+
 def test_explicit_senders_are_validated(tmp_path: Path) -> None:
     coordinator = TrainingCoordinator(make_config(tmp_path), evaluator=FakeEvaluator())
     worker_ids = [worker.node_id for worker in coordinator.config.workers]

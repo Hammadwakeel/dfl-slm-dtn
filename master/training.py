@@ -197,6 +197,9 @@ def _rank_by_global_validation(measured: list[dict[str, Any]]) -> None:
 
 
 RESULTS_GROUP_LIMIT = 20
+# Groups held in memory (and rewritten on every persist); older ones are read from
+# the database on demand.
+MEMORY_GROUP_LIMIT = RESULTS_GROUP_LIMIT
 RUN_RESULTS_RETRY_DELAYS_SECONDS = (1, 3, 5, 10, 20)
 # Errors raised before a TCP connection exists (the Wi-Fi cluster drops ARP/routes
 # for a few seconds under load): the request was never delivered, so it is resent.
@@ -1328,6 +1331,14 @@ class TrainingCoordinator:
         if not 1 <= limit <= RESULTS_GROUP_LIMIT:
             raise ValueError(f"limit must be between 1 and {RESULTS_GROUP_LIMIT}")
         with self._lock:
+            selected = (
+                [item for item in self._groups if item["group_id"] == group_id]
+                if group_id is not None
+                else self._groups[-limit:]
+            )
+            if group_id is not None and not selected:
+                stored = self._stored_group(group_id)
+                selected = [stored] if stored is not None else []
             worker_ids = [worker.node_id for worker in self.config.workers]
             ring = worker_ids + worker_ids[:1]
             bidirectional_ring = [
@@ -1357,13 +1368,7 @@ class TrainingCoordinator:
                 },
                 "groups": [
                     _compact_group(group) if compact else group
-                    for group in json.loads(
-                        json.dumps(
-                            [item for item in self._groups if item["group_id"] == group_id]
-                            if group_id is not None
-                            else self._groups[-limit:]
-                        )
-                    )
+                    for group in json.loads(json.dumps(selected))
                 ],
             }
 
@@ -1373,6 +1378,9 @@ class TrainingCoordinator:
                 (item for item in self._groups if item["group_id"] == group_id),
                 None,
             )
+            in_memory = group is not None
+            if group is None:
+                group = self._stored_group(group_id)
             if group is None:
                 raise TrainingError(f"Experiment group {group_id} was not found")
             if group_id == self._active_group_id or group.get("status") == "running":
@@ -1383,7 +1391,8 @@ class TrainingCoordinator:
                     "DELETE FROM experiment_groups WHERE group_id = ?",
                     (group_id,),
                 )
-            self._groups.remove(group)
+            if in_memory:
+                self._groups.remove(group)
             return {"deleted": True, "group_id": group_id}
 
     def _get_group(self, group_id: str) -> dict[str, Any]:
@@ -2919,11 +2928,15 @@ class TrainingCoordinator:
                 )
                 """
             )
+            # Only the newest groups are held in memory; older ones stay in the database
+            # (the full history reached ~700 MB on disk and ~5 GB as Python objects,
+            # which the master's OOM killer ended mid-campaign).
             rows = connection.execute(
-                "SELECT payload_json FROM experiment_groups ORDER BY rowid"
+                "SELECT payload_json FROM experiment_groups ORDER BY rowid DESC LIMIT ?",
+                (MEMORY_GROUP_LIMIT,),
             ).fetchall()
             if rows:
-                groups = [json.loads(row[0]) for row in rows]
+                groups = [json.loads(row[0]) for row in reversed(rows)]
                 if any(not isinstance(group, dict) for group in groups):
                     raise ValueError(f"Training database contains an invalid group: {database_path}")
                 return groups
@@ -2946,7 +2959,31 @@ class TrainingCoordinator:
                     for group in payload
                 ],
             )
-            return payload
+            return payload[-MEMORY_GROUP_LIMIT:]
+
+    def _stored_group(self, group_id: str) -> dict[str, Any] | None:
+        """A group that is no longer held in memory, read back from the database."""
+        database_path, _ = self._results_paths()
+        if not database_path.exists():
+            return None
+        with sqlite3.connect(database_path, timeout=30) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM experiment_groups WHERE group_id = ?", (group_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def _trim_groups_locked(self) -> None:
+        """Drop the oldest finished groups from memory; they remain in the database."""
+        excess = len(self._groups) - MEMORY_GROUP_LIMIT
+        if excess <= 0:
+            return
+        kept: list[dict[str, Any]] = []
+        for index, group in enumerate(self._groups):
+            old = index < excess
+            if old and group["group_id"] != self._active_group_id and group.get("status") != "running":
+                continue
+            kept.append(group)
+        self._groups = kept
 
     def _persist_locked(self) -> None:
         database_path, _ = self._results_paths()
@@ -2974,3 +3011,4 @@ class TrainingCoordinator:
                     for group in self._groups
                 ],
             )
+        self._trim_groups_locked()

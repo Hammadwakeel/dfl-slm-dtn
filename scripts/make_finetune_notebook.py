@@ -22,7 +22,9 @@ Runs on a Colab GPU (T4 16 GB is enough). Steps:
 4. score the **fine-tuned** model on the same decisions;
 5. save the LoRA adapter and a merged GGUF (`q4_k_m`) and upload them to a private Hugging Face repo.
 
-Run the cells top to bottom. The upload cell asks for a Hugging Face write token."""),
+Before running, add a Hugging Face **write** token as the Colab secret `HF_TOKEN` (key icon on the left,
+with notebook access on). Every result is uploaded as soon as it exists, so a Colab disconnect never
+loses the trained adapter. Run the cells top to bottom."""),
     ("code", """!nvidia-smi --query-gpu=name,memory.total --format=csv"""),
     ("code", """%%capture
 !pip install --upgrade --no-cache-dir unsloth unsloth_zoo
@@ -46,7 +48,24 @@ N_EVAL = 150         # held-out CIFAR-10 decisions scored before and after train
 EPOCHS = 1
 LEARNING_RATE = 1e-4
 LORA_RANK = 16
-SEED = 3407"""),
+SEED = 3407
+HF_REPO_NAME = "qwen35-4b-dfl-supervisor"   # private repo under your Hugging Face account"""),
+    ("code", """# Log in with the Colab secret HF_TOKEN and create the private repo before the long steps.
+from google.colab import userdata
+from huggingface_hub import HfApi, login
+login(token=userdata.get("HF_TOKEN"))
+api = HfApi()
+REPO = api.whoami()["name"] + "/" + HF_REPO_NAME
+api.create_repo(REPO, private=True, exist_ok=True)
+
+def upload(path, path_in_repo=None):
+    \"\"\"Upload a file or folder to the private repo right away.\"\"\"
+    if os.path.isdir(path):
+        api.upload_folder(repo_id=REPO, folder_path=path, path_in_repo=path_in_repo or path)
+    else:
+        api.upload_file(repo_id=REPO, path_or_fileobj=path, path_in_repo=path_in_repo or os.path.basename(path))
+    print("uploaded", path, "to", REPO)
+print("Hugging Face repo:", REPO)"""),
     ("code", """import json, random, re
 from collections import Counter, defaultdict
 
@@ -134,7 +153,8 @@ def evaluate(rows, label):
         json.dump({"report": report, "results": results}, handle)
     return report
 
-base_report = evaluate(eval_rows, "base")"""),
+base_report = evaluate(eval_rows, "base")
+upload("eval-base.json")"""),
     ("code", """model = FastLanguageModel.get_peft_model(
     model,
     r=LORA_RANK,
@@ -180,27 +200,22 @@ trainer = SFTTrainer(
     ),
 )
 stats = trainer.train()
-print(stats)"""),
-    ("code", """finetuned_report = evaluate(eval_rows, "finetuned")
-print("base     ", base_report)
-print("finetuned", finetuned_report)"""),
-    ("code", """# Save the adapter and a merged GGUF for llama.cpp / Ollama on the master Jetson.
+print(stats)
+# Save and upload the adapter at once: a Colab disconnect after this point loses nothing.
 model.save_pretrained("qwen35-4b-dfl-supervisor-lora")
 text_tokenizer.save_pretrained("qwen35-4b-dfl-supervisor-lora")
+upload("qwen35-4b-dfl-supervisor-lora", "lora")"""),
+    ("code", """finetuned_report = evaluate(eval_rows, "finetuned")
+print("base     ", base_report)
+print("finetuned", finetuned_report)
+upload("eval-finetuned.json")"""),
+    ("code", """# Merged GGUF (q4_k_m) for Ollama on the master Jetson.
+# Unsloth writes the merged 16-bit weights to the folder below and the GGUF to "<folder>_gguf".
+import glob
 model.save_pretrained_gguf("qwen35-4b-dfl-supervisor-gguf", text_tokenizer, quantization_method="q4_k_m")
-!ls -la qwen35-4b-dfl-supervisor-lora qwen35-4b-dfl-supervisor-gguf"""),
-    ("code", """# Upload to a private Hugging Face repo (needs a write token from https://huggingface.co/settings/tokens).
-from getpass import getpass
-from huggingface_hub import HfApi, login
-login(token=getpass("Hugging Face write token: "))
-api = HfApi()
-repo = api.whoami()["name"] + "/qwen35-4b-dfl-supervisor"
-api.create_repo(repo, private=True, exist_ok=True)
-api.upload_folder(repo_id=repo, folder_path="qwen35-4b-dfl-supervisor-lora", path_in_repo="lora")
-api.upload_folder(repo_id=repo, folder_path="qwen35-4b-dfl-supervisor-gguf", path_in_repo="gguf")
-for name in ("eval-base.json", "eval-finetuned.json"):
-    api.upload_file(repo_id=repo, path_or_fileobj=name, path_in_repo=name)
-print("uploaded to", repo)"""),
+GGUF = glob.glob("qwen35-4b-dfl-supervisor-gguf_gguf/*Q4_K_M.gguf")[0]
+!ls -la qwen35-4b-dfl-supervisor-gguf_gguf
+upload(GGUF, "gguf/qwen35-4b-dfl-supervisor-Q4_K_M.gguf")"""),
 ]
 
 

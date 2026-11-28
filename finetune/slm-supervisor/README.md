@@ -24,3 +24,18 @@ informs the teacher; validation is seed 42 of MNIST, Fashion-MNIST and FEMNIST.
 
 A step is worth an experiment in budget mode when its prior is at least +1 point; in fair
 mode every search step runs and the teacher orders them by prior.
+
+## First training run (Colab T4, 2026-11-28)
+
+16-bit LoRA r16 on 2,000 training decisions, 1 epoch (274 optimizer steps, 2 h 05 min; the T4 has
+no bf16, so Unsloth trained in float32). Validation loss 0.058 at step 50 → 0.0041 at the end.
+Scored on 149 held-out CIFAR-10 decisions (greedy decoding):
+
+| Model | Valid tool call | Matches teacher (all) | Fair mode (n = 96) | Budget mode (n = 53) |
+|---|---|---|---|---|
+| Base Qwen3.5 4B | 100 % | 42.3 % | 53.1 % | 22.6 % |
+| Fine-tuned | 100 % | 99.3 % | 100 % | 98.1 % |
+
+The base model mostly picks `run_nas` where the teacher (measured priors) picks `optimize_topology`.
+That runtime disconnected before the adapter was uploaded, so the notebook now uploads every result
+as soon as it exists; the same settings are re-run to produce the deployable model.

@@ -53,3 +53,6 @@ dtn/backend/.venv-eval/
 
 # Archived experiment history (local only)
 archive/
+
+# Fine-tuning dataset (rebuilt by scripts/slm_finetune_dataset.py)
+finetune/slm-supervisor/*.jsonl

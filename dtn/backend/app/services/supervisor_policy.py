@@ -668,6 +668,11 @@ def prompt_state(goal: dict[str, Any], state: dict[str, Any], cluster: dict[str,
     return {
         "goal": {
             "dataset": goal["dataset"],
+            # The label skew of the workers' shards (dirichlet_a01 = strongly non-IID):
+            # the measured value of a topology or model search depends on it.
+            "dataset_split": goal.get("dataset_split"),
+            # Fair runs measure every search step; otherwise each step spends the budget.
+            "measure_each_step": bool(goal.get("measure_each_step")),
             "target_validation_accuracy": goal["target_accuracy"],
             "experiments_left": int(goal["max_experiments"]) - experiments_used(state),
             "minutes_left": int(max(0, minutes_left)),

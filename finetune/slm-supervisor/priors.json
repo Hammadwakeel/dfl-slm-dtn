@@ -1,0 +1,26 @@
+{
+ "dirichlet_a01": {
+  "run_nas": 5.997672727272726,
+  "optimize_aggregation": 0.6789909090909122,
+  "run_hpo": -1.1580272727272722,
+  "optimize_sync": -0.8204727272727268,
+  "optimize_topology": 24.519163636363636,
+  "learn_topology": -12.6356
+ },
+ "dirichlet_a05": {
+  "run_nas": 3.3542777777777775,
+  "optimize_topology": 6.124211111111112,
+  "optimize_aggregation": -0.008875000000001243,
+  "run_hpo": -0.31743749999999793,
+  "optimize_sync": -0.2953374999999994,
+  "learn_topology": -1.7996250000000005
+ },
+ "dirichlet_a09": {
+  "run_nas": 2.279422222222225,
+  "optimize_aggregation": 0.18292222222222104,
+  "optimize_sync": 0.013666666666664915,
+  "run_hpo": -0.27688888888889074,
+  "optimize_topology": 3.554066666666668,
+  "learn_topology": -0.7278000000000007
+ }
+}

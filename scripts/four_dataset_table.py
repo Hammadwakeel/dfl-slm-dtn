@@ -56,7 +56,9 @@ def build() -> str:
         "The on-device SLM chooses the order of the search steps; every model it compares, the baseline",
         "included, is trained with the same budget (10 rounds × 5 local epochs, same initial weights).",
         "Test accuracy is the mean over the 8 workers on the dataset's official test split, mean ± std",
-        "over seeds (n = number of seeds). Gain = final model minus baseline, per seed.",
+        "over seeds (n = number of seeds). Final = the run's best equal-budget model, chosen by global",
+        "validation accuracy as the supervisor does; a pruned model fine-tunes trained weights for extra",
+        "rounds, so pruning is reported separately below. Gain = final model minus baseline, per seed.",
         "",
         "## Baseline vs. final model",
         "",
@@ -70,12 +72,12 @@ def build() -> str:
                 lines.append(f"| {dname} | {alpha} | 0 | pending | pending | pending | – | – |")
                 continue
             base = [r["baseline_test_accuracy"] for r in runs if _num(r.get("baseline_test_accuracy"))]
-            best = [r["best_test_accuracy"] for r in runs if _num(r.get("best_test_accuracy"))]
-            gains = [r["best_test_accuracy"] - r["baseline_test_accuracy"] for r in runs
-                     if _num(r.get("best_test_accuracy")) and _num(r.get("baseline_test_accuracy"))]
+            best = [r["final_test_accuracy"] for r in runs if _num(r.get("final_test_accuracy"))]
+            gains = [r["final_test_accuracy"] - r["baseline_test_accuracy"] for r in runs
+                     if _num(r.get("final_test_accuracy")) and _num(r.get("baseline_test_accuracy"))]
             topologies = Counter(r.get("best_topology") or "?" for r in runs)
             topology = ", ".join(f"{name} {count}/{len(runs)}" for name, count in topologies.most_common())
-            params = [r["best_parameter_count"] for r in runs if r.get("best_parameter_count")]
+            params = [r["final_parameter_count"] for r in runs if r.get("final_parameter_count")]
             params_text = f"{statistics.fmean(params) / 1000:.0f}k (mean)" if params else "–"
             lines.append(f"| {dname} | {alpha} | {len(runs)} | {_pct(base)} | {_pct(best)} | {_signed(gains)} | {topology} | {params_text} |")
     lines += [
@@ -107,6 +109,26 @@ def build() -> str:
             lines.append(f"| {dname} | {alpha} | " + " | ".join(cells) + " |")
     lines += [
         "",
+        "## Pruning (after the equal-budget comparison)",
+        "",
+        "When the best model can be channel-pruned, the supervisor removes 30 % of its units and",
+        "fine-tunes; the pruned model is kept only within 2 points of the best. Fine-tuning is extra",
+        "training on trained weights, so these numbers are not part of the gain above.",
+        "",
+        "| Dataset | α | Seed | Final test (%) | Pruned test (%) | Parameters: final → pruned |",
+        "|---|---|---|---|---|---|",
+    ]
+    for dataset, dname in DATASETS:
+        for split, alpha in SPLITS:
+            for run in data.get((dataset, split), []):
+                if run.get("pruning_accepted") and _num(run.get("pruned_test_accuracy")):
+                    before = run.get("final_parameter_count")
+                    after = run.get("pruned_parameter_count")
+                    params = f"{before:,} → {after:,}" if before and after else "–"
+                    lines.append(f"| {dname} | {alpha} | {run['seed']} | {100 * run['final_test_accuracy']:.2f} | "
+                                 f"{100 * run['pruned_test_accuracy']:.2f} | {params} |")
+    lines += [
+        "",
         "## Per seed (test %)",
         "",
         "| Dataset | α | Seed | Baseline | Final | Final configuration |",
@@ -115,8 +137,10 @@ def build() -> str:
     for dataset, dname in DATASETS:
         for split, alpha in SPLITS:
             for run in data.get((dataset, split), []):
-                base, best = run.get("baseline_test_accuracy"), run.get("best_test_accuracy")
-                config = f"{run.get('best_architecture') or '?'} on {run.get('best_topology') or '?'}"
+                base, best = run.get("baseline_test_accuracy"), run.get("final_test_accuracy")
+                # The final model is the one before pruning, so drop the pruning suffix.
+                architecture = (run.get("best_architecture") or "?").replace("-pruned30", "")
+                config = f"{architecture} on {run.get('best_topology') or '?'}"
                 lines.append(
                     f"| {dname} | {alpha} | {run['seed']} | {100 * base:.2f} | {100 * best:.2f} | {config} |"
                     if _num(base) and _num(best) else f"| {dname} | {alpha} | {run['seed']} | n/a | n/a | {config} |"

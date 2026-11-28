@@ -84,7 +84,7 @@ def fig_baseline_vs_final(data) -> None:
         for i, (split, alpha) in enumerate(SPLITS):
             runs = data.get((dataset, split), [])
             base = mean_std([r["baseline_test_accuracy"] for r in runs])
-            final = mean_std([r["best_test_accuracy"] for r in runs])
+            final = mean_std([r["final_test_accuracy"] for r in runs])
             if base[0] is None:
                 continue
             for offset, (value, std), color in ((-width / 2 - 0.01, base, BASELINE_GRAY), (width / 2 + 0.01, final, SERIES[0])):
@@ -112,7 +112,7 @@ def fig_gain_vs_alpha(data) -> None:
         gains, stds = [], []
         for split, _ in SPLITS:
             runs = data.get((dataset, split), [])
-            g = mean_std([r["best_test_accuracy"] - r["baseline_test_accuracy"] for r in runs])
+            g = mean_std([r["final_test_accuracy"] - r["baseline_test_accuracy"] for r in runs])
             gains.append(g[0])
             stds.append(g[1])
         ax.errorbar(x, gains, yerr=stds, color=color, linewidth=2, marker="o", markersize=9, capsize=4,

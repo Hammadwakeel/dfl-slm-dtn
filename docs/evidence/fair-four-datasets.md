@@ -1,29 +1,31 @@
 # Fair evaluation across four datasets
 
-Generated 2026-11-28 01:10 UTC by `scripts/four_dataset_table.py`.
+Generated 2026-11-28 01:36 UTC by `scripts/four_dataset_table.py`.
 
 Eight Jetson workers, decentralized training, Dirichlet label skew α (smaller = more skewed).
 The on-device SLM chooses the order of the search steps; every model it compares, the baseline
 included, is trained with the same budget (10 rounds × 5 local epochs, same initial weights).
 Test accuracy is the mean over the 8 workers on the dataset's official test split, mean ± std
-over seeds (n = number of seeds). Gain = final model minus baseline, per seed.
+over seeds (n = number of seeds). Final = the run's best equal-budget model, chosen by global
+validation accuracy as the supervisor does; a pruned model fine-tunes trained weights for extra
+rounds, so pruning is reported separately below. Gain = final model minus baseline, per seed.
 
 ## Baseline vs. final model
 
 | Dataset | α | n | Baseline test (%) | Final test (%) | Gain (points) | Selected topology | Final params |
 |---|---|---|---|---|---|---|---|
 | MNIST | 0.1 | 3 | 56.33 ± 7.27 | 96.83 ± 1.33 | +40.50 ± 6.48 | mesh 3/3 | 62k (mean) |
-| MNIST | 0.5 | 3 | 96.96 ± 0.98 | 98.87 ± 0.46 | +1.91 ± 1.36 | learned 2/3, mesh 1/3 | 58k (mean) |
-| MNIST | 0.9 | 3 | 98.09 ± 0.66 | 98.89 ± 0.36 | +0.79 ± 0.90 | learned 2/3, directed_ring 1/3 | 36k (mean) |
-| Fashion-MNIST | 0.1 | 5 | 44.26 ± 3.69 | 71.60 ± 8.55 | +27.33 ± 10.52 | mesh 4/5, learned 1/5 | 67k (mean) |
+| MNIST | 0.5 | 3 | 96.96 ± 0.98 | 98.81 ± 0.43 | +1.85 ± 1.38 | learned 2/3, mesh 1/3 | 62k (mean) |
+| MNIST | 0.9 | 3 | 98.09 ± 0.66 | 98.81 ± 0.30 | +0.71 ± 0.87 | learned 2/3, directed_ring 1/3 | 62k (mean) |
+| Fashion-MNIST | 0.1 | 5 | 44.26 ± 3.69 | 70.66 ± 9.74 | +26.40 ± 11.72 | mesh 4/5, learned 1/5 | 68k (mean) |
 | Fashion-MNIST | 0.5 | 3 | 78.41 ± 1.60 | 89.67 ± 1.29 | +11.25 ± 0.32 | mesh 3/3 | 103k (mean) |
 | Fashion-MNIST | 0.9 | 3 | 83.56 ± 0.54 | 90.05 ± 0.92 | +6.49 ± 0.63 | mesh 3/3 | 60k (mean) |
 | FEMNIST | 0.1 | 3 | 33.38 ± 4.38 | 70.57 ± 4.49 | +37.19 ± 7.87 | mesh 3/3 | 106k (mean) |
 | FEMNIST | 0.5 | 3 | 66.73 ± 1.05 | 82.73 ± 1.23 | +16.00 ± 0.57 | mesh 3/3 | 106k (mean) |
 | FEMNIST | 0.9 | 3 | 71.78 ± 2.08 | 83.62 ± 1.13 | +11.84 ± 1.12 | mesh 3/3 | 100k (mean) |
-| CIFAR-10 | 0.1 | 3 | 35.36 ± 8.31 | 61.42 ± 4.85 | +26.06 ± 3.46 | mesh 3/3 | 194k (mean) |
+| CIFAR-10 | 0.1 | 3 | 35.36 ± 8.31 | 59.77 ± 3.44 | +24.41 ± 5.92 | mesh 3/3 | 248k (mean) |
 | CIFAR-10 | 0.5 | 3 | 59.57 ± 1.71 | 80.11 ± 2.30 | +20.54 ± 0.63 | mesh 3/3 | 273k (mean) |
-| CIFAR-10 | 0.9 | 3 | 68.90 ± 3.15 | 82.44 ± 1.20 | +13.55 ± 4.29 | mesh 3/3 | 240k (mean) |
+| CIFAR-10 | 0.9 | 3 | 68.90 ± 3.15 | 81.92 ± 1.93 | +13.02 ± 4.74 | mesh 3/3 | 273k (mean) |
 
 ## Effect of each step (test points)
 
@@ -46,6 +48,28 @@ topology (APG) is measured last, without a keep/revert decision.
 | CIFAR-10 | 0.5 | +2.36 ± 1.81 (3/3 kept) | +17.56 ± 2.32 (3/3 kept) | +0.19 ± 0.93 (2/3 kept) | -2.28 ± 3.44 (1/3 kept) | -0.10 ± 0.77 (1/3 kept) | -6.46 ± 3.00 |
 | CIFAR-10 | 0.9 | +1.48 ± 3.87 (2/3 kept) | +10.92 ± 2.07 (3/3 kept) | -0.52 ± 0.54 (1/3 kept) | -1.44 ± 2.45 (1/3 kept) | -0.39 ± 0.20 (0/3 kept) | -2.12 ± 0.55 |
 
+## Pruning (after the equal-budget comparison)
+
+When the best model can be channel-pruned, the supervisor removes 30 % of its units and
+fine-tunes; the pruned model is kept only within 2 points of the best. Fine-tuning is extra
+training on trained weights, so these numbers are not part of the gain above.
+
+| Dataset | α | Seed | Final test (%) | Pruned test (%) | Parameters: final → pruned |
+|---|---|---|---|---|---|
+| MNIST | 0.5 | 17 | 99.20 | 99.22 | 129,770 → 64,240 |
+| MNIST | 0.5 | 2026 | 98.88 | 99.06 | 22,682 → 11,065 |
+| MNIST | 0.9 | 17 | 99.00 | 99.10 | 129,770 → 64,240 |
+| MNIST | 0.9 | 2026 | 98.95 | 99.09 | 22,682 → 11,065 |
+| Fashion-MNIST | 0.1 | 99 | 59.47 | 64.14 | 17,130 → 8,403 |
+| Fashion-MNIST | 0.5 | 2026 | 90.14 | 89.56 | 69,770 → 33,995 |
+| Fashion-MNIST | 0.9 | 17 | 90.85 | 90.41 | 129,770 → 64,240 |
+| Fashion-MNIST | 0.9 | 42 | 89.05 | 88.08 | 28,810 → 14,493 |
+| Fashion-MNIST | 0.9 | 2026 | 90.25 | 89.42 | 22,682 → 11,065 |
+| FEMNIST | 0.9 | 17 | 84.68 | 83.70 | 133,150 → 66,632 |
+| FEMNIST | 0.9 | 42 | 83.75 | 83.02 | 112,830 → 57,122 |
+| CIFAR-10 | 0.1 | 17 | 60.48 | 65.44 | 324,394 → 161,094 |
+| CIFAR-10 | 0.9 | 2026 | 79.96 | 81.54 | 197,290 → 97,700 |
+
 ## Per seed (test %)
 
 | Dataset | α | Seed | Baseline | Final | Final configuration |
@@ -55,14 +79,14 @@ topology (APG) is measured last, without a keep/revert decision.
 | MNIST | 0.1 | 2026 | 63.59 | 98.29 | nas-d3-w16x16x32-k5-conv-h64-drop20 on mesh |
 | MNIST | 0.5 | 17 | 95.84 | 99.20 | nas-d3-w16x64x64-k5-conv-h0-drop35 on mesh |
 | MNIST | 0.5 | 42 | 97.69 | 98.34 | hpo-adam-lr3e-4-bs32 on learned |
-| MNIST | 0.5 | 2026 | 97.35 | 99.06 | hpo-adam-lr3e-3-bs32-pruned30 on learned |
-| MNIST | 0.9 | 17 | 97.33 | 99.10 | hpo-adam-lr3e-4-bs32-pruned30 on learned |
+| MNIST | 0.5 | 2026 | 97.35 | 98.88 | hpo-adam-lr3e-3-bs32 on learned |
+| MNIST | 0.9 | 17 | 97.33 | 99.00 | hpo-adam-lr3e-4-bs32 on learned |
 | MNIST | 0.9 | 42 | 98.49 | 98.47 | seed-baseline on directed_ring |
-| MNIST | 0.9 | 2026 | 98.46 | 99.09 | hpo-adam-lr1e-3-bs64-pruned30 on learned |
+| MNIST | 0.9 | 2026 | 98.46 | 98.95 | hpo-adam-lr1e-3-bs64 on learned |
 | Fashion-MNIST | 0.1 | 7 | 48.26 | 74.09 | hpo-adam-lr3e-4-bs32 on mesh |
 | Fashion-MNIST | 0.1 | 17 | 43.13 | 82.40 | nas-d3-w16x64x64-k5-conv-h0-drop35 on mesh |
 | Fashion-MNIST | 0.1 | 42 | 44.94 | 61.71 | nas-d2-w64x64-k5-conv-h64-drop35 on mesh |
-| Fashion-MNIST | 0.1 | 99 | 46.40 | 64.14 | nas-d3-w16x32x32-k3-conv-h64-drop20-pruned30 on learned |
+| Fashion-MNIST | 0.1 | 99 | 46.40 | 59.47 | nas-d3-w16x32x32-k3-conv-h64-drop20 on learned |
 | Fashion-MNIST | 0.1 | 2026 | 38.58 | 75.64 | hpo-adam-lr3e-4-bs64 on mesh |
 | Fashion-MNIST | 0.5 | 17 | 79.69 | 90.65 | nas-d3-w16x64x64-k5-conv-h0-drop35 on mesh |
 | Fashion-MNIST | 0.5 | 42 | 76.62 | 88.21 | nas-d2-w64x64-k5-conv-h64-drop35 on mesh |
@@ -79,7 +103,7 @@ topology (APG) is measured last, without a keep/revert decision.
 | FEMNIST | 0.9 | 17 | 74.11 | 84.68 | hpo-adam-lr3e-3-bs32 on mesh |
 | FEMNIST | 0.9 | 42 | 71.08 | 83.75 | nas-d2-w64x64-k5-conv-h64-drop35 on mesh |
 | FEMNIST | 0.9 | 2026 | 70.14 | 82.43 | hpo-adam-lr1e-3-bs32 on mesh |
-| CIFAR-10 | 0.1 | 17 | 42.38 | 65.44 | hpo-adam-lr1e-3-bs8-pruned30 on mesh |
+| CIFAR-10 | 0.1 | 17 | 42.38 | 60.48 | hpo-adam-lr1e-3-bs8 on mesh |
 | CIFAR-10 | 0.1 | 42 | 26.19 | 56.03 | nas-d3-w32x64x128-k3-conv-h0-drop35 on mesh |
 | CIFAR-10 | 0.1 | 2026 | 37.50 | 62.79 | hpo-adam-lr3e-4-bs8 on mesh |
 | CIFAR-10 | 0.5 | 17 | 58.62 | 79.08 | hpo-adam-lr3e-4-bs8 on mesh |
@@ -87,4 +111,4 @@ topology (APG) is measured last, without a keep/revert decision.
 | CIFAR-10 | 0.5 | 2026 | 58.55 | 78.50 | nas-d2-w32x128-k3-conv-h0-drop35-c2 on mesh |
 | CIFAR-10 | 0.9 | 17 | 71.31 | 81.98 | baseline on mesh |
 | CIFAR-10 | 0.9 | 42 | 65.34 | 83.81 | hpo-adam-lr1e-3-bs32 on mesh |
-| CIFAR-10 | 0.9 | 2026 | 70.05 | 81.54 | nas-d2-w32x128-k3-conv-h0-drop35-c2-pruned30 on mesh |
+| CIFAR-10 | 0.9 | 2026 | 70.05 | 79.96 | nas-d2-w32x128-k3-conv-h0-drop35-c2 on mesh |

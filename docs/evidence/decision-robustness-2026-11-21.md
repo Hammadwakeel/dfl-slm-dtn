@@ -1,6 +1,6 @@
 # Robustness of the keep-or-revert decisions
 
-Generated 2026-11-25 16:48 UTC by `scripts/decision_robustness.py`.
+Generated 2026-11-28 01:35 UTC by `scripts/decision_robustness.py`.
 
 The fair campaign keeps a step's change when its measurement is at least the best global
 validation accuracy so far minus 0.5 points. σ is the pooled within-seed standard

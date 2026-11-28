@@ -135,7 +135,7 @@ def communication_section(data: dict, date: str) -> list[str]:
                 base_mb.append(base_msgs * (baseline.get("parameter_count") or 0) * FLOAT_BYTES / 1e6)
                 edges = TOPOLOGY_EDGES.get(run.get("best_topology") or "", 0)
                 final_msgs.append(rounds * edges)
-                final_mb.append(rounds * edges * (run.get("best_parameter_count") or 0) * FLOAT_BYTES / 1e6)
+                final_mb.append(rounds * edges * (run.get("final_parameter_count") or 0) * FLOAT_BYTES / 1e6)
                 learned = next((s for s in run["steps"] if s["step"] == "learn_topology" and s.get("status") == "completed"), None)
                 count = _learned_edges(apg, dataset, split, run["seed"])
                 if learned and count:
@@ -143,7 +143,7 @@ def communication_section(data: dict, date: str) -> list[str]:
                     learned_mb.append(rounds * count * (learned.get("parameter_count") or 0) * FLOAT_BYTES / 1e6)
                     if isinstance(learned.get("test_accuracy"), (int, float)):
                         learned_test.append(learned["test_accuracy"])
-            best = [r["best_test_accuracy"] for r in runs if isinstance(r.get("best_test_accuracy"), (int, float))]
+            best = [r["final_test_accuracy"] for r in runs if isinstance(r.get("final_test_accuracy"), (int, float))]
             mean = statistics.fmean
             learned_cell = (f"{mean(learned_edges):.1f} / {10 * mean(learned_edges):.0f} / {mean(learned_mb):.1f}"
                             if learned_edges else "n/a")
@@ -307,7 +307,7 @@ def ablation_section(data: dict, date: str) -> list[str]:
                 campaign = source.get(seed, {})
                 values = {
                     "baseline": [campaign.get("baseline_test_accuracy"), *(_test(r, "baseline") for r in runs)],
-                    "full": [campaign.get("best_test_accuracy"), *(_test(r, "full") for r in runs)],
+                    "full": [campaign.get("final_test_accuracy"), *(_test(r, "full") for r in runs)],
                 }
                 row = []
                 for label, vals in values.items():
@@ -454,10 +454,10 @@ def decision_section(date: str) -> list[str]:
 def limitations_section(data: dict) -> list[str]:
     """What these results do not show."""
     best = [
-        r["best_test_accuracy"]
+        r["final_test_accuracy"]
         for runs in data.values()
         for r in runs
-        if isinstance(r.get("best_test_accuracy"), (int, float))
+        if isinstance(r.get("final_test_accuracy"), (int, float))
     ]
     target = next((r.get("target_accuracy") for runs in data.values() for r in runs if r.get("target_accuracy")), 0.99)
     return [
@@ -519,10 +519,10 @@ def build(date: str) -> str:
             if not runs:
                 continue
             base = [r["baseline_test_accuracy"] for r in runs if isinstance(r.get("baseline_test_accuracy"), (int, float))]
-            best = [r["best_test_accuracy"] for r in runs if isinstance(r.get("best_test_accuracy"), (int, float))]
-            gains = [r["best_test_accuracy"] - r["baseline_test_accuracy"] for r in runs
-                     if isinstance(r.get("best_test_accuracy"), (int, float)) and isinstance(r.get("baseline_test_accuracy"), (int, float))]
-            params = sorted({f"{r['best_parameter_count']:,}" for r in runs if r.get("best_parameter_count")})
+            best = [r["final_test_accuracy"] for r in runs if isinstance(r.get("final_test_accuracy"), (int, float))]
+            gains = [r["final_test_accuracy"] - r["baseline_test_accuracy"] for r in runs
+                     if isinstance(r.get("final_test_accuracy"), (int, float)) and isinstance(r.get("baseline_test_accuracy"), (int, float))]
+            params = sorted({f"{r['final_parameter_count']:,}" for r in runs if r.get("final_parameter_count")})
             lines.append(f"| {dname} | {alpha} | {len(runs)} | {_pct(base)} | {_pct(best)} | {_signed(gains)} | {', '.join(params)} |")
 
     lines += [
@@ -575,7 +575,7 @@ def build(date: str) -> str:
                         continue
                     mark = " (reverted)" if step.get("accepted") is False else ""
                     parts.append(f"{label} {100 * step['validation_accuracy']:.2f}{mark}")
-                best = run.get("best_test_accuracy")
+                best = run.get("final_test_accuracy")
                 lines.append(f"| {run['seed']} | {' → '.join(parts)} | {100 * best:.2f} |" if isinstance(best, (int, float)) else f"| {run['seed']} | {' → '.join(parts)} | n/a |")
             lines.append("")
     return "\n".join(lines) + "\n"

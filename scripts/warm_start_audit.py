@@ -11,6 +11,9 @@ import re
 import sqlite3
 import sys
 
+# Runs created after the fix (initial models record how their weights were made and a
+# trained model is never reused) cannot be warm-started; created_at is UTC.
+FIXED_AFTER = "2026-11-25 11:05"
 c = sqlite3.connect("file:dtn/backend/data/dtn.sqlite3?mode=ro", uri=True)
 rows = c.execute("select id, task, status, created_at, result, goal, state from agent_runs where task like 'Reach %' order by created_at").fetchall()
 
@@ -32,7 +35,7 @@ for rid, task, status, created, result, goal_json, state_json in rows:
     events = c.execute("select event_type, message from agent_run_events where run_id=? order by id", (rid,)).fetchall()
     started_baseline = any(e == "step_completed" and m.startswith("baseline_training completed") for e, m in events)
     prev = last_installed.get(dataset)
-    warm = bool(started_baseline and prev and baseline and prev[0] == design(baseline))
+    warm = bool(started_baseline and prev and baseline and prev[0] == design(baseline)) and created[:16] < FIXED_AFTER
     base_msg = next((m for e, m in events if e == "step_completed" and m.startswith("baseline_training completed")), "")
     acc = re.search(r"accuracy ([0-9.]+)", base_msg)
     print(f"{created[:16]} {rid[:8]} {dataset:13s} {goal.get('dataset_split','?'):14s} seed {str(goal.get('seed')):5s} {status:9s} "

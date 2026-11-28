@@ -261,7 +261,12 @@ function ActionCard({ action, nodes }: { action: AgentAction; nodes: string[] })
           <h2>{STEP_TITLES[action.step] ?? action.step}</h2>
         </div>
         <div className="decision-badges">
-          {action.source && <span className="decision-source">Selected by {SOURCE_NAMES[action.source] ?? action.source}</span>}
+          {action.source && (
+            <span className="decision-source" title={action.model ? `Answered by ${action.model}` : undefined}>
+              Selected by {SOURCE_NAMES[action.source] ?? action.source}
+              {action.model ? ` · ${action.model}` : ""}
+            </span>
+          )}
           <span className={`decision-outcome ${action.outcome}`}>{OUTCOME_NAMES[action.outcome]}</span>
         </div>
       </header>

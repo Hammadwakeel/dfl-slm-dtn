@@ -1311,6 +1311,8 @@ def create_app(
         return jsonify(
             {
                 "message": message,
+                # Lets the supervisor record which SLM (base or fine-tuned) made each decision.
+                "model": settings.model,
                 "latency_ms": round((time.perf_counter() - started) * 1000, 1),
             }
         )

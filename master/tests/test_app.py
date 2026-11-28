@@ -63,6 +63,7 @@ def test_agent_model_without_tools_answers_in_text_with_configured_limits(
 
     assert response.status_code == 200
     assert response.json["message"]["content"] == "The baseline is running."
+    assert response.json["model"] == "qwen3.5:4b"
     assert forwarded["path"] == "/api/chat"
     payload = forwarded["payload"]
     assert payload["model"] == "qwen3.5:4b"

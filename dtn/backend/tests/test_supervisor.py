@@ -415,6 +415,23 @@ def test_supervisor_runs_baseline_nas_and_retrains_with_redistributed_architectu
     assert event_types[-1] == "finished"
 
 
+def test_decision_event_records_the_slm_model_that_answered(sessions) -> None:
+    cluster = FakeCluster()
+    slm = FakeSLM([
+        {**tool_call("run_nas", {}, "NAS should find a stronger model."), "_model": "qwen3.5-dfl:4b"},
+        tool_call("train_final", {"rounds": 4, "local_epochs": 3}, "Retrain."),
+    ])
+    supervisor = make_supervisor(sessions, cluster, slm)
+    run = supervisor.create_run(default_goal(target_accuracy=0.95))
+
+    finished = run_until_done(supervisor, run["id"])
+
+    details = [event["details"] for event in finished["events"] if event["event_type"] == "decision"]
+    assert details[0]["step"] == "run_nas" and details[0]["model"] == "qwen3.5-dfl:4b"
+    # A reply without a reported model (an older master) and rule decisions carry none.
+    assert all("model" not in item for item in details[1:])
+
+
 def test_invalid_slm_reply_is_repaired_once_then_falls_back(sessions) -> None:
     cluster = FakeCluster()
     cluster.accuracy["baseline_training"] = 0.5

@@ -201,9 +201,13 @@ def create_app(
             payload["tools"] = tools
         else:
             payload["allow_tools"] = False
-        message = _forward(resolved_settings, "/agent/model", payload=payload).get("message")
+        response = _forward(resolved_settings, "/agent/model", payload=payload)
+        message = response.get("message")
         if not isinstance(message, dict):
             raise RuntimeError("The SLM master returned an invalid agent model response")
+        if isinstance(response.get("model"), str):
+            # Not part of the chat message: the supervisor records it with the decision.
+            message = {**message, "_model": response["model"]}
         return message
 
     def supervisor_memory_cleanup(recycle: bool = False) -> dict[str, Any]:

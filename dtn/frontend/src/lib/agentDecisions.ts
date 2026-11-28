@@ -42,6 +42,8 @@ export interface AgentAction {
   step: string;
   module: ModuleKind;
   source: string | null;
+  /** The SLM that answered (base or fine-tuned), when the master reported it. */
+  model: string | null;
   rationale: string | null;
   decidedAt: string | null;
   before: Configuration;
@@ -214,6 +216,7 @@ export function deriveAgentActions(run: SupervisorRun, groups: ExperimentGroup[]
       step: experiment.step,
       module,
       source: typeof decision?.details?.source === "string" ? decision.details.source : null,
+      model: typeof decision?.details?.model === "string" ? decision.details.model : null,
       rationale: decision ? rationaleOf(decision.message) : null,
       decidedAt: decision?.created_at ?? null,
       before,

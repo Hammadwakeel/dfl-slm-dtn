@@ -205,6 +205,7 @@ class Decision:
     arguments: dict[str, Any]
     rationale: str
     source: str  # "slm", "slm_repaired", "slm_text", "rule", or "fallback"
+    model: str | None = None  # the SLM that answered (None for rule and fallback)
 
 
 class DecisionError(ValueError):

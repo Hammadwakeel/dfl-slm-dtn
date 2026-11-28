@@ -17,7 +17,7 @@ function runFixture(): SupervisorRun {
     id,
     event_type: "decision",
     message: `${step} chosen by ${source}: reason for ${step}`,
-    details: { step, arguments: {}, source },
+    details: { step, arguments: {}, source, ...(step === "optimize_topology" ? { model: "qwen3.5-dfl:4b" } : {}) },
     created_at: "2026-11-25T10:00:00+00:00",
   });
   return {
@@ -164,7 +164,8 @@ describe("AgentDecisionsPage", () => {
     render(<AgentDecisionsPage token="t" active results={results as never} />);
 
     const topology = await screen.findByRole("article", { name: "Action 1: Topology optimization" });
-    expect(within(topology).getByText("Selected by SLM")).toBeInTheDocument();
+    expect(within(topology).getByText("Selected by SLM · qwen3.5-dfl:4b")).toBeInTheDocument();
+    expect(within(screen.getByRole("article", { name: "Action 3: Pruning + fine-tune" })).getByText("Selected by SLM")).toBeInTheDocument();
     expect(within(topology).getByText("Kept")).toBeInTheDocument();
     expect(within(topology).getByRole("img", { name: "Directed ring topology" })).toBeInTheDocument();
     expect(within(topology).getByRole("img", { name: "Mesh topology" })).toBeInTheDocument();

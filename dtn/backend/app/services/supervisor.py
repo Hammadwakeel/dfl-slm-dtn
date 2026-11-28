@@ -1382,7 +1382,12 @@ class Supervisor:
             run_id,
             "decision",
             f"{decision.step} chosen by {decision.source}: {decision.rationale or 'no rationale given'}",
-            {"step": decision.step, "arguments": decision.arguments, "source": decision.source},
+            {
+                "step": decision.step,
+                "arguments": decision.arguments,
+                "source": decision.source,
+                **({"model": decision.model} if decision.model else {}),
+            },
         )
         if decision.step == "finish_workflow":
             self._finish(run_id, state, _measured_outcome(goal, state, decision))
@@ -1423,9 +1428,9 @@ class Supervisor:
                     },
                 ]
                 continue
-            if attempt == 1:
-                decision = Decision(decision.step, decision.arguments, decision.rationale, "slm_repaired")
-            return decision
+            source = "slm_repaired" if attempt == 1 else decision.source
+            model = message.get("_model") if isinstance(message, dict) else None
+            return Decision(decision.step, decision.arguments, decision.rationale, source, model if isinstance(model, str) else None)
         return fallback_decision(goal, state)
 
     # ------------------------------------------------------------------ failures and endings

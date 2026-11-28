@@ -5,8 +5,10 @@ model the run compares with it are trained with the dataset's rounds x local epo
 from the same initial weights. Harder datasets get a larger budget so the models
 converge; the budget never changes inside a dataset.
 
-With ``--max-experiments 7`` a run fits the baseline and three measured search steps
-out of the six it could try, so the SLM's choice of steps decides the final accuracy.
+With ``--max-experiments 16`` a run has room for the full pipeline (NAS, topology,
+aggregation, sync, HPO, learned topology and pruning), so the SLM's order and choice of
+steps, not a tight cap, decide the final accuracy. (An earlier base-arm pass at 7 only
+fitted three steps; its reports are kept as ``slmcmp-*-max7.*``.)
 That choice is the only difference between the two arms: both arms see the same
 datasets, splits, seeds, budgets and supervisor code. The model on the master is
 switched before each run, and the arm that runs first alternates by seed.
@@ -42,7 +44,7 @@ BUDGETS = {
     "cifar10": {"rounds": 20, "local_epochs": 5, "time_budget": 1080},
 }
 SEEDS = (17, 42, 2026)
-MAX_EXPERIMENTS = 7
+MAX_EXPERIMENTS = 16
 TARGET = 0.995  # out of reach, so no run stops early on the target
 
 

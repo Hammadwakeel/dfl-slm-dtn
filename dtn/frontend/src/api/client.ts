@@ -1052,6 +1052,22 @@ export interface SupervisorExperiment {
   global_evaluation_error?: string;
   error?: string;
   completed_at?: string;
+  /** measure_step only: the search step this equal-budget training measures. */
+  measures?: string | null;
+  /** measure_step only: false when the measured change was reverted. */
+  accepted?: boolean | null;
+  selected_aggregation?: string | null;
+  selected_sync_mode?: string | null;
+  dimension?: string;
+  worker_count?: number;
+  topology_learning?: {
+    edges?: number;
+    mesh_edges?: number;
+    ring_added_for_connectivity?: boolean;
+    iterations?: number;
+    objective?: number;
+    senders?: Record<string, string[]>;
+  };
 }
 
 export interface SupervisorPruning {
@@ -1257,6 +1273,16 @@ export async function getExperimentResults(token: string): Promise<ExperimentRes
   });
   if (!response.ok) throw new Error(`Could not load experiment results (HTTP ${response.status}).`);
   return response.json() as Promise<ExperimentResults>;
+}
+
+/** One master experiment group in compact form (null when the master no longer has it). */
+export async function getExperimentGroup(token: string, groupId: string): Promise<ExperimentGroup | null> {
+  const response = await fetch(`${apiBase}/api/slm/results?group_id=${encodeURIComponent(groupId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error(`Could not load experiment ${groupId} (HTTP ${response.status}).`);
+  const body = (await response.json()) as ExperimentResults;
+  return body.groups?.find((group) => group.group_id === groupId) ?? null;
 }
 
 export async function deleteExperimentGroup(

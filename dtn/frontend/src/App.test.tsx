@@ -164,7 +164,7 @@ describe("Dashboard", () => {
     expect(expandSidebar).toHaveAttribute("aria-expanded", "false");
     expect(expandSidebar.parentElement).toHaveClass("sidebar-bottom");
     expect(expandSidebar).toBe(expandSidebar.parentElement?.lastElementChild);
-    expect(document.querySelectorAll(".nav-item .nav-icon")).toHaveLength(10);
+    expect(document.querySelectorAll(".nav-item .nav-icon")).toHaveLength(11);
     fireEvent.click(expandSidebar);
     expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
